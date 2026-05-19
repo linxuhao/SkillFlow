@@ -1,0 +1,15 @@
+name: list_tree
+description: >
+  List directory structure of the project workspace.
+parameters:
+  path:
+    type: string
+    description: "Relative directory to list (optional, default root)"
+    required: false
+  depth:
+    type: integer
+    description: "Max depth to expand (optional, default 3, max 4)"
+    required: false
+limits:
+  max_entries: 200
+  max_depth: 4

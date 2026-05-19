@@ -1,0 +1,13 @@
+name: repo_validate
+description: >
+  Run a list of validation tools against the project repo.
+  Returns {all_passed: true/false, results: [{tool, file, passed, error_message}]}
+parameters:
+  validations:
+    type: array
+    items:
+      type: object
+      properties:
+        tool: { type: string }
+        files: { type: array, items: { type: string } }
+    required: true

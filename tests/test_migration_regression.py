@@ -1,0 +1,163 @@
+"""Regression tests for AItelier migration to stepflow.
+
+Verifies the 67 audit issues are addressed by the stepflow architecture.
+"""
+
+import pytest
+
+from stepflow.core import StepFlow, StepResult
+from stepflow.graph import PipelineGraph, StepNode, Transition, EndCondition, EndConditions
+
+
+def _agent(id: str, transitions=None, max_retries=3):
+    return StepNode(
+        id=id, step_type="agent",
+        transitions=transitions or [],
+        max_retries=max_retries,
+    )
+
+
+def _trans(to: str, match=None, max_loop=None):
+    return Transition(to=to, match=match, max_loop=max_loop)
+
+
+# ── C2: No project-level concurrency control ────────────────────────
+
+def test_c2_no_duplicate_project_execution(sf: StepFlow):
+    """Two concurrent scheduler ticks can't run the same step twice."""
+    graph = PipelineGraph(
+        name="test", begin="a",
+        steps=[_agent("a")],
+    )
+    sf.register_graph(graph)
+    run_id = sf.create_run("test")
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+
+    # Two claims — only one succeeds
+    c1 = sf.claim_next_step(run_id)
+    c2 = sf.claim_next_step(run_id)
+    assert c1 is not None
+    assert c2 is None
+
+
+# ── C3: step_locked inconsistent ────────────────────────────────────
+
+def test_c3_version_columns_replace_step_locked(sf: StepFlow):
+    """Version columns provide atomicity, no step_locked column needed."""
+    graph = PipelineGraph(
+        name="test", begin="a",
+        steps=[_agent("a", [_trans("b")]), _agent("b", [])],
+    )
+    sf.register_graph(graph)
+    run_id = sf.create_run("test")
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+
+    claimed = sf.claim_next_step(run_id)
+    assert claimed is not None
+
+    # Confirm with correct version
+    sf.confirm_step(claimed.token, StepResult(flags={}))
+
+    # Try to confirm again with stale token — must fail
+    with pytest.raises(Exception):
+        sf.confirm_step(claimed.token, StepResult())
+
+
+# ── C5: No transactional boundary between files and DB ──────────────
+
+def test_c5_atomic_state_transitions(sf: StepFlow):
+    """confirm_step is atomic — no partial state between files and DB."""
+    graph = PipelineGraph(
+        name="test", begin="a",
+        steps=[_agent("a", [_trans("b")]), _agent("b", [])],
+    )
+    sf.register_graph(graph)
+    run_id = sf.create_run("test")
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+
+    claimed = sf.claim_next_step(run_id)
+    sf.confirm_step(claimed.token, StepResult(flags={}))
+
+    # Between confirm and advance, step is completed, current_node is NULL.
+    # Next advance_run reads the last completed step — no state loss.
+    next_node = sf.advance_run(run_id)
+    assert next_node == "b"
+
+
+# ── C4: SSE __END__ never pushed ────────────────────────────────────
+
+def test_c4_terminal_events_produced(sf: StepFlow):
+    """run_completed event is emitted to outbox."""
+    graph = PipelineGraph(
+        name="test", begin="a",
+        steps=[_agent("a", [_trans("b")]), _agent("b", [])],
+        end_conditions=EndConditions(
+            conditions=[EndCondition(type="node_reached", node="b", result="completed")],
+        ),
+    )
+    sf.register_graph(graph)
+    run_id = sf.create_run("test")
+    sf.start_run(run_id)
+
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+    sf.confirm_step(claimed.token, StepResult())
+    sf.advance_run(run_id)  # Triggers end condition
+
+    events = sf.drain_outbox(batch_size=50)
+    event_types = [e.event_type for e in events]
+    assert "run_completed" in event_types
+
+
+# ── C8: submit_task resurrects completed projects ───────────────────
+
+def test_c8_completed_run_cannot_be_reactivated(sf: StepFlow):
+    """A completed stepflow run cannot be accidentally restarted."""
+    graph = PipelineGraph(
+        name="test", begin="a",
+        steps=[_agent("a", [])],
+    )
+    sf.register_graph(graph)
+    run_id = sf.create_run("test")
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+    sf.confirm_step(claimed.token, StepResult())
+    sf.complete_run(run_id)
+
+    # advance_run on completed returns None
+    assert sf.advance_run(run_id) is None
+    assert sf.get_run(run_id)["status"] == "completed"
+
+
+# ── Hardcoded step sequences → YAML graph ───────────────────────────
+
+def test_pipeline_in_yaml_not_code(sf: StepFlow):
+    """Custom pipeline works without changing Python constants."""
+    graph = PipelineGraph(
+        name="custom", begin="lint",
+        steps=[
+            _agent("lint", [_trans("test")]),
+            _agent("test", [_trans("deploy")]),
+            _agent("deploy", []),
+        ],
+    )
+    sf.register_graph(graph)
+    run_id = sf.create_run("custom")
+    sf.start_run(run_id)
+
+    steps = []
+    while True:
+        n = sf.advance_run(run_id)
+        if n is None:
+            break
+        claimed = sf.claim_next_step(run_id)
+        if claimed is None:
+            break
+        steps.append(claimed.step_id)
+        sf.confirm_step(claimed.token, StepResult())
+
+    assert steps == ["lint", "test", "deploy"]

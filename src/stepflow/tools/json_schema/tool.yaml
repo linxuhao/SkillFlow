@@ -1,0 +1,15 @@
+name: json_schema
+description: >
+  Validate a JSON file against an inline JSON Schema.
+  Returns verdict: passed/failed with error details.
+parameters:
+  files:
+    type: array
+    items:
+      type: string
+    description: "List of file paths or glob patterns to validate"
+    required: true
+  inline_schema:
+    type: object
+    description: "JSON Schema to validate against"
+    required: true

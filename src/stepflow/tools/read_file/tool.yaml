@@ -1,0 +1,19 @@
+name: read_file
+description: >
+  Read a file from the project workspace. Returns file content with line numbers.
+parameters:
+  path:
+    type: string
+    description: "Relative path from project root (e.g. 'src/main.py')"
+    required: true
+  start_line:
+    type: integer
+    description: "0-indexed start line (optional, default 0)"
+    required: false
+  end_line:
+    type: integer
+    description: "Exclusive end line (optional, default end of file)"
+    required: false
+limits:
+  max_lines: 300
+  max_size_kb: 50

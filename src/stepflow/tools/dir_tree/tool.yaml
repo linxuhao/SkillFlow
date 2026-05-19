@@ -1,0 +1,10 @@
+name: dir_tree
+description: >
+  Generate a directory tree summary for context injection.
+  Used as a context tool (source: {tool: "dir_tree"}) to give agents
+  awareness of workspace layout without consuming tool-call turns.
+parameters:
+  config_name:
+    type: string
+    description: "Stepflow config name to scope the tree (optional)"
+    required: false

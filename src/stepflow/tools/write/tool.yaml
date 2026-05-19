@@ -1,0 +1,12 @@
+name: write
+description: >
+  Write content to a file in the project workspace.
+parameters:
+  file:
+    type: string
+    description: "Bare filename with extension (e.g. 'index.html', 'main.py'). No directory paths."
+    required: true
+  content:
+    type: string
+    description: "File content to write"
+    required: true

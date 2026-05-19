@@ -1,0 +1,7 @@
+name: draft_commit
+description: Move all files from step draft directory to final directory and commit with git.
+parameters:
+  source_dir:
+    type: string
+    required: false
+    description: Draft directory to move files from (defaults to $STEP_DRAFT_DIR).

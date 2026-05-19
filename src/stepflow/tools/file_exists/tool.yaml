@@ -1,0 +1,11 @@
+name: file_exists
+description: >
+  Check that files matching glob patterns exist in the workspace.
+  Returns passed/failed for each file pattern.
+parameters:
+  files:
+    type: array
+    items:
+      type: string
+    description: "List of file paths or glob patterns to check"
+    required: true

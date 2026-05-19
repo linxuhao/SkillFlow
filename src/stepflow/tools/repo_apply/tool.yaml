@@ -1,0 +1,10 @@
+name: repo_apply
+description: >
+  Apply files from a source directory to the project repository.
+  Copies files, performs git add + git commit.
+  Returns {applied: true/false, files: [...], commit_hash: "...", error: "..."}
+parameters:
+  source_dir:
+    type: string
+    description: "Source directory path (absolute or relative to workspace)"
+    required: true

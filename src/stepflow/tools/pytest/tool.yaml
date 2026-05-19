@@ -1,0 +1,9 @@
+name: pytest
+description: >
+  Run pytest on test files.
+  Returns {verdict: "passed"|"failed", feedback: "test output..."}
+parameters:
+  file:
+    type: string
+    description: "Test file path relative to workspace root"
+    required: true
