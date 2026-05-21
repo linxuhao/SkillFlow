@@ -9,7 +9,7 @@ Usage::
     sf = StepFlow(":memory:")
     sf.register_agent_config("researcher", {
         "model": "deepseek/deepseek-v4-flash",
-        "tools": ["web_search", "web_fetch"],
+        "tools": ["read_file", "write", "list_tree"],
         "system_prompt": "You are a researcher...",
     })
     # Graph validation will now catch missing agent_config refs.

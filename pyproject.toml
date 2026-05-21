@@ -6,7 +6,19 @@ build-backend = "setuptools.build_meta"
 name = "stepflow"
 version = "1.0.0"
 description = "Config-agnostic LLM pipeline graph executor"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
+authors = [
+    {name = "Stepflow contributors"},
+]
+keywords = ["llm", "pipeline", "graph", "orchestrator", "agent"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
 dependencies = [
     "pyyaml>=6.0",
 ]
@@ -20,6 +32,13 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"stepflow.tools" = ["*/tool.yaml"]
+"stepflow.plugins" = ["**/*.yaml", "**/*.md"]
+
+[tool.setuptools.exclude-package-data]
+"stepflow.plugins" = ["**/tests/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

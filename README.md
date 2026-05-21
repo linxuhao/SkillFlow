@@ -1,165 +1,299 @@
 # Stepflow
 
-Config-agnostic LLM pipeline graph executor. Define your pipeline as a YAML DAG — stepflow handles traversal, tool execution, checkpoints, and recovery.
+Config-agnostic LLM pipeline graph executor. Define multi-agent pipelines as YAML DAGs — stepflow handles traversal, tool execution, checkpoints, recovery, and event streaming on SQLite.
 
 ## Install
 
 ```bash
-pip install -e ~/stepflow
+pip install stepflow          # PyPI
+pip install -e ~/stepflow     # from repo (editable)
 ```
 
-## Quick Start
+Or clone and use the install script, which also registers CLI commands:
+
+```bash
+git clone https://github.com/your-org/stepflow.git
+bash stepflow/scripts/install.sh
+```
+
+CLI commands registered in `~/.local/bin/`:
+
+| Command | Description |
+|---------|-------------|
+| `stepflow-lint` | Validate pipeline YAML files |
+| `stepflow-run` | Interactive pipeline runner (human-in-the-loop) |
+
+### PyPI publish
+
+```bash
+pip install build twine
+python3 -m build
+twine upload dist/*
+```
+
+## Getting Started
+
+Stepflow runs pipelines in two modes.
+
+### Framework Mode
+
+Stepflow is embedded in a host application. The host drives the loop — stepflow handles traversal, tool execution, and state. The host only executes agent steps via `StepRunner`.
 
 ```python
-from stepflow import StepFlow, PipelineGraph
+from stepflow import StepFlow, PipelineGraph, StepResult
 
-# Load graph config (host app provides this)
-graph = PipelineGraph.from_yaml("configs/my_pipeline.yaml")
+graph = PipelineGraph.from_yaml("tests/fixtures/minimal_1step.yaml")
 
 sf = StepFlow(":memory:")
 sf.register_graph(graph)
+sf.register_agent_config("echo_agent", model="host")
 
-# Create and run
-rid = sf.create_run("my_pipeline", context={"project_id": "demo"})
-sf.start_run(rid)
+run_id = sf.create_run("minimal_1step")
+sf.start_run(run_id)
 
-# Poll loop
 while True:
-    next_node = sf.advance_run(rid)
-    if next_node is None:
-        break  # run complete or paused
-    claimed = sf.claim_next_step(rid)
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
     if claimed is None:
-        continue  # tool node auto-executed, advance again
-    # Host app executes the agent step via StepRunner protocol
-    result = await runner.execute(claimed)
-    sf.confirm_step(claimed.token, result)
+        break  # completed or paused
+    # Host StepRunner executes the agent step here
+    sf.confirm_step(claimed.token, StepResult(outputs={}, flags={}))
 ```
 
-## Package
+In framework mode, **all tools auto-execute** inline — stepflow runs native tools and custom tools without involving the host agent.
 
-```
-src/stepflow/
-├── graph.py          # Data model: Transition, StepNode, PipelineGraph, GraphResolver
-├── core.py           # StepFlow orchestrator: create/claim/confirm/advance/recover
-├── tool_loader.py    # Dynamic tool schema + implementation import
-├── context.py        # ContextResolver: cross-config, step-output, tool sources
-├── step_validation.py # StepValidator: multi-tool validation
-├── write_tools.py    # Constrained write tool generation from output.fixed
-├── workspace.py      # Configurable workspace manager
-├── validation.py     # Optional Pydantic output validation
-├── recovery.py       # Stale claim recovery
-├── outbox.py         # Outbox event consumer
-├── schema.py         # SQLite DDL
-├── exceptions.py     # StepFlowError hierarchy
-└── tools/            # Native tools (10)
-    ├── read_file/    # File reader with line numbers
-    ├── write/        # File writer
-    ├── list_tree/    # Directory lister
-    ├── dir_tree/     # Context tree generator
-    ├── web_search/   # SearXNG web search
-    ├── web_fetch/    # URL fetcher with SSRF protection
-    ├── json_schema/  # JSON Schema validator
-    ├── syntax_lint/  # Syntax checker (ruff, compile)
-    ├── py_compile/   # Python bytecode compile
-    ├── pytest/       # Test runner
-    ├── repo_apply/   # File → repo apply + git commit
-    └── repo_validate/ # Multi-tool repo validation
+Config reference: `tests/fixtures/minimal_1step.yaml`.
+
+### Runner Mode
+
+Stepflow is driven interactively via `SkillTool`. The pipeline exposes steps as instructions — a human or LLM agent calls `action="next"` / `"submit"` / `"approve"` / `"reject"`.
+
+```python
+from stepflow import StepFlow, PipelineGraph
+from plugins.skill_runner import SkillTool
+
+graph = PipelineGraph.from_yaml("tests/fixtures/skill_review.yaml")
+sf = StepFlow(":memory:", delegate_tools_to_agent=True)
+sf.register_graph(graph)
+sf.register_agent_config("review_analyst", model="host")
+# ... register other agent configs referenced by the graph
+
+tool = SkillTool(sf, "skill_review")
+resp = tool(action="next")
+
+while resp.status == "in_progress":
+    print(resp.instruction)
+    # Agent does work, produces output...
+    resp = tool(action="submit", result={"findings": {...}})
+# resp.status == "completed"
 ```
 
-## Graph Config Format
+In runner mode, **native tools auto-execute** but **custom and unknown tools are delegated** to the agent (via `resp.tool_name` / `resp.tool_params`).
 
-```yaml
-name: "my_pipeline"
-begin: "step_1"
+Use the CLI for interactive human-in-the-loop runs:
 
-steps:
-  - id: "step_1"
-    step_type: "agent"
-    agent_config: "my_agent"
-    context:
-      - source: { config: "meta", output: "brief.md" }
-      - source: { tool: "dir_tree" }
-    output:
-      mode: "content"
-      fixed:
-        result: "output.md"
-    checkpoint: true
-    checkpoint_label: "Review Output"
-    transitions:
-      - to: "step_1_review"
-        match: { from: "checkpoint", value: "approved" }
-
-  - id: "step_1_review"
-    step_type: "agent"
-    agent_config: "reviewer"
-    transitions:
-      - to: "step_2"
-        match: { field: "passed", value: true }
-      - to: "step_1"
-        match: { field: "passed", value: false }
-        max_loop: 3
-
-  - id: "apply_to_repo"
-    step_type: "tool"
-    tool_name: "repo_apply"
-    tool_params:
-      source_dir: "$STEP_DRAFT_DIR"
-    transitions:
-      - to: "validate"
-        match: { field: "applied", value: true }
-      - to: "step_1"
-        match: { field: "applied", value: false }
-        max_loop: 3
-        feedback: true
+```bash
+stepflow-run tests/fixtures/skill_review.yaml
 ```
 
 ## Node Types
 
 | Type | Description |
 |------|-------------|
-| `agent` | LLM agent step — host app executes via StepRunner |
-| `gate` | Auto-resolved by stepflow using match conditions |
-| `tool` | Auto-executed by stepflow via ToolLoader |
+| `agent` | LLM step — host app executes via `StepRunner` protocol |
+| `tool` | Auto-executed by stepflow (native), or delegated to agent in runner mode (custom) |
+| `gate` | Auto-resolved using match conditions against step output flags |
+| `loop` | Iterates over a JSON list from a workspace file, instantiating sub-steps per item |
 
-## Transition Match
+## Transition Matching
+
+Five match strategies. See `tests/fixtures/dpe_full.yaml` for a complete pipeline using all of them:
 
 ```yaml
-# Field match (read from step output JSON)
-match: { field: "passed", value: true }
-
-# Checkpoint routing
-match: { from: "checkpoint", value: "approved" }
-
-# Always match (default)
-# (no match key)
+match: { field: "passed", value: true }                          # step output flags
+match: { from_file: "review_verdict.json", field: "passed", value: true }  # output file
+match: { from: "checkpoint", value: "approved" }                 # checkpoint routing
+match: { _error: true }                                          # error handler
+# (no match key)                                                 # always match
 ```
+
+## Context Injection
+
+```yaml
+context:
+  - source: { step: "1" }
+  - source: { step: "2", mode: "interfaces" }
+  - source: { config: "meta", output: "brief.md" }
+  - source: { tool: "dir_tree" }
+```
+
+## Checkpoints
+
+Agent steps can pause for human approval (`tests/fixtures/checkpoint_cycle.yaml`):
+
+```python
+sf.reject_checkpoint(run_id, "draft", "Add more detail to the analysis")
+```
+
+## Output Validation
+
+Steps declare validation specs auto-executed by stepflow. See `tests/fixtures/skill_review.yaml` for inline JSON Schema validation, or `tests/fixtures/lifecycle_hooks.yaml` for syntax_lint + py_compile validators.
+
+Available validators: `json_schema`, `syntax_lint`, `py_compile`, `pytest`, `file_exists`.
+
+## Lifecycle Hooks
+
+Steps with `output.mode: "write"` can trigger deliver and post-deliver hooks. See `tests/fixtures/lifecycle_hooks.yaml`:
+
+```yaml
+lifecycle:
+  on_deliver:
+    tool: "repo_apply"
+    params:
+      source_dir: "$STEP_DIR"
+    on_failure: "retry"
+    max_retries: 2
+  after_deliver:
+    - tool: "syntax_lint"
+      files: ["*.py"]
+```
+
+## Error Handling
+
+Steps declare `max_retries` and an `_error` transition. See `tests/fixtures/error_handler.yaml`.
 
 ## Feedback Loopback
 
+Tool failures can inject output into the next step's inputs (`feedback: true`). See `plugins/skill_converter/skill_converter.yaml` — the `validate_design` step feeds lint errors into `fix_issues`.
+
+## End Conditions
+
+Four termination strategies, combined with `and`/`or`. See `tests/fixtures/end_conditions.yaml` and `tests/fixtures/dpe_full.yaml`:
+
 ```yaml
-transitions:
-  - to: "prev_step"
-    match: { field: "all_passed", value: false }
-    max_loop: 5
-    feedback: true   # ← inject tool error into step input
+end_conditions:
+  combinator: or
+  conditions:
+    - type: node_reached
+      node: "5_review"
+      result: "completed"
+    - type: max_total_steps
+      limit: 200
+    - type: max_run_duration_seconds
+      limit: 3600
+    - type: flag_match
+      flag: { fatal_error: true }
 ```
 
-## Custom Tools
+## Stale Claim Recovery
 
-Host apps add custom tool directories:
+Built into `advance_run`. Claims older than `stale_threshold_seconds` (default 300) are auto-reset:
+
+```python
+sf = StepFlow("pipeline.db", stale_threshold_seconds=300)
+```
+
+## Event Streaming
+
+All state transitions are written to `stepflow_outbox`. Poll for real-time notifications:
+
+```python
+events = sf.drain_outbox(batch_size=50)
+for event in events:
+    print(event.event_type, event.payload)
+sf.ack_outbox([e.id for e in events])
+```
+
+In-process subscribers via `NotificationBus`:
+
+```python
+from stepflow import NotificationBus
+
+bus = NotificationBus()
+bus.subscribe("step_completed", lambda n: print(n.payload))
+sf = StepFlow(":memory:", notification_bus=bus)
+```
+
+## Tools
+
+### Native (13 built-in)
+
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read a file with line numbers |
+| `write` | Write content to workspace |
+| `list_tree` | List directory structure |
+| `dir_tree` | Context tree for prompt injection |
+| `json_schema` | Validate JSON against inline schema |
+| `syntax_lint` | Syntax check via ruff |
+| `py_compile` | Python bytecode compile |
+| `pytest` | Run pytest on test files |
+| `repo_apply` | Copy files to repo + git commit |
+| `repo_validate` | Multi-tool repo validation |
+| `draft_commit` | Move draft files to final dir + commit |
+| `file_exists` | Check files matching glob patterns |
+| `notify` | Send user-visible notifications |
+
+### Custom tools
+
+Host apps add tool directories. Each tool: `{name}/tool.yaml` + `{name}/impl.py`. Function name must match directory name.
 
 ```python
 from stepflow.tool_loader import ToolLoader
 
-loader = ToolLoader(Path("stepflow/tools"))     # native
-loader.add_tools_dir(Path("my_app/tools"))      # custom
+loader = ToolLoader()
+loader.add_tools_dir("my_app/tools")
+sf = StepFlow(":memory:", tool_loader=loader)
 ```
 
-Each tool directory contains `{name}/tool.yaml` + `{name}/impl.py`.
+## Plugins
+
+### Linter (`plugins/linter/`)
+
+Validates stepflow pipeline YAML configs. Usable as a stepflow tool (`stepflow_lint`) or standalone:
+
+```bash
+stepflow-lint tests/fixtures/skill_review.yaml
+stepflow-lint configs/*.yaml
+```
+
+### Skill Runner (`plugins/skill_runner/`)
+
+Stateful callable wrapping a pipeline as an agent tool. Supports `next`, `submit`, `approve`, `reject` actions. Returns `SkillResponse` with instruction, available tools, and step metadata.
+
+### Skill Converter (`plugins/skill_converter/`)
+
+Meta-pipeline that converts a skill description into a stepflow YAML config. See `plugins/skill_converter/skill_converter.yaml`.
+
+## Package
+
+```
+src/stepflow/
+├── core.py              # StepFlow orchestrator (create/claim/confirm/advance)
+├── graph.py             # PipelineGraph, StepNode, Transition, GraphResolver
+├── tool_loader.py       # Dynamic tool schema + implementation loading
+├── context.py           # ContextResolver: cross-config, step, tool sources
+├── step_validation.py   # StepValidator: multi-tool output validation
+├── write_tools.py       # Constrained write tool generation from output.fixed
+├── workspace.py         # Per-step atomic staging directories
+├── validation.py        # Optional external-schema output validation
+├── recovery.py          # Stale claim recovery
+├── schema.py            # SQLite DDL + migrations
+├── exceptions.py        # StepFlowError hierarchy
+├── outbox.py            # OutboxConsumer for event polling
+├── notifications.py     # NotificationBus for in-process subscribers
+├── agent_registry.py    # Agent config registry + schema resolution
+└── tools/               # Native tools (13)
+    ├── read_file/       ├── write/          ├── list_tree/
+    ├── dir_tree/        ├── json_schema/    ├── syntax_lint/
+    ├── py_compile/      ├── pytest/         ├── repo_apply/
+    ├── repo_validate/   ├── draft_commit/   ├── file_exists/
+    └── notify/
+```
 
 ## Tests
 
 ```bash
-pytest tests/ -v    # 228 tests, 89% coverage
+pytest tests/ -v       # 306 tests
+pytest plugins/ -v     # 21 plugin tests
 ```

@@ -4,7 +4,7 @@ import pytest
 
 from stepflow.core import StepFlow
 from stepflow.graph import PipelineGraph
-from plugins.skill_runner import SkillTool, SkillResponse
+from stepflow.plugins.skill_runner import SkillTool, SkillResponse
 from tests.mocks import create_standard_mock_tools
 
 
@@ -185,7 +185,7 @@ def test_checkpoint_reject_and_redo(sf):
 # ── Prompt assembler ────────────────────────────────────────────────
 
 def test_prompt_includes_context_and_feedback():
-    from plugins.skill_runner.runner import PromptAssembler
+    from stepflow.plugins.skill_runner.runner import PromptAssembler
     from stepflow.core import ClaimedStep, ClaimToken
 
     assembler = PromptAssembler()

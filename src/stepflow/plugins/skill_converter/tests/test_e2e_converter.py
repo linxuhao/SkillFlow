@@ -12,14 +12,14 @@ import pytest
 
 from stepflow.core import StepFlow, StepResult
 from stepflow.graph import PipelineGraph
-from plugins.linter import lint_config, stepflow_lint
-from plugins.skill_runner import SkillTool
-from plugins.skill_converter.converter import _register_converter_agents
+from stepflow.plugins.linter import lint_config, stepflow_lint
+from stepflow.plugins.skill_runner import SkillTool
+from stepflow.plugins.skill_converter.converter import _register_converter_agents
 from tests.mocks import MockToolLoader, create_standard_mock_tools
 
 
 _CONVERTER_DIR = Path(__file__).parent.parent
-_FIXTURES_DIR = Path(__file__).parent.parent.parent.parent / "tests" / "fixtures"
+_FIXTURES_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "tests" / "fixtures"
 
 
 # ── Canned LLM responses ────────────────────────────────────────────

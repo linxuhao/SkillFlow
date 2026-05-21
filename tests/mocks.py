@@ -55,11 +55,18 @@ class MockToolLoader:
     def __init__(self, tools: dict[str, Callable] | None = None):
         self._tools: dict[str, Callable] = dict(tools or {})
         self._schemas: dict[str, dict] = {}
+        self._custom_names: set[str] = set()
 
-    def register(self, name: str, fn: Callable, schema: dict | None = None):
+    def register(self, name: str, fn: Callable, schema: dict | None = None,
+                 *, native: bool = True):
         self._tools[name] = fn
         if schema:
             self._schemas[name] = schema
+        if not native:
+            self._custom_names.add(name)
+
+    def is_native(self, name: str) -> bool:
+        return name not in self._custom_names
 
     def load_fn(self, name: str) -> Callable:
         if name not in self._tools:

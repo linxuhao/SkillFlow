@@ -15,10 +15,10 @@ def _ensure_str(value, default: str = "") -> str:
 
 def write(file: str, content: str, *, workspace_root: str = "") -> dict:
     content = _ensure_str(content)
-    outbox = Path(workspace_root)
-    outbox.mkdir(parents=True, exist_ok=True)
-    target = (outbox / file).resolve()
-    if not str(target).startswith(str(outbox.resolve())):
+    root = Path(workspace_root)
+    root.mkdir(parents=True, exist_ok=True)
+    target = (root / file).resolve()
+    if not str(target).startswith(str(root.resolve())):
         return {"error": f"Path traversal denied: {file}"}
     target.write_text(content, encoding="utf-8")
     return {"written": str(file), "size": len(content)}

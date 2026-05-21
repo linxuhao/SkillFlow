@@ -1,7 +1,7 @@
 """Configurable workspace manager for stepflow.
 
-Provides default Inbox/Outbox directory management with config-specific
-subdirectories.  Host applications (like AItelier) configure the base path.
+Provides per-step atomic staging directories (tmp → step_dir) with
+config-specific subdirectories. Host applications configure the base path.
 """
 
 from __future__ import annotations
@@ -18,10 +18,7 @@ class WorkspaceManager:
         {base_path}/{project_id}/
         ├── {config_name}/
         │   ├── {step_id}.tmp/       ← agent writes (atomic staging)
-        │   ├── {step_id}/           ← renamed on success
-        │   ├── Inbox_{step_id}/     ← deprecated
-        │   ├── Outbox_Draft_{step_id}/  ← deprecated
-        │   ├── Outbox_Final_{step_id}/  ← deprecated
+        │   ├── {step_id}/           ← promoted on step commit
         │   └── Trace_{step_id}/
         ├── project/
         │   └── project_brief.md
@@ -84,10 +81,16 @@ class WorkspaceManager:
         p = self.get_config_path(project_id, config_name) / step_id
         return p  # created by _step_commit, not here
 
-    # ── Deprecated: kept as aliases for backward compat ────────────────
+    # ── Deprecated: kept for backward compat ────────────────────────────
 
     def get_inbox_dir(self, project_id: str, config_name: str,
                       step_id: str) -> Path:
+        import warnings
+        warnings.warn(
+            "get_inbox_dir() is deprecated; use get_step_dir() instead. "
+            "The legacy Inbox_* paths are no longer used by stepflow internally.",
+            DeprecationWarning, stacklevel=2
+        )
         p = self.get_config_path(project_id, config_name) / f"Inbox_{step_id}"
         p.mkdir(parents=True, exist_ok=True)
         return p

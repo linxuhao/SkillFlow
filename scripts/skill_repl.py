@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Interactive REPL for running a stepflow skill as a human agent.
+"""Interactive runner for stepflow pipelines.
 
-Drives the pipeline manually with action="next"/"submit"/"approve"/"reject".
+Drives a pipeline as a human agent with action="next"/"submit"/"approve"/"reject".
+Native tools auto-execute; custom tools are delegated to the user.
 
 Usage:
+    stepflow-run <graph.yaml>
     python3 scripts/skill_repl.py <graph.yaml>
 """
 
@@ -13,46 +15,56 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Ensure package is importable when run from repo without pip install
+_repo_root = Path(__file__).parent.parent
+_src = _repo_root / "src"
+if str(_src) not in sys.path:
+    sys.path.insert(0, str(_src))
 
 from stepflow.core import StepFlow
 from stepflow.graph import PipelineGraph
-from plugins.skill_runner import SkillTool
-from plugins.linter import stepflow_lint
-from tests.mocks import MockToolLoader, create_standard_mock_tools
+from stepflow.tool_loader import ToolLoader
+from stepflow.plugins.skill_runner import SkillTool
 
 
 def main():
     graph_path = sys.argv[1] if len(sys.argv) > 1 else None
     if not graph_path:
-        print("Usage: python3 scripts/skill_repl.py <graph.yaml>")
+        print("Usage: stepflow-run <graph.yaml>")
         sys.exit(1)
 
     tmp = tempfile.mkdtemp(prefix="stepflow_repl_")
-    mt = MockToolLoader()
-    mt.register("stepflow_lint", stepflow_lint)
-    for name, fn in create_standard_mock_tools()._tools.items():
-        mt.register(name, fn)
+
+    # Load native tools + plugin tools
+    loader = ToolLoader()
+    import stepflow.plugins
+    loader.add_tools_dir(str(Path(stepflow.plugins.__path__[0]) / "linter" / "tools"))
 
     sf = StepFlow(
         ":memory:",
-        tool_loader=mt,
+        tool_loader=loader,
+        delegate_tools_to_agent=True,
         workspace_base=os.path.join(tmp, "ws"),
         projects_base=os.path.join(tmp, "projects"),
     )
 
     graph = PipelineGraph.from_yaml(graph_path)
 
-    # Register agent configs
-    from plugins.skill_converter.converter import _register_converter_agents
+    # Register agent configs referenced by the graph
     for step in graph.steps:
         if step.agent_config:
             try:
                 sf.register_agent_config(step.agent_config, model="host")
             except Exception:
                 pass
+
+    # Register converter agents if running the converter pipeline
     if "skill_converter" in graph_path:
-        _register_converter_agents(sf)
+        try:
+            from stepflow.plugins.skill_converter.converter import _register_converter_agents
+            _register_converter_agents(sf)
+        except Exception:
+            pass
 
     sf.register_graph(graph)
 
@@ -62,18 +74,18 @@ def main():
 
     tool = SkillTool(sf, graph.name)
 
-    # ── Manual interactive loop ──────────────────────────────────
+    # ── Interactive loop ──────────────────────────────────────────
     resp = tool(action="next")
 
     while resp.status not in ("completed", "failed"):
         if resp.status == "paused":
-            print(f"\n⏸  PAUSED: {resp.checkpoint_label}")
-            print(f"   [A]pprove or [R]eject? ", end="")
+            print(f"\nPaused: {resp.checkpoint_label}")
+            print("[A]pprove or [R]eject? ", end="")
             choice = input().strip().lower()
             if choice in ("", "a", "y"):
                 resp = tool(action="approve")
             else:
-                print("   Feedback: ", end="")
+                print("Feedback: ", end="")
                 fb = input().strip() or "Rejected"
                 resp = tool(action="reject", feedback=fb)
             continue
@@ -85,10 +97,13 @@ def main():
         print(f"STEP: {resp.step}")
         print(f"{'='*60}")
         print(f"\n{resp.instruction}")
+        if resp.tool_name:
+            print(f"\nTool: {resp.tool_name}")
+            print(f"Params: {json.dumps(resp.tool_params, indent=2)}")
         if resp.tools:
-            print(f"\nTools: {', '.join(sorted(resp.tools.keys()))}")
+            print(f"Available: {', '.join(sorted(resp.tools.keys()))}")
 
-        print(f"\nEnter JSON result (empty line to finish, /skip, /quit):")
+        print("\nEnter JSON result (empty line to finish, /skip, /quit):")
         lines = []
         while True:
             try:
@@ -116,11 +131,12 @@ def main():
 
     print()
     if resp.status == "completed":
-        print(f"✓ COMPLETED ({resp.steps_completed} steps)")
+        print(f"COMPLETED ({resp.steps_completed} steps)")
     elif resp.status == "failed":
-        print(f"✗ FAILED: {resp.error}")
+        print(f"FAILED: {resp.error}")
 
-    os.system(f"rm -rf {tmp}")
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

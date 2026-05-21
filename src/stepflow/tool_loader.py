@@ -48,6 +48,13 @@ class ToolLoader:
                 return d
         return None
 
+    def is_native(self, name: str) -> bool:
+        """True if the tool lives in the first (native) tools directory."""
+        if not self._tools_dirs:
+            return False
+        tool_dir = self._find_tool_dir(name)
+        return tool_dir is not None and tool_dir == self._tools_dirs[0]
+
     def load_schema(self, name: str) -> dict:
         """Load tool.yaml for a tool. Returns parsed dict."""
         if name not in self._cache or self._cache[name][0] is None:

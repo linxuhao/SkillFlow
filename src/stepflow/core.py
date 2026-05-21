@@ -113,6 +113,7 @@ class StepFlow:
         self._resolvers: dict[str, GraphResolver] = {}
         self._lock = threading.RLock()
         self._tool_loader = tool_loader
+        self._load_native_tools()
         self._stale_threshold = stale_threshold_seconds
         self._workspace = None
         self.delegate_tools_to_agent = delegate_tools_to_agent
@@ -150,6 +151,32 @@ class StepFlow:
             from stepflow.notifications import NotificationBus
             self.notifications = NotificationBus(db_path=db_path)
         self.notifications.set_connection(self._conn)
+
+    def _load_native_tools(self):
+        """Ensure the built-in tools directory is loaded as the native source."""
+        native_dir = Path(__file__).parent / "tools"
+        if self._tool_loader is None:
+            from stepflow.tool_loader import ToolLoader
+            self._tool_loader = ToolLoader(native_dir)
+        elif hasattr(self._tool_loader, '_tools_dirs'):
+            # Only manipulate real ToolLoader instances, not duck-typed mocks
+            if native_dir not in self._tool_loader._tools_dirs:
+                self._tool_loader._tools_dirs.insert(0, native_dir)
+                self._tool_loader._cache.clear()
+                self._tool_loader._tool_dir_cache.clear()
+
+    def _should_delegate_tool(self, tool_name: str) -> bool:
+        """Return True if this tool should be delegated to the agent.
+
+        In framework mode (delegate_tools_to_agent=False), never delegate.
+        In runner mode (delegate_tools_to_agent=True), only native tools
+        are auto-executed; everything else goes to the agent.
+        """
+        if not self.delegate_tools_to_agent:
+            return False
+        if self._tool_loader is None:
+            return True
+        return not self._tool_loader.is_native(tool_name)
 
     @contextmanager
     def _tx(self):
@@ -1407,8 +1434,12 @@ class StepFlow:
                     continue
                 if not _flags_match(t.match, flags, file_reader=fr):
                     continue
-            # Don't resolve to gates, loops, or tools — advance_run handles them
-            skip_tool = resolver.is_tool(t.to) and not self.delegate_tools_to_agent
+            # Don't resolve to gates, loops, or native tools — advance_run handles them
+            skip_tool = False
+            if resolver.is_tool(t.to):
+                tool_node = resolver.get_node(t.to)
+                if tool_node and not self._should_delegate_tool(tool_node.tool_name):
+                    skip_tool = True
             if resolver.is_gate(t.to) or resolver.is_loop(t.to) or skip_tool:
                 return None
             return t.to
@@ -1494,11 +1525,11 @@ class StepFlow:
                     return current
 
                 # If current_node is a tool, auto-execute it inline
-                # (unless delegate_tools_to_agent — then return it for the agent to execute)
+                # (unless runner mode + non-native — then delegate to agent)
                 if resolver.is_tool(current):
-                    if self.delegate_tools_to_agent:
-                        return current  # agent claims and executes the tool
                     tool_node = resolver.get_node(current)
+                    if tool_node and self._should_delegate_tool(tool_node.tool_name):
+                        return current  # agent claims and executes the tool
                     tool_result = self._execute_tool_inline(
                         tool_node, run_id=run_id,
                         graph_name=run["graph_name"])
@@ -1617,9 +1648,9 @@ class StepFlow:
                     edges_taken.append((next_node, matched))
                     next_node = matched
                 elif resolver.is_tool(next_node):
-                    if self.delegate_tools_to_agent:
-                        break  # return the tool node for the agent
                     tool_node = resolver.get_node(next_node)
+                    if tool_node and self._should_delegate_tool(tool_node.tool_name):
+                        break  # return the tool node for the agent
                     tool_result = self._execute_tool_inline(
                         tool_node, run_id=run_id,
                         graph_name=run["graph_name"])

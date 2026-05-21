@@ -3,7 +3,7 @@
 Loadable via ToolLoader as tool_name="stepflow_lint".
 """
 
-from plugins.linter import stepflow_lint as _stepflow_lint
+from stepflow.plugins.linter import stepflow_lint as _stepflow_lint
 
 
 def stepflow_lint(**kwargs) -> dict:

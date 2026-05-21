@@ -2,7 +2,7 @@
 
 Usage::
 
-    from plugins.skill_converter import setup_converter, extract_pipeline
+    from stepflow.plugins.skill_converter import setup_converter, extract_pipeline
 
     # Setup: registers converter graph, writes skill description to workspace
     tool = setup_converter(sf, description="# Code Review Skill\\n...")
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from stepflow.core import StepFlow
 from stepflow.graph import PipelineGraph
-from plugins.skill_runner.runner import SkillTool
+from stepflow.plugins.skill_runner.runner import SkillTool
 
 
 _CONVERTER_DIR = Path(__file__).parent

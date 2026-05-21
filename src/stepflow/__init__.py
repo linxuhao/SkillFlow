@@ -1,8 +1,8 @@
 """stepflow — Transactional graph orchestrator for Python.
 
 A standalone framework for defining and executing pipeline graphs
-with transactional state management on SQLite. Zero external
-dependencies beyond Python 3.12 stdlib.
+with transactional state management on SQLite. Only depends on
+PyYAML.
 
 Usage::
 

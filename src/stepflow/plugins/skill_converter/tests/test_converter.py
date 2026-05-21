@@ -6,8 +6,8 @@ import pytest
 
 from stepflow.core import StepFlow
 from stepflow.graph import PipelineGraph
-from plugins.linter import lint_config, stepflow_lint
-from plugins.skill_runner import SkillTool
+from stepflow.plugins.linter import lint_config, stepflow_lint
+from stepflow.plugins.skill_runner import SkillTool
 from tests.mocks import MockToolLoader, create_standard_mock_tools
 
 
@@ -107,7 +107,7 @@ def test_converter_pipeline_config_is_valid():
 
 def test_converter_pipeline_registers(sf):
     """The converter pipeline graph can be registered on StepFlow."""
-    from plugins.skill_converter.converter import _register_converter_agents
+    from stepflow.plugins.skill_converter.converter import _register_converter_agents
 
     _register_converter_agents(sf)
 

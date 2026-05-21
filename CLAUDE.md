@@ -1,13 +1,13 @@
 # CLAUDE.md — Stepflow
 
-Stepflow is a config-agnostic LLM pipeline graph executor. It is a pure Python 3.12 library with zero dependencies beyond PyYAML and httpx (for web tools).
+Stepflow is a config-agnostic LLM pipeline graph executor. It is a pure Python library with zero dependencies beyond PyYAML.
 Under Developpement, no backward compatbility is needed.
 
 ## Project Rules
 
 - **Zero AItelier imports.** Stepflow must never import from `core/`, `api/`, `cli/`, `aitelier/`, `models/`, or `templates/`.
 - **All tools are in `src/stepflow/tools/{name}/`** with `tool.yaml` + `impl.py`. Function name must match directory name.
-- **Tests in `tests/`** — 228 tests, 89% coverage. Run: `pytest tests/ -v`
+- **Tests in `tests/`** — 306 tests. Run: `pytest tests/ -v`
 - **Backward compat:** New fields on StepNode/Transition must have defaults. Old YAML without new fields must still parse.
 - **`type` field in tool.yaml is forbidden** — tools are callable by both agent steps and tool steps. Access control is via `agent_config.tools: [...]` (for agents) and `tool_name: "..."` (for tool nodes).
 
@@ -15,8 +15,7 @@ Under Developpement, no backward compatbility is needed.
 
 ```bash
 pip install -e ~/stepflow
-pytest tests/ -v          # 228 tests
-pytest tests/ --cov=stepflow  # 89% coverage target
+pytest tests/ -v          # 306 tests
 ```
 
 ## Architecture
@@ -65,4 +64,4 @@ def tool_name(*params, *, workspace_root: str = "", project_root: str = "") -> d
     return {"verdict": "passed"} | {"verdict": "failed", "feedback": "..."}
 ```
 
-Native tools (12): read_file, write, list_tree, dir_tree, web_search, web_fetch, json_schema, syntax_lint, py_compile, pytest, repo_apply, repo_validate.
+Native tools (13): read_file, write, list_tree, dir_tree, json_schema, syntax_lint, py_compile, pytest, repo_apply, repo_validate, draft_commit, file_exists, notify.
