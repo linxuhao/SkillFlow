@@ -117,7 +117,7 @@ class SkillTool:
         """Execute an action and return the next instruction.
 
         Args:
-            action: "next" | "submit" | "approve" | "reject"
+            action: "next" | "submit" | "approve" | "reject" | "abort"
             step_id: Required for "submit" and "reject" (to identify the step).
             result: Output dict for "submit".
             feedback: Rejection reason for "reject".
@@ -126,6 +126,16 @@ class SkillTool:
             SkillResponse with the next instruction or termination status.
         """
         # ── Handle action ─────────────────────────────────────────
+        if action == "abort":
+            if self.run_id is not None:
+                try:
+                    self.sf.fail_run(self.run_id, "aborted by agent")
+                except Exception:
+                    pass
+            self.run_id = None
+            self._current_claim = None
+            return SkillResponse(status="aborted")
+
         if action == "next" and self.run_id is None:
             pid = self._project_id
             # Auto-generate project_id when workspace is configured

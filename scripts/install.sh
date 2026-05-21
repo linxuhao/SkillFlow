@@ -6,8 +6,9 @@
 #   curl -sSL https://.../install.sh | bash  # clone + install (future)
 #
 # Registers these commands in ~/.local/bin/:
-#   stepflow-lint    — validate pipeline YAML files
-#   stepflow-run     — interactive pipeline runner
+#   stepflow-lint     — validate pipeline YAML files
+#   stepflow-run      — interactive pipeline runner
+#   stepflow-convert  — skill description → pipeline YAML
 
 set -euo pipefail
 
@@ -47,7 +48,14 @@ cat > "$BIN_DIR/stepflow-run" << SCRIPT
 exec python3 "${REPO_DIR}/scripts/skill_repl.py" "\$@"
 SCRIPT
 chmod +x "$BIN_DIR/stepflow-run"
-echo "  ✓ stepflow-run  → $BIN_DIR/stepflow-run"
+echo "  ✓ stepflow-run     → $BIN_DIR/stepflow-run"
+
+cat > "$BIN_DIR/stepflow-convert" << SCRIPT
+#!/usr/bin/env bash
+exec python3 "${REPO_DIR}/scripts/skill_convert.py" "\$@"
+SCRIPT
+chmod +x "$BIN_DIR/stepflow-convert"
+echo "  ✓ stepflow-convert → $BIN_DIR/stepflow-convert"
 
 # 4. Check PATH
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
@@ -66,3 +74,4 @@ echo "=== Done ==="
 echo ""
 echo "Try: stepflow-lint --help"
 echo "     stepflow-run <graph.yaml>"
+echo "     stepflow-convert <description.md> -o pipeline.yaml"

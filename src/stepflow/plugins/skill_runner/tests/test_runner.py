@@ -234,3 +234,18 @@ def test_next_on_completed_run(sf):
     # Further calls stay completed
     resp = tool(action="next")
     assert resp.status == "completed"
+
+
+# ── Abort ────────────────────────────────────────────────────────────
+
+def test_abort_clears_state_and_allows_restart(sf):
+    sf.register_graph(_simple_skill_graph())
+    tool = SkillTool(sf, "simple_skill")
+
+    tool(action="next")  # start first run
+    resp = tool(action="abort")
+    assert resp.status == "aborted"
+
+    # State cleared — can start a fresh run
+    resp = tool(action="next")
+    assert resp.status == "in_progress"

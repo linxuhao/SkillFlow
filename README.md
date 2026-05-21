@@ -20,8 +20,15 @@ CLI commands registered in `~/.local/bin/`:
 
 | Command | Description |
 |---------|-------------|
-| `stepflow-lint` | Validate pipeline YAML files |
-| `stepflow-run` | Interactive pipeline runner (human-in-the-loop) |
+| `stepflow-lint` | Validate pipeline YAML files (one-shot) |
+| `stepflow-run` | Run a pipeline interactively |
+| `stepflow-convert` | Convert a skill description → pipeline YAML |
+
+```bash
+stepflow-lint configs/*.yaml          # one-shot validation
+stepflow-run pipeline.yaml            # interactive (human or agent drives)
+stepflow-convert my_skill.md -o pipeline.yaml
+```
 
 ### PyPI publish
 
@@ -88,13 +95,7 @@ while resp.status == "in_progress":
 # resp.status == "completed"
 ```
 
-In runner mode, **native tools auto-execute** but **custom and unknown tools are delegated** to the agent (via `resp.tool_name` / `resp.tool_params`).
-
-Use the CLI for interactive human-in-the-loop runs:
-
-```bash
-stepflow-run tests/fixtures/skill_review.yaml
-```
+In runner mode, **native tools auto-execute** but **custom and unknown tools are delegated** to the agent (via `resp.tool_name` / `resp.tool_params`). Use `stepflow-run` or `stepflow-convert` to drive a pipeline interactively.
 
 ## Node Types
 
