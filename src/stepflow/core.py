@@ -106,7 +106,8 @@ class StepFlow:
                  stale_threshold_seconds: float = 300,
                  notification_bus: "NotificationBus | None" = None,
                  workspace_base: str = "",
-                 projects_base: str = ""):
+                 projects_base: str = "",
+                 delegate_tools_to_agent: bool = False):
         self._db_path = db_path
         self._graphs: dict[str, PipelineGraph] = {}
         self._resolvers: dict[str, GraphResolver] = {}
@@ -114,6 +115,7 @@ class StepFlow:
         self._tool_loader = tool_loader
         self._stale_threshold = stale_threshold_seconds
         self._workspace = None
+        self.delegate_tools_to_agent = delegate_tools_to_agent
         if workspace_base:
             from stepflow.workspace import WorkspaceManager
             self._workspace = WorkspaceManager(workspace_base, projects_base=projects_base)
@@ -1406,7 +1408,8 @@ class StepFlow:
                 if not _flags_match(t.match, flags, file_reader=fr):
                     continue
             # Don't resolve to gates, loops, or tools — advance_run handles them
-            if resolver.is_gate(t.to) or resolver.is_loop(t.to) or resolver.is_tool(t.to):
+            skip_tool = resolver.is_tool(t.to) and not self.delegate_tools_to_agent
+            if resolver.is_gate(t.to) or resolver.is_loop(t.to) or skip_tool:
                 return None
             return t.to
         return None
@@ -1491,7 +1494,10 @@ class StepFlow:
                     return current
 
                 # If current_node is a tool, auto-execute it inline
+                # (unless delegate_tools_to_agent — then return it for the agent to execute)
                 if resolver.is_tool(current):
+                    if self.delegate_tools_to_agent:
+                        return current  # agent claims and executes the tool
                     tool_node = resolver.get_node(current)
                     tool_result = self._execute_tool_inline(
                         tool_node, run_id=run_id,
@@ -1611,6 +1617,8 @@ class StepFlow:
                     edges_taken.append((next_node, matched))
                     next_node = matched
                 elif resolver.is_tool(next_node):
+                    if self.delegate_tools_to_agent:
+                        break  # return the tool node for the agent
                     tool_node = resolver.get_node(next_node)
                     tool_result = self._execute_tool_inline(
                         tool_node, run_id=run_id,

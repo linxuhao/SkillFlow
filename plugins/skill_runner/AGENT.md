@@ -110,10 +110,52 @@ Report the error to the user.
 6. Never `submit` twice in a row — wait for a new `in_progress`
 7. `action="next"` while a step is pending returns the same instruction (idempotent)
 
+## Tool nodes
+
+When StepFlow is configured with `delegate_tools_to_agent=True`, tool nodes
+are NOT auto-executed. Instead they're presented to you as regular steps
+with `tool_name` and `tool_params`:
+
+```json
+{
+  "status": "in_progress",
+  "step": "validate_design",
+  "tool_name": "stepflow_lint",
+  "tool_params": {"path": "/workspace/design/skill_pipeline.yaml"},
+  "instruction": "Execute tool: stepflow_lint"
+}
+```
+
+**You** execute the tool (using your own tool infrastructure), then submit
+the result. The runner stores it and advances the graph.
+
+Without delegation (default), tool nodes are auto-executed by stepflow
+and you never see them.
+
+## Checkpoints are for your user, not you
+
+When the runner returns `{status: "paused"}`, **present the checkpoint to
+the human user behind you**. Do NOT auto-approve or reject.
+
+```json
+{
+  "status": "paused",
+  "step": "summarize",
+  "checkpoint_label": "Review Summary — approve to commit, reject to revise",
+  "instruction": "Pipeline paused at checkpoint. Call approve or reject."
+}
+```
+
+Your job:
+1. Show the checkpoint label and outputs to the user
+2. Ask if they approve
+3. If yes → `action="approve"`
+4. If no → `action="reject"` with the user's feedback
+
 ## What you don't need to worry about
 
 - **Gates** — auto-resolved, never shown to you
-- **Tool nodes** — auto-executed inline, never shown
+- **Tool nodes** (without delegation) — auto-executed inline, never shown
 - **Loop steps** — auto-iterated, each iteration appears as a regular agent step
 - **Error handlers** — routed automatically on retry exhaustion
 - **Stale claims** — auto-recovered by advance_run

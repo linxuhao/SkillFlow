@@ -30,6 +30,9 @@ class SkillResponse:
     step: str = ""
     instruction: str = ""
     tools: dict[str, dict] = field(default_factory=dict)
+    # Tool node delegation (when StepFlow.delegate_tools_to_agent is True)
+    tool_name: str = ""
+    tool_params: dict = field(default_factory=dict)
     checkpoint_label: str = ""
     outputs: dict = field(default_factory=dict)
     error: str = ""
@@ -168,6 +171,28 @@ class SkillTool:
 
     # ── Helpers ───────────────────────────────────────────────────
 
+    def _make_response(self, claimed: ClaimedStep) -> SkillResponse:
+        """Build a SkillResponse from a claimed step."""
+        tool_name = ""
+        tool_params = {}
+        try:
+            resolver = self.sf._get_resolver(self.graph_name)
+            node = resolver.get_node(claimed.step_id)
+            if node and node.step_type == "tool":
+                tool_name = node.tool_name
+                tool_params = dict(node.tool_params)
+        except Exception:
+            pass
+
+        return SkillResponse(
+            status="in_progress",
+            step=claimed.step_id,
+            instruction=self._assembler.assemble(claimed),
+            tools=claimed.inputs.get("_tool_schemas", {}),
+            tool_name=tool_name,
+            tool_params=tool_params,
+        )
+
     def write_output_files(self, step_id: str, result: dict):
         """Write output_fixed files to step tmp_dir before confirm.
 
@@ -203,12 +228,7 @@ class SkillTool:
         """Advance the graph and return a SkillResponse for the agent."""
         # If a step is already claimed (waiting for submit), re-return it
         if self._current_claim is not None:
-            return SkillResponse(
-                status="in_progress",
-                step=self._current_claim.step_id,
-                instruction=self._assembler.assemble(self._current_claim),
-                tools=self._current_claim.inputs.get("_tool_schemas", {}),
-            )
+            return self._make_response(self._current_claim)
 
         loop_guard = 0
         while loop_guard < 100:
@@ -236,12 +256,7 @@ class SkillTool:
                 continue
 
             self._current_claim = claimed
-            return SkillResponse(
-                status="in_progress",
-                step=claimed.step_id,
-                instruction=self._assembler.assemble(claimed),
-                tools=claimed.inputs.get("_tool_schemas", {}),
-            )
+            return self._make_response(claimed)
 
         return SkillResponse(status="failed",
                              error="Advance loop exceeded 100 iterations")
