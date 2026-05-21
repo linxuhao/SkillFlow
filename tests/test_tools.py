@@ -1,5 +1,5 @@
 import subprocess
-"""Unit tests for stepflow/tools/ implementations."""
+"""Unit tests for skillflow/tools/ implementations."""
 
 import json
 import subprocess
@@ -7,15 +7,15 @@ import pytest
 from pathlib import Path
 
 # Tool impls
-from stepflow.tools.read_file.impl import read_file
-from stepflow.tools.write.impl import write
-from stepflow.tools.list_tree.impl import list_tree
-from stepflow.tools.dir_tree.impl import dir_tree
-from stepflow.tools.json_schema.impl import json_schema
-from stepflow.tools.repo_apply.impl import repo_apply
-from stepflow.tools.syntax_lint.impl import syntax_lint
-from stepflow.tools.py_compile.impl import py_compile
-from stepflow.tools.pytest.impl import pytest as pytest_tool
+from skillflow.tools.read_file.impl import read_file
+from skillflow.tools.write.impl import write
+from skillflow.tools.list_tree.impl import list_tree
+from skillflow.tools.dir_tree.impl import dir_tree
+from skillflow.tools.json_schema.impl import json_schema
+from skillflow.tools.repo_apply.impl import repo_apply
+from skillflow.tools.syntax_lint.impl import syntax_lint
+from skillflow.tools.py_compile.impl import py_compile
+from skillflow.tools.pytest.impl import pytest as pytest_tool
 
 
 class TestReadFile:

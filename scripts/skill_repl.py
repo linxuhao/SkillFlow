@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Interactive runner for stepflow pipelines.
+"""Interactive runner for skillflow pipelines.
 
 Drives a pipeline as a human agent with action="next"/"submit"/"approve"/"reject".
 Native tools auto-execute; custom tools are delegated to the user.
 
 Usage:
-    stepflow-run <graph.yaml>
+    skillflow-run <graph.yaml>
     python3 scripts/skill_repl.py <graph.yaml>
 """
 
@@ -21,26 +21,26 @@ _src = _repo_root / "src"
 if str(_src) not in sys.path:
     sys.path.insert(0, str(_src))
 
-from stepflow.core import StepFlow
-from stepflow.graph import PipelineGraph
-from stepflow.tool_loader import ToolLoader
-from stepflow.plugins.skill_runner import SkillTool
+from skillflow.core import SkillFlow
+from skillflow.graph import PipelineGraph
+from skillflow.tool_loader import ToolLoader
+from skillflow.plugins.skill_runner import SkillTool
 
 
 def main():
     graph_path = sys.argv[1] if len(sys.argv) > 1 else None
     if not graph_path:
-        print("Usage: stepflow-run <graph.yaml>")
+        print("Usage: skillflow-run <graph.yaml>")
         sys.exit(1)
 
-    tmp = tempfile.mkdtemp(prefix="stepflow_repl_")
+    tmp = tempfile.mkdtemp(prefix="skillflow_repl_")
 
     # Load native tools + plugin tools
     loader = ToolLoader()
-    import stepflow.plugins
-    loader.add_tools_dir(str(Path(stepflow.plugins.__path__[0]) / "linter" / "tools"))
+    import skillflow.plugins
+    loader.add_tools_dir(str(Path(skillflow.plugins.__path__[0]) / "linter" / "tools"))
 
-    sf = StepFlow(
+    sf = SkillFlow(
         ":memory:",
         tool_loader=loader,
         delegate_tools_to_agent=True,
@@ -61,7 +61,7 @@ def main():
     # Register converter agents if running the converter pipeline
     if "skill_converter" in graph_path:
         try:
-            from stepflow.plugins.skill_converter.converter import _register_converter_agents
+            from skillflow.plugins.skill_converter.converter import _register_converter_agents
             _register_converter_agents(sf)
         except Exception:
             pass

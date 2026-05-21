@@ -1,9 +1,9 @@
-"""Tests for stepflow.notifications — NotificationBus + should_notify."""
+"""Tests for skillflow.notifications — NotificationBus + should_notify."""
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from stepflow.notifications import (
+from skillflow.notifications import (
     Notification, NotificationBus, should_notify,
     STEP_STARTED, STEP_COMPLETED, AGENT_NOTIFICATION,
 )
@@ -92,8 +92,8 @@ class TestNotificationBus:
 
 class TestNotifyToolAutoContext:
     def test_notify_accepts_context_kwargs(self):
-        """notify tool auto-receives context from stepflow."""
-        from stepflow.tools.notify.impl import notify
+        """notify tool auto-receives context from skillflow."""
+        from skillflow.tools.notify.impl import notify
 
         result = notify(
             "hello world", "milestone",
@@ -105,19 +105,19 @@ class TestNotifyToolAutoContext:
         assert result["level"] == "milestone"
 
     def test_notify_truncates_long_message(self):
-        from stepflow.tools.notify.impl import notify
+        from skillflow.tools.notify.impl import notify
 
         result = notify("x" * 1000, "info")
         assert result["message_length"] == 500
 
     def test_notify_default_level(self):
-        from stepflow.tools.notify.impl import notify
+        from skillflow.tools.notify.impl import notify
 
         result = notify("test")
         assert result["level"] == "info"
 
     def test_notify_with_emit_callback(self):
-        from stepflow.tools.notify.impl import notify
+        from skillflow.tools.notify.impl import notify
         from unittest.mock import MagicMock
         import asyncio
 

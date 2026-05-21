@@ -1,4 +1,4 @@
-# skill_review.yaml — Realistic code review skill as a stepflow pipeline.
+# skill_review.yaml — Realistic code review skill as a skillflow pipeline.
 # Demonstrates: checkpoints, review loops, error routing, gates, lifecycle hooks.
 # This is what the converter should be able to produce from a skill description.
 

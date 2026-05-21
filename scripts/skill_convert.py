@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Interactive converter — turn a skill description into a stepflow pipeline.
+"""Interactive converter — turn a skill description into a skillflow pipeline.
 
 Drives the skill_converter meta-pipeline interactively. The user (or LLM
 agent) responds to each prompt with JSON. On completion, the generated
 pipeline YAML is saved to the output path.
 
 Usage:
-    stepflow-convert my_skill.md -o pipeline.yaml
-    stepflow-convert -d "Code review skill..." -o pipeline.yaml
+    skillflow-convert my_skill.md -o pipeline.yaml
+    skillflow-convert -d "Code review skill..." -o pipeline.yaml
 """
 
 import json
@@ -22,10 +22,10 @@ _src = _repo_root / "src"
 if str(_src) not in sys.path:
     sys.path.insert(0, str(_src))
 
-from stepflow.core import StepFlow
-from stepflow.tool_loader import ToolLoader
-from stepflow.plugins.skill_runner import SkillTool
-from stepflow.plugins.skill_converter import setup_converter, save_output
+from skillflow.core import SkillFlow
+from skillflow.tool_loader import ToolLoader
+from skillflow.plugins.skill_runner import SkillTool
+from skillflow.plugins.skill_converter import setup_converter, save_output
 
 
 def main():
@@ -49,18 +49,18 @@ def main():
     if desc_file:
         desc_text = Path(desc_file).read_text(encoding="utf-8")
     elif not desc_text:
-        print("Usage: stepflow-convert <description.md> [-o pipeline.yaml]")
-        print("       stepflow-convert -d 'skill description...' [-o pipeline.yaml]")
+        print("Usage: skillflow-convert <description.md> [-o pipeline.yaml]")
+        print("       skillflow-convert -d 'skill description...' [-o pipeline.yaml]")
         sys.exit(1)
 
-    tmp = tempfile.mkdtemp(prefix="stepflow_convert_")
+    tmp = tempfile.mkdtemp(prefix="skillflow_convert_")
 
     # Load tools
     loader = ToolLoader()
-    import stepflow.plugins
-    loader.add_tools_dir(str(Path(stepflow.plugins.__path__[0]) / "linter" / "tools"))
+    import skillflow.plugins
+    loader.add_tools_dir(str(Path(skillflow.plugins.__path__[0]) / "linter" / "tools"))
 
-    sf = StepFlow(
+    sf = SkillFlow(
         ":memory:",
         tool_loader=loader,
         delegate_tools_to_agent=True,

@@ -1,12 +1,12 @@
-# CLAUDE.md — Stepflow
+# CLAUDE.md — Skillflow
 
-Stepflow is a config-agnostic LLM pipeline graph executor. It is a pure Python library with zero dependencies beyond PyYAML.
-Under Developpement, no backward compatbility is needed.
+Skillflow is a config-agnostic LLM pipeline graph executor. It is a pure Python library with zero dependencies beyond PyYAML.
+Under development, no backward compatibility is needed.
 
 ## Project Rules
 
-- **Zero AItelier imports.** Stepflow must never import from `core/`, `api/`, `cli/`, `aitelier/`, `models/`, or `templates/`.
-- **All tools are in `src/stepflow/tools/{name}/`** with `tool.yaml` + `impl.py`. Function name must match directory name.
+- **Zero AItelier imports.** Skillflow must never import from `core/`, `api/`, `cli/`, `aitelier/`, `models/`, or `templates/`.
+- **All tools are in `src/skillflow/tools/{name}/`** with `tool.yaml` + `impl.py`. Function name must match directory name.
 - **Tests in `tests/`** — 306 tests. Run: `pytest tests/ -v`
 - **Backward compat:** New fields on StepNode/Transition must have defaults. Old YAML without new fields must still parse.
 - **`type` field in tool.yaml is forbidden** — tools are callable by both agent steps and tool steps. Access control is via `agent_config.tools: [...]` (for agents) and `tool_name: "..."` (for tool nodes).
@@ -18,7 +18,7 @@ Project uses `.venv/` at repo root (auto-detected by VS Code). First-time setup:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ~/stepflow[dev]
+pip install -e ~/skillflow[dev]
 ```
 
 Then:
@@ -33,7 +33,7 @@ pytest plugins/ -v        # 21 plugin tests
 ```
 PipelineGraph (YAML) → GraphResolver (validation + traversal)
                          ↓
-StepFlow (orchestrator)  ← SQLite (WAL mode)
+SkillFlow (orchestrator)  ← SQLite (WAL mode)
   ├── claim_next_step()  → ClaimedStep → StepRunner (host app)
   ├── confirm_step()     → completed/failed
   ├── advance_run()      → resolve gates, auto-execute tools
@@ -43,7 +43,7 @@ StepFlow (orchestrator)  ← SQLite (WAL mode)
   └── drain_outbox()     → event stream
 
 ToolLoader (multi-source)
-  ├── Native: src/stepflow/tools/
+  ├── Native: src/skillflow/tools/
   └── Custom: host app adds via add_tools_dir()
 
 ContextResolver → assemble prompt context from:

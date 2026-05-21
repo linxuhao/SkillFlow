@@ -1,0 +1,15 @@
+name: notify
+description: >
+  Send a user-visible notification. Context fields (run_id, step_id,
+  step_name, config_name, timestamp) are auto-injected by skillflow.
+  Agents only need to pass message and optional level.
+parameters:
+  message:
+    type: string
+    description: "Notification message text (max 500 chars)"
+    required: true
+  level:
+    type: string
+    description: "info, warning, or milestone"
+    required: false
+    default: "info"

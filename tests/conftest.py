@@ -1,4 +1,4 @@
-"""Test fixtures for stepflow.
+"""Test fixtures for skillflow.
 
 Provides isolated in-memory SQLite databases, mock StepRunners,
 mock ToolLoaders, and helper factories for building PipelineGraphs.
@@ -6,7 +6,7 @@ mock ToolLoaders, and helper factories for building PipelineGraphs.
 
 import pytest
 
-from stepflow.core import StepFlow
+from skillflow.core import SkillFlow
 from mocks import (
     MockStepRunner,
     MockToolLoader,
@@ -17,23 +17,23 @@ from mocks import (
 
 @pytest.fixture
 def sf():
-    """StepFlow instance backed by an in-memory SQLite database.
+    """SkillFlow instance backed by an in-memory SQLite database.
 
-    Each test gets a fresh, isolated instance. All stepflow_* tables
+    Each test gets a fresh, isolated instance. All skillflow_* tables
     are created automatically.
     """
-    return StepFlow(":memory:")
+    return SkillFlow(":memory:")
 
 
 @pytest.fixture
 def sf_tmp(tmp_path):
-    """StepFlow instance backed by a file-based SQLite database.
+    """SkillFlow instance backed by a file-based SQLite database.
 
     Use when you need to simulate process crashes by re-opening the
     database from the same file path.
     """
     db_path = str(tmp_path / "test.db")
-    return StepFlow(db_path)
+    return SkillFlow(db_path)
 
 
 @pytest.fixture
@@ -44,21 +44,21 @@ def mock_tools():
 
 @pytest.fixture
 def sf_with_tools(mock_tools):
-    """StepFlow with mock ToolLoader, no workspace.
+    """SkillFlow with mock ToolLoader, no workspace.
 
     Use for graph traversal, checkpoints, gates, error routing tests.
     """
-    return StepFlow(":memory:", tool_loader=mock_tools)
+    return SkillFlow(":memory:", tool_loader=mock_tools)
 
 
 @pytest.fixture
 def sf_with_workspace(tmp_path, mock_tools):
-    """StepFlow with mock ToolLoader + tmp_path workspace.
+    """SkillFlow with mock ToolLoader + tmp_path workspace.
 
     Use for lifecycle hook and output validation tests that need
     filesystem directories for step outputs.
     """
-    return StepFlow(
+    return SkillFlow(
         ":memory:",
         tool_loader=mock_tools,
         workspace_base=str(tmp_path / "workspaces"),
@@ -86,7 +86,7 @@ DPE_AGENT_CONFIGS = [
 ]
 
 
-def register_dpe_agent_configs(sf: StepFlow, tools: list[str] | None = None):
+def register_dpe_agent_configs(sf: SkillFlow, tools: list[str] | None = None):
     """Register all agent configs referenced by dpe_full.yaml."""
     tool_list = tools or ["file_exists", "json_schema", "syntax_lint",
                           "py_compile", "pytest", "repo_apply", "dir_tree"]

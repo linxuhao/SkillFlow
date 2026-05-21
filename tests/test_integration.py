@@ -2,8 +2,8 @@
 
 import pytest
 
-from stepflow.core import StepFlow, StepResult, ClaimedStep
-from stepflow.graph import (
+from skillflow.core import SkillFlow, StepResult, ClaimedStep
+from skillflow.graph import (
     PipelineGraph,
     StepNode,
     Transition,
@@ -67,7 +67,7 @@ def _dpe_graph():
     )
 
 
-def _execute(sf: StepFlow, run_id: str, step_id: str, outputs=None, flags=None):
+def _execute(sf: SkillFlow, run_id: str, step_id: str, outputs=None, flags=None):
     """Helper: execute one step through the full claim-execute-confirm cycle."""
     claimed = sf.claim_next_step(run_id)
     assert claimed is not None, f"Failed to claim {step_id}"
@@ -76,7 +76,7 @@ def _execute(sf: StepFlow, run_id: str, step_id: str, outputs=None, flags=None):
     sf.confirm_step(claimed.token, result)
 
 
-def test_full_dpe_pipeline_no_tasks(sf: StepFlow):
+def test_full_dpe_pipeline_no_tasks(sf: SkillFlow):
     """Pipeline with no tasks: 1_5 → 2 → 3 → task_gate → 5."""
     graph = _dpe_graph()
     sf.register_graph(graph)
@@ -109,7 +109,7 @@ def test_full_dpe_pipeline_no_tasks(sf: StepFlow):
     assert sf.get_run(run_id)["status"] == "completed"
 
 
-def test_full_dpe_pipeline_with_tasks(sf: StepFlow):
+def test_full_dpe_pipeline_with_tasks(sf: SkillFlow):
     """Pipeline with tasks: 1_5 → 2 → 3 → task_gate → t_plan → t_impl → t_verify → task_loop → 5."""
     graph = _dpe_graph()
     sf.register_graph(graph)
@@ -157,7 +157,7 @@ def test_full_dpe_pipeline_with_tasks(sf: StepFlow):
         assert sf.get_run(run_id)["status"] == "completed"
 
 
-def test_error_transition_flow(sf: StepFlow):
+def test_error_transition_flow(sf: SkillFlow):
     """t_impl fails repeatedly → error_handler → task_loop → 5."""
     graph = _dpe_graph()
     sf.register_graph(graph)
@@ -205,7 +205,7 @@ def test_error_transition_flow(sf: StepFlow):
         pass
 
 
-def test_checkpoint_pause_resume_cycle(sf: StepFlow):
+def test_checkpoint_pause_resume_cycle(sf: SkillFlow):
     graph = PipelineGraph(
         name="test", begin="a",
         steps=[
@@ -229,7 +229,7 @@ def test_checkpoint_pause_resume_cycle(sf: StepFlow):
     assert next_node == "b"
 
 
-def test_checkpoint_rejection_then_reexecution(sf: StepFlow):
+def test_checkpoint_rejection_then_reexecution(sf: SkillFlow):
     graph = PipelineGraph(
         name="test", begin="a",
         steps=[
@@ -264,7 +264,7 @@ def test_checkpoint_rejection_then_reexecution(sf: StepFlow):
     _execute(sf, run_id, "b")
 
 
-def test_crash_during_execute_recovery(sf_tmp: StepFlow):
+def test_crash_during_execute_recovery(sf_tmp: SkillFlow):
     """Simulate crash during execute: claim, then recover without confirm."""
     graph = PipelineGraph(
         name="test", begin="a",
@@ -291,7 +291,7 @@ def test_crash_during_execute_recovery(sf_tmp: StepFlow):
     assert claimed_b.step_id == "b"
 
 
-def test_concurrent_claim_prevention(sf: StepFlow):
+def test_concurrent_claim_prevention(sf: SkillFlow):
     """Two claim attempts — only one wins."""
     graph = PipelineGraph(
         name="test", begin="a",
@@ -310,7 +310,7 @@ def test_concurrent_claim_prevention(sf: StepFlow):
     assert c2 is None  # Second claim fails because version changed
 
 
-def test_idempotent_advance_after_confirm(sf: StepFlow):
+def test_idempotent_advance_after_confirm(sf: SkillFlow):
     """advance_run returns same result after confirm without claim."""
     graph = PipelineGraph(
         name="test", begin="a",
@@ -331,7 +331,7 @@ def test_idempotent_advance_after_confirm(sf: StepFlow):
     assert n1 == "b"
 
 
-def test_planning_refresh_cycle(sf: StepFlow):
+def test_planning_refresh_cycle(sf: SkillFlow):
     """refresh_needed → 1_5 with max_loop enforcement."""
     graph = PipelineGraph(
         name="test", begin="a",

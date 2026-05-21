@@ -1,12 +1,12 @@
 """Regression tests — verify fixes for the 67 audit issues from the current AItelier codebase.
 
-Each test is named with its audit ID from the original stepflow_brief.md.
+Each test is named with its audit ID from the original skillflow_brief.md.
 """
 
 import pytest
 
-from stepflow.core import StepFlow, StepResult
-from stepflow.graph import (
+from skillflow.core import SkillFlow, StepResult
+from skillflow.graph import (
     PipelineGraph,
     StepNode,
     Transition,
@@ -34,7 +34,7 @@ def _trans(to: str, match=None, max_loop=None):
 
 # ── C2: No project-level concurrency control ────────────────────────
 
-def test_c2_two_ticks_cant_claim_same_step(sf: StepFlow):
+def test_c2_two_ticks_cant_claim_same_step(sf: SkillFlow):
     """Two ticks cannot simultaneously claim and execute the same step."""
     graph = PipelineGraph(
         name="test", begin="a",
@@ -54,7 +54,7 @@ def test_c2_two_ticks_cant_claim_same_step(sf: StepFlow):
 
 # ── C3: step_locked inconsistently used ─────────────────────────────
 
-def test_c3_version_columns_replace_locks(sf: StepFlow):
+def test_c3_version_columns_replace_locks(sf: SkillFlow):
     """Version columns provide atomic claiming without a separate lock column."""
     graph = PipelineGraph(
         name="test", begin="a",
@@ -76,7 +76,7 @@ def test_c3_version_columns_replace_locks(sf: StepFlow):
 
 # ── C4: SSE __END__ never pushed ────────────────────────────────────
 
-def test_c4_outbox_produces_terminal_event(sf: StepFlow):
+def test_c4_outbox_produces_terminal_event(sf: SkillFlow):
     """When a run completes, the outbox gets a run_completed event."""
     graph = PipelineGraph(
         name="test", begin="a",
@@ -104,7 +104,7 @@ def test_c4_outbox_produces_terminal_event(sf: StepFlow):
 
 # ── C5: No transactional boundary between files and DB ──────────────
 
-def test_c5_confirm_and_advance_are_separate_transactions(sf: StepFlow):
+def test_c5_confirm_and_advance_are_separate_transactions(sf: SkillFlow):
     """confirm_step writes state atomically; crash between confirm and
     advance is recovered by advance_run reading the last completed step."""
     graph = PipelineGraph(
@@ -130,7 +130,7 @@ def test_c5_confirm_and_advance_are_separate_transactions(sf: StepFlow):
 
 # ── C8: submit_task resurrects completed projects ───────────────────
 
-def test_c8_completed_run_stays_completed(sf: StepFlow):
+def test_c8_completed_run_stays_completed(sf: SkillFlow):
     """Once a run is completed, advance_run returns None — no accidental
     reactivation."""
     graph = PipelineGraph(
@@ -153,7 +153,7 @@ def test_c8_completed_run_stays_completed(sf: StepFlow):
 
 # ── Hardcoded step sequences ────────────────────────────────────────
 
-def test_pipeline_is_defined_in_graph_not_code(sf: StepFlow):
+def test_pipeline_is_defined_in_graph_not_code(sf: SkillFlow):
     """Pipeline step sequences come from YAML/graph definition, not Python constants."""
     # This graph has a completely custom sequence — no AItelier DPE steps
     graph = PipelineGraph(
@@ -180,7 +180,7 @@ def test_pipeline_is_defined_in_graph_not_code(sf: StepFlow):
 
 # ── No cycle support — planning refresh was ad-hoc hack ─────────────
 
-def test_cycle_support_planning_refresh_is_graph_edge(sf: StepFlow):
+def test_cycle_support_planning_refresh_is_graph_edge(sf: SkillFlow):
     """Planning refresh is a regular graph edge with max_loop, not ad-hoc code."""
     graph = PipelineGraph(
         name="test", begin="plan",
@@ -223,7 +223,7 @@ def test_cycle_support_planning_refresh_is_graph_edge(sf: StepFlow):
     assert claimed.step_id == "done"
 
 
-def _exec(sf: StepFlow, run_id: str, step_id: str, outputs=None, flags=None):
+def _exec(sf: SkillFlow, run_id: str, step_id: str, outputs=None, flags=None):
     claimed = sf.claim_next_step(run_id)
     assert claimed is not None, f"Failed to claim {step_id}"
     assert claimed.step_id == step_id, f"Expected {step_id}, got {claimed.step_id}"

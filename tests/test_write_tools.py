@@ -1,6 +1,6 @@
-"""Tests for stepflow.write_tools."""
+"""Tests for skillflow.write_tools."""
 
-from stepflow.write_tools import generate_write_tool_schemas, resolve_write_target
+from skillflow.write_tools import generate_write_tool_schemas, resolve_write_target
 
 
 class TestWriteTools:
@@ -102,7 +102,7 @@ class TestWriteTools:
             assert '{"id": str, "description": str}' in desc
 
     def test_normalize_passes_format(self):
-        from stepflow.write_tools import _normalize_fixed_entry
+        from skillflow.write_tools import _normalize_fixed_entry
         # Dict entry preserves format
         result = _normalize_fixed_entry({"file": "x.json", "format": "schema"})
         assert result["format"] == "schema"

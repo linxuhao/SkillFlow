@@ -2,16 +2,16 @@
 
 import pytest
 
-from stepflow.core import StepFlow
-from stepflow.graph import PipelineGraph, StepNode
-from stepflow.outbox import OutboxConsumer
+from skillflow.core import SkillFlow
+from skillflow.graph import PipelineGraph, StepNode
+from skillflow.outbox import OutboxConsumer
 
 
 def _agent(id: str):
     return StepNode(id=id, step_type="agent")
 
 
-def test_consumer_drain_returns_events(sf: StepFlow):
+def test_consumer_drain_returns_events(sf: SkillFlow):
     graph = PipelineGraph(name="test", begin="a", steps=[_agent("a")])
     sf.register_graph(graph)
     sf.create_run("test")
@@ -22,7 +22,7 @@ def test_consumer_drain_returns_events(sf: StepFlow):
     assert events[0].event_type == "run_created"
 
 
-def test_consumer_ack_marks_delivered(sf: StepFlow):
+def test_consumer_ack_marks_delivered(sf: SkillFlow):
     graph = PipelineGraph(name="test", begin="a", steps=[_agent("a")])
     sf.register_graph(graph)
     sf.create_run("test")
@@ -38,7 +38,7 @@ def test_consumer_ack_marks_delivered(sf: StepFlow):
     assert len(events2) == 0
 
 
-def test_consumer_events_ordered_by_id(sf: StepFlow):
+def test_consumer_events_ordered_by_id(sf: SkillFlow):
     graph = PipelineGraph(name="test", begin="a", steps=[_agent("a")])
     sf.register_graph(graph)
     sf.create_run("test")
@@ -50,12 +50,12 @@ def test_consumer_events_ordered_by_id(sf: StepFlow):
     assert ids == sorted(ids)
 
 
-def test_consumer_ack_empty(sf: StepFlow):
+def test_consumer_ack_empty(sf: SkillFlow):
     consumer = OutboxConsumer(sf)
     consumer.ack([])  # Should not raise
 
 
-def test_consumer_respects_batch_size(sf: StepFlow):
+def test_consumer_respects_batch_size(sf: SkillFlow):
     graph = PipelineGraph(name="test", begin="a", steps=[_agent("a")])
     sf.register_graph(graph)
     # Create several runs to generate multiple events

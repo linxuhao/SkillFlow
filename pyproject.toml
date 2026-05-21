@@ -3,14 +3,14 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "stepflow"
+name = "skillflow-py"
 version = "1.0.0"
-description = "Config-agnostic LLM pipeline graph executor"
+description = "Config-agnostic LLM pipeline graph executor — turn skills into flows"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 authors = [
-    {name = "Stepflow contributors"},
+    {name = "Skillflow contributors"},
 ]
 keywords = ["llm", "pipeline", "graph", "orchestrator", "agent"]
 classifiers = [
@@ -21,6 +21,7 @@ classifiers = [
 ]
 dependencies = [
     "pyyaml>=6.0",
+    "ruff>=0.4",
 ]
 
 [project.optional-dependencies]
@@ -35,10 +36,10 @@ where = ["src"]
 exclude = ["*.tests", "*.tests.*"]
 
 [tool.setuptools.package-data]
-"stepflow.tools" = ["*/tool.yaml"]
-"stepflow.plugins.linter.tools" = ["*/tool.yaml"]
-"stepflow.plugins.skill_runner" = ["AGENT.md"]
-"stepflow.plugins.skill_converter" = ["AGENT.md", "*.yaml", "prompts/*.md"]
+"skillflow.tools" = ["*/tool.yaml"]
+"skillflow.plugins.linter.tools" = ["*/tool.yaml"]
+"skillflow.plugins.skill_runner" = ["AGENT.md"]
+"skillflow.plugins.skill_converter" = ["AGENT.md", "*.yaml", "prompts/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

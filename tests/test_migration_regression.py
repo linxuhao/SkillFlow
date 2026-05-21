@@ -1,12 +1,12 @@
-"""Regression tests for AItelier migration to stepflow.
+"""Regression tests for AItelier migration to skillflow.
 
-Verifies the 67 audit issues are addressed by the stepflow architecture.
+Verifies the 67 audit issues are addressed by the skillflow architecture.
 """
 
 import pytest
 
-from stepflow.core import StepFlow, StepResult
-from stepflow.graph import PipelineGraph, StepNode, Transition, EndCondition, EndConditions
+from skillflow.core import SkillFlow, StepResult
+from skillflow.graph import PipelineGraph, StepNode, Transition, EndCondition, EndConditions
 
 
 def _agent(id: str, transitions=None, max_retries=3):
@@ -23,7 +23,7 @@ def _trans(to: str, match=None, max_loop=None):
 
 # ── C2: No project-level concurrency control ────────────────────────
 
-def test_c2_no_duplicate_project_execution(sf: StepFlow):
+def test_c2_no_duplicate_project_execution(sf: SkillFlow):
     """Two concurrent scheduler ticks can't run the same step twice."""
     graph = PipelineGraph(
         name="test", begin="a",
@@ -43,7 +43,7 @@ def test_c2_no_duplicate_project_execution(sf: StepFlow):
 
 # ── C3: step_locked inconsistent ────────────────────────────────────
 
-def test_c3_version_columns_replace_step_locked(sf: StepFlow):
+def test_c3_version_columns_replace_step_locked(sf: SkillFlow):
     """Version columns provide atomicity, no step_locked column needed."""
     graph = PipelineGraph(
         name="test", begin="a",
@@ -67,7 +67,7 @@ def test_c3_version_columns_replace_step_locked(sf: StepFlow):
 
 # ── C5: No transactional boundary between files and DB ──────────────
 
-def test_c5_atomic_state_transitions(sf: StepFlow):
+def test_c5_atomic_state_transitions(sf: SkillFlow):
     """confirm_step is atomic — no partial state between files and DB."""
     graph = PipelineGraph(
         name="test", begin="a",
@@ -89,7 +89,7 @@ def test_c5_atomic_state_transitions(sf: StepFlow):
 
 # ── C4: SSE __END__ never pushed ────────────────────────────────────
 
-def test_c4_terminal_events_produced(sf: StepFlow):
+def test_c4_terminal_events_produced(sf: SkillFlow):
     """run_completed event is emitted to outbox."""
     graph = PipelineGraph(
         name="test", begin="a",
@@ -114,8 +114,8 @@ def test_c4_terminal_events_produced(sf: StepFlow):
 
 # ── C8: submit_task resurrects completed projects ───────────────────
 
-def test_c8_completed_run_cannot_be_reactivated(sf: StepFlow):
-    """A completed stepflow run cannot be accidentally restarted."""
+def test_c8_completed_run_cannot_be_reactivated(sf: SkillFlow):
+    """A completed skillflow run cannot be accidentally restarted."""
     graph = PipelineGraph(
         name="test", begin="a",
         steps=[_agent("a", [])],
@@ -135,7 +135,7 @@ def test_c8_completed_run_cannot_be_reactivated(sf: StepFlow):
 
 # ── Hardcoded step sequences → YAML graph ───────────────────────────
 
-def test_pipeline_in_yaml_not_code(sf: StepFlow):
+def test_pipeline_in_yaml_not_code(sf: SkillFlow):
     """Custom pipeline works without changing Python constants."""
     graph = PipelineGraph(
         name="custom", begin="lint",

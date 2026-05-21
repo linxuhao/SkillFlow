@@ -1,10 +1,10 @@
-"""Tests for stepflow.step_validation.StepValidator."""
+"""Tests for skillflow.step_validation.StepValidator."""
 
 import json
 import pytest
 from pathlib import Path
-from stepflow.tool_loader import ToolLoader
-from stepflow.step_validation import StepValidator
+from skillflow.tool_loader import ToolLoader
+from skillflow.step_validation import StepValidator
 
 
 @pytest.fixture
@@ -14,9 +14,9 @@ def validator_with_tools(tmp_path):
     json_dir = tools_dir / "json_schema"
     json_dir.mkdir(parents=True)
 
-    # Use the real json_schema tool from stepflow/tools/
+    # Use the real json_schema tool from skillflow/tools/
     import shutil
-    real_tool = Path(__file__).parent.parent.parent / "stepflow" / "tools" / "json_schema"
+    real_tool = Path(__file__).parent.parent.parent / "src" / "skillflow" / "tools" / "json_schema"
     if real_tool.exists():
         shutil.copytree(real_tool, json_dir, dirs_exist_ok=True)
     else:

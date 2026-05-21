@@ -1,4 +1,4 @@
-"""Unit tests for core.py — StepFlow run lifecycle, claim/confirm/fail, advance_run."""
+"""Unit tests for core.py — SkillFlow run lifecycle, claim/confirm/fail, advance_run."""
 
 import json
 import time
@@ -6,21 +6,21 @@ from pathlib import Path
 
 import pytest
 
-from stepflow.core import StepFlow, ClaimedStep, ClaimToken, StepResult
-from stepflow.graph import (
+from skillflow.core import SkillFlow, ClaimedStep, ClaimToken, StepResult
+from skillflow.graph import (
     PipelineGraph,
     StepNode,
     Transition,
     EndCondition,
     EndConditions,
 )
-from stepflow.exceptions import (
+from skillflow.exceptions import (
     StepVersionConflict,
-    StepFlowError,
+    SkillFlowError,
     GraphValidationError,
 )
-from stepflow.tool_loader import ToolLoader
-from stepflow.workspace import WorkspaceManager
+from skillflow.tool_loader import ToolLoader
+from skillflow.workspace import WorkspaceManager
 
 
 
@@ -85,7 +85,7 @@ def _dpe_graph():
 
 # ── Run lifecycle ────────────────────────────────────────────────────
 
-def test_create_run(sf: StepFlow):
+def test_create_run(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test", {"project_id": "X"})
@@ -98,7 +98,7 @@ def test_create_run(sf: StepFlow):
     assert run["current_node"] == "a"
 
 
-def test_start_run(sf: StepFlow):
+def test_start_run(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -108,17 +108,17 @@ def test_start_run(sf: StepFlow):
     assert run["started_at"] is not None
 
 
-def test_start_run_wrong_status_raises(sf: StepFlow):
+def test_start_run_wrong_status_raises(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
     sf.start_run(run_id)
     # Already running — can't start again
-    with pytest.raises(StepFlowError):
+    with pytest.raises(SkillFlowError):
         sf.start_run(run_id)
 
 
-def test_pause_resume_run(sf: StepFlow):
+def test_pause_resume_run(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -129,7 +129,7 @@ def test_pause_resume_run(sf: StepFlow):
     assert sf.get_run(run_id)["status"] == "running"
 
 
-def test_fail_run(sf: StepFlow):
+def test_fail_run(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -140,7 +140,7 @@ def test_fail_run(sf: StepFlow):
     assert run["error_reason"] == "something went wrong"
 
 
-def test_complete_run(sf: StepFlow):
+def test_complete_run(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -149,13 +149,13 @@ def test_complete_run(sf: StepFlow):
     assert sf.get_run(run_id)["status"] == "completed"
 
 
-def test_get_run_nonexistent(sf: StepFlow):
+def test_get_run_nonexistent(sf: SkillFlow):
     assert sf.get_run("nonexistent") is None
 
 
 # ── Claim / Confirm ──────────────────────────────────────────────────
 
-def test_claim_next_step(sf: StepFlow):
+def test_claim_next_step(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -171,7 +171,7 @@ def test_claim_next_step(sf: StepFlow):
     assert claimed.token.run_id == run_id
 
 
-def test_claim_returns_none_when_already_claimed(sf: StepFlow):
+def test_claim_returns_none_when_already_claimed(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -184,7 +184,7 @@ def test_claim_returns_none_when_already_claimed(sf: StepFlow):
     assert second is None  # Already claimed
 
 
-def test_claim_returns_none_when_gate(sf: StepFlow):
+def test_claim_returns_none_when_gate(sf: SkillFlow):
     graph = PipelineGraph(
         name="test", begin="g",
         steps=[_gate("g", [_trans("a")]), _agent("a")],
@@ -198,7 +198,7 @@ def test_claim_returns_none_when_gate(sf: StepFlow):
     assert next_node == "a"  # Gate auto-advanced
 
 
-def test_confirm_step(sf: StepFlow):
+def test_confirm_step(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -213,7 +213,7 @@ def test_confirm_step(sf: StepFlow):
     assert run["current_node"] == "b"  # Inline transition resolved by confirm
 
 
-def test_confirm_step_version_conflict(sf: StepFlow):
+def test_confirm_step_version_conflict(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -229,7 +229,7 @@ def test_confirm_step_version_conflict(sf: StepFlow):
         sf.confirm_step(claimed.token, result)
 
 
-def test_confirm_then_advance_resolves_next(sf: StepFlow):
+def test_confirm_then_advance_resolves_next(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -247,7 +247,7 @@ def test_confirm_then_advance_resolves_next(sf: StepFlow):
 
 # ── Fail step ────────────────────────────────────────────────────────
 
-def test_fail_step_retryable(sf: StepFlow):
+def test_fail_step_retryable(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -262,7 +262,7 @@ def test_fail_step_retryable(sf: StepFlow):
     assert run["status"] == "running"  # Run is still running
 
 
-def test_fail_step_retries_exhausted_with_error_handler(sf: StepFlow):
+def test_fail_step_retries_exhausted_with_error_handler(sf: SkillFlow):
     graph = PipelineGraph(
         name="test", begin="a",
         steps=[
@@ -290,7 +290,7 @@ def test_fail_step_retries_exhausted_with_error_handler(sf: StepFlow):
     assert run["current_node"] == "eh"
 
 
-def test_fail_step_retries_exhausted_no_error_handler(sf: StepFlow):
+def test_fail_step_retries_exhausted_no_error_handler(sf: SkillFlow):
     graph = PipelineGraph(
         name="test", begin="a",
         steps=[
@@ -318,7 +318,7 @@ def test_fail_step_retries_exhausted_no_error_handler(sf: StepFlow):
 
 # ── advance_run ──────────────────────────────────────────────────────
 
-def test_advance_run_first_call_resolves_begin(sf: StepFlow):
+def test_advance_run_first_call_resolves_begin(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -328,7 +328,7 @@ def test_advance_run_first_call_resolves_begin(sf: StepFlow):
     assert next_node == "a"
 
 
-def test_advance_run_idempotent(sf: StepFlow):
+def test_advance_run_idempotent(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -339,7 +339,7 @@ def test_advance_run_idempotent(sf: StepFlow):
     assert n1 == n2 == "a"
 
 
-def test_advance_run_none_when_executing(sf: StepFlow):
+def test_advance_run_none_when_executing(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -351,7 +351,7 @@ def test_advance_run_none_when_executing(sf: StepFlow):
     assert sf.advance_run(run_id) is None
 
 
-def test_advance_run_pauses_on_checkpoint(sf: StepFlow):
+def test_advance_run_pauses_on_checkpoint(sf: SkillFlow):
     graph = PipelineGraph(
         name="test", begin="a",
         steps=[
@@ -381,7 +381,7 @@ def test_advance_run_pauses_on_checkpoint(sf: StepFlow):
     assert next_node == "b"
 
 
-def test_advance_run_gate_auto_advance(sf: StepFlow):
+def test_advance_run_gate_auto_advance(sf: SkillFlow):
     graph = PipelineGraph(
         name="test", begin="a",
         steps=[
@@ -405,7 +405,7 @@ def test_advance_run_gate_auto_advance(sf: StepFlow):
     assert next_node == "b"
 
 
-def test_advance_run_end_condition_node_reached(sf: StepFlow):
+def test_advance_run_end_condition_node_reached(sf: SkillFlow):
     graph = PipelineGraph(
         name="test", begin="a",
         steps=[_agent("a", [_trans("done")]), _agent("done", [])],
@@ -428,7 +428,7 @@ def test_advance_run_end_condition_node_reached(sf: StepFlow):
     assert sf.get_run(run_id)["status"] == "completed"
 
 
-def test_advance_run_end_condition_max_steps(sf: StepFlow):
+def test_advance_run_end_condition_max_steps(sf: SkillFlow):
     graph = PipelineGraph(
         name="test", begin="a",
         steps=[
@@ -454,7 +454,7 @@ def test_advance_run_end_condition_max_steps(sf: StepFlow):
     assert sf.get_run(run_id)["status"] == "failed"
 
 
-def test_advance_run_end_condition_flag_match(sf: StepFlow):
+def test_advance_run_end_condition_flag_match(sf: SkillFlow):
     graph = PipelineGraph(
         name="test", begin="a",
         steps=[_agent("a", [])],
@@ -474,7 +474,7 @@ def test_advance_run_end_condition_flag_match(sf: StepFlow):
     assert sf.get_run(run_id)["status"] == "failed"
 
 
-def test_advance_run_no_matching_transition_fails_run(sf: StepFlow):
+def test_advance_run_no_matching_transition_fails_run(sf: SkillFlow):
     graph = PipelineGraph(
         name="test", begin="a",
         steps=[_agent("a", [_trans("b", match={"x": True})]), _agent("b", [])],
@@ -493,7 +493,7 @@ def test_advance_run_no_matching_transition_fails_run(sf: StepFlow):
 
 # ── Checkpoint rejection ─────────────────────────────────────────────
 
-def test_reject_checkpoint(sf: StepFlow):
+def test_reject_checkpoint(sf: SkillFlow):
     graph = PipelineGraph(
         name="test", begin="a",
         steps=[
@@ -521,7 +521,7 @@ def test_reject_checkpoint(sf: StepFlow):
     assert claimed2.step_id == "a"
 
 
-def test_reject_checkpoint_not_paused_raises(sf: StepFlow):
+def test_reject_checkpoint_not_paused_raises(sf: SkillFlow):
     graph = PipelineGraph(name="test", begin="a", steps=[_agent("a", [])])
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -530,13 +530,13 @@ def test_reject_checkpoint_not_paused_raises(sf: StepFlow):
     claimed = sf.claim_next_step(run_id)
     sf.confirm_step(claimed.token, StepResult())
 
-    with pytest.raises(StepFlowError):
+    with pytest.raises(SkillFlowError):
         sf.reject_checkpoint(run_id, "a", "feedback")
 
 
 # ── Edge counts ──────────────────────────────────────────────────────
 
-def test_edge_count_increments_on_advance(sf: StepFlow):
+def test_edge_count_increments_on_advance(sf: SkillFlow):
     graph = PipelineGraph(
         name="test", begin="a",
         steps=[
@@ -573,7 +573,7 @@ def test_edge_count_increments_on_advance(sf: StepFlow):
 
 # ── Recovery ─────────────────────────────────────────────────────────
 
-def test_recover_stale_claims(sf: StepFlow):
+def test_recover_stale_claims(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -590,7 +590,7 @@ def test_recover_stale_claims(sf: StepFlow):
     assert next_node == "a"
 
 
-def test_recover_stale_claims_fresh_not_affected(sf: StepFlow):
+def test_recover_stale_claims_fresh_not_affected(sf: SkillFlow):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -605,7 +605,7 @@ def test_recover_stale_claims_fresh_not_affected(sf: StepFlow):
 
 # ── Validation retry ─────────────────────────────────────────────────
 
-def test_validation_retry_count_independent(sf: StepFlow):
+def test_validation_retry_count_independent(sf: SkillFlow):
     """Validation retries don't consume execution retries."""
     graph = PipelineGraph(
         name="test", begin="a",
@@ -624,7 +624,7 @@ def test_validation_retry_count_independent(sf: StepFlow):
 
 # ── Outbox ───────────────────────────────────────────────────────────
 
-def test_drain_outbox(sf: StepFlow):
+def test_drain_outbox(sf: SkillFlow):
     graph = PipelineGraph(name="test", begin="a", steps=[_agent("a", [])])
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -638,7 +638,7 @@ def test_drain_outbox(sf: StepFlow):
     assert "run_started" in event_types
 
 
-def test_ack_outbox(sf: StepFlow):
+def test_ack_outbox(sf: SkillFlow):
     graph = PipelineGraph(name="test", begin="a", steps=[_agent("a", [])])
     sf.register_graph(graph)
     sf.create_run("test")
@@ -653,7 +653,7 @@ def test_ack_outbox(sf: StepFlow):
     assert len(events2) == 0
 
 
-def test_drain_outbox_empty_when_none_pending(sf: StepFlow):
+def test_drain_outbox_empty_when_none_pending(sf: SkillFlow):
     events = sf.drain_outbox()
     assert events == []
 
@@ -661,7 +661,7 @@ def test_drain_outbox_empty_when_none_pending(sf: StepFlow):
 
 class TestToolNodeExecution:
     def test_advance_auto_executes_tool_node(self, sf):
-        from stepflow.graph import PipelineGraph, StepNode, Transition
+        from skillflow.graph import PipelineGraph, StepNode, Transition
         from unittest.mock import MagicMock
 
         mock = MagicMock()
@@ -679,13 +679,13 @@ class TestToolNodeExecution:
         sf._tool_loader = mock
         rid = sf.create_run("test_tool"); sf.start_run(rid)
         token = sf.claim_next_step(rid)
-        from stepflow.core import StepResult
+        from skillflow.core import StepResult
         sf.confirm_step(token.token, StepResult(outputs={}, flags={}))
         next_node = sf.advance_run(rid)
         assert next_node == "a2"
 
     def test_advance_tool_with_feedback_loopback(self, sf):
-        from stepflow.graph import PipelineGraph, StepNode, Transition
+        from skillflow.graph import PipelineGraph, StepNode, Transition
         from unittest.mock import MagicMock
 
         mock = MagicMock()
@@ -712,7 +712,7 @@ class TestToolNodeExecution:
         assert next_node == "impl"
 
     def test_create_run_populates_v2_step_fields(self, sf):
-        from stepflow.graph import PipelineGraph, StepNode
+        from skillflow.graph import PipelineGraph, StepNode
         sf.register_agent_config_from_dict("researcher", {"model": "test", "template": "test.md"})
         g = PipelineGraph(name="test_v2cr", begin="s1", steps=[
             StepNode(id="s1", agent_config="researcher", output_mode="content",
@@ -724,7 +724,7 @@ class TestToolNodeExecution:
 
 class TestStaleRecoveryInAdvance:
     def test_advance_recovers_stale_claims(self, sf):
-        from stepflow.graph import PipelineGraph, StepNode, Transition
+        from skillflow.graph import PipelineGraph, StepNode, Transition
         import time
         g = PipelineGraph(name="test_stale", begin="a1", steps=[
             StepNode(id="a1", step_type="agent",
@@ -735,9 +735,9 @@ class TestStaleRecoveryInAdvance:
         rid = sf.create_run("test_stale"); sf.start_run(rid)
         # Manually set a1 to claimed with old timestamp
         sf._conn.execute(
-            "UPDATE stepflow_steps SET status='claimed', claimed_at='2020-01-01T00:00:00Z' WHERE run_id=? AND step_id='a1'",
+            "UPDATE skillflow_steps SET status='claimed', claimed_at='2020-01-01T00:00:00Z' WHERE run_id=? AND step_id='a1'",
             (rid,))
-        sf._conn.execute("UPDATE stepflow_runs SET current_node='a1' WHERE id=?", (rid,))
+        sf._conn.execute("UPDATE skillflow_runs SET current_node='a1' WHERE id=?", (rid,))
         sf._conn.commit()
         sf._stale_threshold = 300  # normal threshold, 2020 is definitely stale
         next_node = sf.advance_run(rid)
@@ -746,7 +746,7 @@ class TestStaleRecoveryInAdvance:
 
 class TestConfirmStepImportError:
     def test_confirm_step_catches_import_error(self, sf):
-        from stepflow.graph import PipelineGraph, StepNode, Transition
+        from skillflow.graph import PipelineGraph, StepNode, Transition
         g = PipelineGraph(name="test_ie", begin="s1", steps=[
             StepNode(id="s1", step_type="agent", output_schema="nonexistent.pkg.Class",
                      output_schema_retries=2,
@@ -756,17 +756,17 @@ class TestConfirmStepImportError:
         sf.register_graph(g)
         rid = sf.create_run("test_ie"); sf.start_run(rid)
         token = sf.claim_next_step(rid)
-        from stepflow.core import StepResult
+        from skillflow.core import StepResult
         sf.confirm_step(token.token, StepResult(outputs={"passed": True}, flags={}))
         # Should not raise — ImportError is caught, step goes back to pending
         row = sf._conn.execute(
-            "SELECT status, validation_retry_count FROM stepflow_steps WHERE run_id=? AND step_id='s1'",
+            "SELECT status, validation_retry_count FROM skillflow_steps WHERE run_id=? AND step_id='s1'",
             (rid,)
         ).fetchone()
         assert row["status"] == "pending"
 
     def test_confirm_step_no_output_schema_skips(self, sf):
-        from stepflow.graph import PipelineGraph, StepNode, Transition
+        from skillflow.graph import PipelineGraph, StepNode, Transition
         g = PipelineGraph(name="test_nos", begin="s1", steps=[
             StepNode(id="s1", step_type="agent",
                      transitions=[Transition(to="s2")]),
@@ -775,10 +775,10 @@ class TestConfirmStepImportError:
         sf.register_graph(g)
         rid = sf.create_run("test_nos"); sf.start_run(rid)
         token = sf.claim_next_step(rid)
-        from stepflow.core import StepResult
+        from skillflow.core import StepResult
         sf.confirm_step(token.token, StepResult(outputs={}, flags={}))
         row = sf._conn.execute(
-            "SELECT status FROM stepflow_steps WHERE run_id=? AND step_id='s1'",
+            "SELECT status FROM skillflow_steps WHERE run_id=? AND step_id='s1'",
             (rid,)
         ).fetchone()
         assert row["status"] == "completed"
@@ -787,7 +787,7 @@ class TestConfirmStepImportError:
 class TestToolNodeContextInjection:
     def test_execute_tool_injects_context(self, sf):
         """_execute_tool_inline auto-injects run_id, step_id, config_name, etc."""
-        from stepflow.graph import PipelineGraph, StepNode, Transition
+        from skillflow.graph import PipelineGraph, StepNode, Transition
         from unittest.mock import MagicMock
 
         # Tool that captures all kwargs
@@ -823,7 +823,7 @@ class TestToolNodeContextInjection:
 
     def test_execute_tool_injects_agent_config_name(self, sf):
         """step_name = tool_name even when agent_config is also set."""
-        from stepflow.graph import PipelineGraph, StepNode, Transition
+        from skillflow.graph import PipelineGraph, StepNode, Transition
         from unittest.mock import MagicMock
 
         captured = {}
@@ -855,14 +855,14 @@ class TestToolNodeContextInjection:
         assert captured.get("config_name") == "test_an"
 
 
-from stepflow.core import StepResult
+from skillflow.core import StepResult
 
 
 class TestNotificationBusIntegration:
     def test_notification_bus_is_created(self, sf):
-        """StepFlow always has a notifications attribute."""
+        """SkillFlow always has a notifications attribute."""
         assert hasattr(sf, 'notifications')
-        from stepflow.notifications import NotificationBus
+        from skillflow.notifications import NotificationBus
         assert isinstance(sf.notifications, NotificationBus)
 
     def test_notification_bus_accepts_subscriber(self, sf):
@@ -878,7 +878,7 @@ class TestNotificationBusIntegration:
 
     def test_tool_node_publishes_via_outbox(self, sf):
         """When tool node executes, event goes to outbox."""
-        from stepflow.graph import PipelineGraph, StepNode, Transition
+        from skillflow.graph import PipelineGraph, StepNode, Transition
         from unittest.mock import MagicMock
 
         mock = MagicMock()
@@ -902,7 +902,7 @@ class TestNotificationBusIntegration:
 
         # Check outbox has step_completed for tool node
         rows = sf._conn.execute(
-            "SELECT event_type FROM stepflow_outbox WHERE payload_json LIKE '%t1%' ORDER BY id"
+            "SELECT event_type FROM skillflow_outbox WHERE payload_json LIKE '%t1%' ORDER BY id"
         ).fetchall()
         events = [r["event_type"] for r in rows]
         assert "step_completed" in events  # tool node confirmed
@@ -911,7 +911,7 @@ class TestNotificationBusIntegration:
 # ── Lifecycle hooks ──────────────────────────────────────────────────
 
 
-def test_lifecycle_default_draft_promote(sf: StepFlow, tmp_path: Path):
+def test_lifecycle_default_draft_promote(sf: SkillFlow, tmp_path: Path):
     """after_validate defaults to draft_promote when output.fixed is set."""
     node = StepNode(
         id="s1",
@@ -922,7 +922,7 @@ def test_lifecycle_default_draft_promote(sf: StepFlow, tmp_path: Path):
     )
     g = PipelineGraph(name="test_lc", begin="s1", steps=[node])
     sf.register_graph(g)
-    sf._tool_loader = ToolLoader(Path(__file__).parent.parent / "src" / "stepflow" / "tools")
+    sf._tool_loader = ToolLoader(Path(__file__).parent.parent / "src" / "skillflow" / "tools")
 
     # Set up workspace for draft dir
     import shutil
@@ -947,7 +947,7 @@ def test_lifecycle_default_draft_promote(sf: StepFlow, tmp_path: Path):
     assert not (tmp / "result.md").exists()
 
 
-def test_lifecycle_explicit_after_validate(sf: StepFlow, tmp_path: Path):
+def test_lifecycle_explicit_after_validate(sf: SkillFlow, tmp_path: Path):
     """Explicit after_validate hook overrides the default."""
     node = StepNode(
         id="s1",
@@ -959,7 +959,7 @@ def test_lifecycle_explicit_after_validate(sf: StepFlow, tmp_path: Path):
     )
     g = PipelineGraph(name="test_lc2", begin="s1", steps=[node])
     sf.register_graph(g)
-    sf._tool_loader = ToolLoader(Path(__file__).parent.parent / "src" / "stepflow" / "tools")
+    sf._tool_loader = ToolLoader(Path(__file__).parent.parent / "src" / "skillflow" / "tools")
 
     ws_base = tmp_path / "ws2"
     ws_base.mkdir()
@@ -980,7 +980,7 @@ def test_lifecycle_explicit_after_validate(sf: StepFlow, tmp_path: Path):
     assert (step_dir / "result.md").exists()
 
 
-def test_lifecycle_no_output_no_default(sf: StepFlow):
+def test_lifecycle_no_output_no_default(sf: SkillFlow):
     """No lifecycle defaults when step produces no output."""
     node = StepNode(
         id="s1",
@@ -989,7 +989,7 @@ def test_lifecycle_no_output_no_default(sf: StepFlow):
     )
     g = PipelineGraph(name="test_lc3", begin="s1", steps=[node])
     sf.register_graph(g)
-    sf._tool_loader = ToolLoader(Path(__file__).parent.parent / "src" / "stepflow" / "tools")
+    sf._tool_loader = ToolLoader(Path(__file__).parent.parent / "src" / "skillflow" / "tools")
 
     rid = sf.create_run("test_lc3")
     sf.start_run(rid)
@@ -1047,7 +1047,7 @@ def test_lifecycle_to_dict_roundtrip():
     assert g2.steps[0].lifecycle == lifecycle
 
 
-def test_lifecycle_events_in_outbox(sf: StepFlow, tmp_path: Path):
+def test_lifecycle_events_in_outbox(sf: SkillFlow, tmp_path: Path):
     """Lifecycle hook execution emits events to outbox."""
     node = StepNode(
         id="s1",
@@ -1058,7 +1058,7 @@ def test_lifecycle_events_in_outbox(sf: StepFlow, tmp_path: Path):
     )
     g = PipelineGraph(name="test_lc_evt", begin="s1", steps=[node])
     sf.register_graph(g)
-    sf._tool_loader = ToolLoader(Path(__file__).parent.parent / "src" / "stepflow" / "tools")
+    sf._tool_loader = ToolLoader(Path(__file__).parent.parent / "src" / "skillflow" / "tools")
 
     ws_base = tmp_path / "ws_evt"
     ws_base.mkdir()
@@ -1075,7 +1075,7 @@ def test_lifecycle_events_in_outbox(sf: StepFlow, tmp_path: Path):
     sf.confirm_step(token.token, StepResult(outputs={}, flags={}))
 
     events = sf._conn.execute(
-        "SELECT event_type, payload_json FROM stepflow_outbox WHERE event_type = 'lifecycle_hook' ORDER BY id"
+        "SELECT event_type, payload_json FROM skillflow_outbox WHERE event_type = 'lifecycle_hook' ORDER BY id"
     ).fetchall()
     assert len(events) >= 1
     payloads = [json.loads(e["payload_json"]) for e in events]
@@ -1084,7 +1084,7 @@ def test_lifecycle_events_in_outbox(sf: StepFlow, tmp_path: Path):
 
     # Step should be completed
     step = sf._conn.execute(
-        "SELECT status FROM stepflow_steps WHERE run_id = ? AND step_id = ?",
+        "SELECT status FROM skillflow_steps WHERE run_id = ? AND step_id = ?",
         (rid, "s1"),
     ).fetchone()
     assert step["status"] == "completed"

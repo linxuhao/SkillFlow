@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from stepflow.graph import (
+from skillflow.graph import (
     PipelineGraph,
     StepNode,
     Transition,
@@ -16,7 +16,7 @@ from stepflow.graph import (
     GraphResolver,
     _flags_match,
 )
-from stepflow.exceptions import CycleLimitExceeded, GraphValidationError
+from skillflow.exceptions import CycleLimitExceeded, GraphValidationError
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -368,7 +368,7 @@ class TestStepNodeV2:
              "tool_params": {"source_dir": "$STEP_DRAFT_DIR"},
              "transitions": [{"to": None, "match": {"applied": True}}]}
         ]}
-        from stepflow.graph import PipelineGraph
+        from skillflow.graph import PipelineGraph
         g = PipelineGraph._from_dict(data)
         n = g.steps[0]
         assert n.step_type == "tool"
@@ -383,7 +383,7 @@ class TestStepNodeV2:
             "output": {"fixed": {"sota": "step1_5_sota.md"}},
             "validation": [{"files": ["*.json"], "tool": "json_schema"}],
         }]}
-        from stepflow.graph import PipelineGraph
+        from skillflow.graph import PipelineGraph
         g = PipelineGraph._from_dict(data)
         n = g.steps[0]
         assert n.agent_config == "researcher"
@@ -393,7 +393,7 @@ class TestStepNodeV2:
         assert len(n.validation) == 1
 
     def test_to_dict_roundtrip_v2_fields(self):
-        from stepflow.graph import PipelineGraph, StepNode, Transition
+        from skillflow.graph import PipelineGraph, StepNode, Transition
         g = PipelineGraph(
             name="test", begin="s1",
             steps=[StepNode(
@@ -411,7 +411,7 @@ class TestStepNodeV2:
         assert g2.steps[0].transitions[0].feedback is True
 
     def test_transition_to_none_serialization(self):
-        from stepflow.graph import PipelineGraph, StepNode, Transition
+        from skillflow.graph import PipelineGraph, StepNode, Transition
         g = PipelineGraph(name="t", begin="s1", steps=[
             StepNode(id="s1", transitions=[Transition(to=None)])
         ])
@@ -419,12 +419,12 @@ class TestStepNodeV2:
         assert d["steps"][0]["transitions"][0]["to"] is None
 
     def test_feedback_default_false(self):
-        from stepflow.graph import Transition
+        from skillflow.graph import Transition
         t = Transition(to="x")
         assert t.feedback is False
 
     def test_tool_node_defaults(self):
-        from stepflow.graph import StepNode
+        from skillflow.graph import StepNode
         n = StepNode(id="t", step_type="tool", tool_name="repo_apply")
         assert n.tool_name == "repo_apply"
         assert n.tool_params == {}
@@ -433,7 +433,7 @@ class TestStepNodeV2:
 
 class TestGraphResolverV2:
     def test_is_tool(self):
-        from stepflow.graph import PipelineGraph, StepNode, GraphResolver
+        from skillflow.graph import PipelineGraph, StepNode, GraphResolver
         g = PipelineGraph(name="t", begin="s1", steps=[
             StepNode(id="s1", step_type="tool", tool_name="echo")
         ])
@@ -442,7 +442,7 @@ class TestGraphResolverV2:
         assert r.is_agent("s1") is False
 
     def test_is_agent(self):
-        from stepflow.graph import PipelineGraph, StepNode, GraphResolver
+        from skillflow.graph import PipelineGraph, StepNode, GraphResolver
         g = PipelineGraph(name="t", begin="s1", steps=[
             StepNode(id="s1", step_type="agent")
         ])
@@ -451,7 +451,7 @@ class TestGraphResolverV2:
         assert r.is_tool("s1") is False
 
     def test_resolve_transition_with_checkpoint_approved(self):
-        from stepflow.graph import PipelineGraph, StepNode, Transition, GraphResolver
+        from skillflow.graph import PipelineGraph, StepNode, Transition, GraphResolver
         g = PipelineGraph(name="t", begin="s1", steps=[
             StepNode(id="s1", transitions=[
                 Transition(to="s2", match={"from": "checkpoint", "value": "approved"})
@@ -463,7 +463,7 @@ class TestGraphResolverV2:
         assert target == "s2"
 
     def test_resolve_transition_checkpoint_rejected_no_match(self):
-        from stepflow.graph import PipelineGraph, StepNode, Transition, GraphResolver
+        from skillflow.graph import PipelineGraph, StepNode, Transition, GraphResolver
         g = PipelineGraph(name="t", begin="s1", steps=[
             StepNode(id="s1", transitions=[
                 Transition(to="s2", match={"from": "checkpoint", "value": "approved"})
@@ -475,14 +475,14 @@ class TestGraphResolverV2:
         assert target is None
 
     def test_flags_match_from_checkpoint_approved(self):
-        from stepflow.graph import _flags_match
+        from skillflow.graph import _flags_match
         assert _flags_match({"from": "checkpoint", "value": "approved"},
                             {"_checkpoint_approved": True}) is True
         assert _flags_match({"from": "checkpoint", "value": "approved"},
                             {"_checkpoint_approved": False}) is False
 
     def test_validate_allows_terminal_to_none(self):
-        from stepflow.graph import PipelineGraph, StepNode, Transition
+        from skillflow.graph import PipelineGraph, StepNode, Transition
         g = PipelineGraph(name="t", begin="s1", steps=[
             StepNode(id="s1", transitions=[Transition(to=None)])
         ])
@@ -490,7 +490,7 @@ class TestGraphResolverV2:
         assert "transition to 'None'" not in str(issues)
 
     def test_next_node_backward_compat_still_works(self):
-        from stepflow.graph import PipelineGraph, StepNode, Transition, GraphResolver
+        from skillflow.graph import PipelineGraph, StepNode, Transition, GraphResolver
         g = PipelineGraph(name="t", begin="s1", steps=[
             StepNode(id="s1", transitions=[Transition(to="s2", match={"done": True})]),
             StepNode(id="s2"),
@@ -501,7 +501,7 @@ class TestGraphResolverV2:
 
 class TestNotifyField:
     def test_notify_field_parsed_from_yaml(self):
-        from stepflow.graph import PipelineGraph
+        from skillflow.graph import PipelineGraph
         data = {"name": "t", "begin": "s1", "steps": [{
             "id": "s1",
             "notify": ["step_started", "agent_response"],
@@ -510,13 +510,13 @@ class TestNotifyField:
         assert g.steps[0].notify == ["step_started", "agent_response"]
 
     def test_notify_field_none_by_default(self):
-        from stepflow.graph import PipelineGraph
+        from skillflow.graph import PipelineGraph
         data = {"name": "t", "begin": "s1", "steps": [{"id": "s1"}]}
         g = PipelineGraph._from_dict(data)
         assert g.steps[0].notify is None
 
     def test_notify_field_roundtrip(self):
-        from stepflow.graph import PipelineGraph, StepNode
+        from skillflow.graph import PipelineGraph, StepNode
         g = PipelineGraph(name="t", begin="s1", steps=[
             StepNode(id="s1", notify=["*"]),
         ])
@@ -526,7 +526,7 @@ class TestNotifyField:
         assert g2.steps[0].notify == ["*"]
 
     def test_notify_field_none_not_serialized(self):
-        from stepflow.graph import PipelineGraph, StepNode
+        from skillflow.graph import PipelineGraph, StepNode
         g = PipelineGraph(name="t", begin="s1", steps=[
             StepNode(id="s1"),  # notify=None by default
         ])
@@ -536,7 +536,7 @@ class TestNotifyField:
     def test_from_file_match_resolves_correctly(self):
         """from_file reads the output file and checks a field."""
         import json, tempfile, os
-        from stepflow.graph import _flags_match
+        from skillflow.graph import _flags_match
 
         d = tempfile.mkdtemp()
         verdict_path = os.path.join(d, "review_verdict.json")
@@ -553,11 +553,11 @@ class TestNotifyField:
         assert _flags_match(match_false, {}, file_reader=reader) is False
 
     def test_from_file_match_missing_file_returns_false(self):
-        from stepflow.graph import _flags_match
+        from skillflow.graph import _flags_match
         match = {"from_file": "nonexistent.json", "field": "passed", "value": True}
         assert _flags_match(match, {}, file_reader=lambda p: (_ for _ in ()).throw(FileNotFoundError())) is False
 
     def test_from_file_match_no_reader_returns_false(self):
-        from stepflow.graph import _flags_match
+        from skillflow.graph import _flags_match
         match = {"from_file": "x.json", "field": "passed", "value": True}
         assert _flags_match(match, {}) is False

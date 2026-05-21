@@ -1,8 +1,8 @@
-"""Tests for stepflow.workspace.WorkspaceManager."""
+"""Tests for skillflow.workspace.WorkspaceManager."""
 
 import pytest
 from pathlib import Path
-from stepflow.workspace import WorkspaceManager
+from skillflow.workspace import WorkspaceManager
 
 
 @pytest.fixture

@@ -5,16 +5,16 @@ AItelier configs), register mock agent configs, and drive pipelines
 with canned StepResults.  No real LLM calls or tool implementations.
 
 The fixture files serve a dual purpose:
-1. Verify stepflow features end-to-end against realistic configs.
-2. Act as copy-pasteable examples for external stepflow users.
+1. Verify skillflow features end-to-end against realistic configs.
+2. Act as copy-pasteable examples for external skillflow users.
 """
 
 from pathlib import Path
 
 import pytest
 
-from stepflow.core import StepFlow, StepResult
-from stepflow.graph import PipelineGraph, GraphValidationError
+from skillflow.core import SkillFlow, StepResult
+from skillflow.graph import PipelineGraph, GraphValidationError
 from mocks import create_standard_mock_tools
 from conftest import register_dpe_agent_configs
 
@@ -24,7 +24,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 # ── Helpers ───────────────────────────────────────────────────────────
 
-def _execute(sf: StepFlow, run_id: str, step_id: str,
+def _execute(sf: SkillFlow, run_id: str, step_id: str,
              outputs=None, flags=None) -> StepResult:
     """Claim, execute (canned result), and confirm a step."""
     claimed = sf.claim_next_step(run_id)
@@ -35,7 +35,7 @@ def _execute(sf: StepFlow, run_id: str, step_id: str,
     return result
 
 
-def _load_and_register(sf: StepFlow, fixture_name: str,
+def _load_and_register(sf: SkillFlow, fixture_name: str,
                         agent_configs: dict[str, list[str]] | None = None):
     """Load a YAML graph and register it with mock agent configs."""
     configs = agent_configs or {"echo_agent": []}
@@ -46,7 +46,7 @@ def _load_and_register(sf: StepFlow, fixture_name: str,
     return graph
 
 
-def _confirm_with_file(sf: StepFlow, claimed, outputs=None, flags=None,
+def _confirm_with_file(sf: SkillFlow, claimed, outputs=None, flags=None,
                        extra_files: dict[str, str] | None = None):
     """Confirm a step after writing extra output files to tmp_dir.
 
@@ -436,7 +436,7 @@ def test_invalid_missing_begin():
     """Graph without 'begin' field raises GraphValidationError."""
     with pytest.raises(GraphValidationError) as exc:
         graph = PipelineGraph.from_yaml(str(FIXTURES / "invalid" / "missing_begin.yaml"))
-        sf = StepFlow(":memory:")
+        sf = SkillFlow(":memory:")
         sf.register_agent_config("echo_agent", model="mock")
         sf.register_graph(graph)
     assert "begin" in str(exc.value).lower()
@@ -446,7 +446,7 @@ def test_invalid_unreachable_step():
     """Unreachable step raises GraphValidationError."""
     with pytest.raises(GraphValidationError) as exc:
         graph = PipelineGraph.from_yaml(str(FIXTURES / "invalid" / "unreachable_step.yaml"))
-        sf = StepFlow(":memory:")
+        sf = SkillFlow(":memory:")
         sf.register_agent_config("echo_agent", model="mock")
         sf.register_graph(graph)
     assert "unreachable" in str(exc.value).lower()
@@ -456,7 +456,7 @@ def test_invalid_cycle_no_max_loop():
     """Cycle without max_loop raises GraphValidationError."""
     with pytest.raises(GraphValidationError) as exc:
         graph = PipelineGraph.from_yaml(str(FIXTURES / "invalid" / "cycle_no_max_loop.yaml"))
-        sf = StepFlow(":memory:")
+        sf = SkillFlow(":memory:")
         sf.register_agent_config("echo_agent", model="mock")
         sf.register_graph(graph)
     assert "max_loop" in str(exc.value).lower() or "no max_loop" in str(exc.value).lower()
@@ -466,7 +466,7 @@ def test_invalid_duplicate_step_id():
     """Duplicate step IDs raise GraphValidationError."""
     with pytest.raises(GraphValidationError) as exc:
         graph = PipelineGraph.from_yaml(str(FIXTURES / "invalid" / "duplicate_step_id.yaml"))
-        sf = StepFlow(":memory:")
+        sf = SkillFlow(":memory:")
         sf.register_agent_config("echo_agent", model="mock")
         sf.register_graph(graph)
     assert "duplicate" in str(exc.value).lower()
@@ -745,7 +745,7 @@ def test_concurrent_claim_prevention_from_yaml(sf_with_tools):
 def test_crash_recovery_from_yaml(sf_tmp):
     """Claim then crash — stale claim recovered, step re-claimable."""
     tools = create_standard_mock_tools()
-    sf = StepFlow(str(sf_tmp._db_path), tool_loader=tools)
+    sf = SkillFlow(str(sf_tmp._db_path), tool_loader=tools)
     sf.register_agent_config("echo_agent", model="mock")
 
     graph = PipelineGraph.from_yaml(str(FIXTURES / "minimal_1step.yaml"))
@@ -815,7 +815,7 @@ def test_double_advance_before_claim_consistent(sf_with_tools):
 
 def test_double_confirm_version_conflict_from_yaml(sf_with_tools):
     """Confirming with a stale token raises StepVersionConflict."""
-    from stepflow.exceptions import StepVersionConflict
+    from skillflow.exceptions import StepVersionConflict
 
     sf = sf_with_tools
     _load_and_register(sf, "minimal_1step.yaml")
@@ -856,7 +856,7 @@ def test_reregister_graph_idempotent_from_yaml(sf_with_tools):
 def test_crash_mid_pipeline_recovery_from_yaml(sf_tmp):
     """Crash after multiple completed steps — recover and continue."""
     tools = create_standard_mock_tools()
-    sf = StepFlow(str(sf_tmp._db_path), tool_loader=tools)
+    sf = SkillFlow(str(sf_tmp._db_path), tool_loader=tools)
     sf.register_agent_config("echo_agent", model="mock")
 
     graph = PipelineGraph.from_yaml(str(FIXTURES / "checkpoint_cycle.yaml"))

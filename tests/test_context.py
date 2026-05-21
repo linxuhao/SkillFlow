@@ -1,9 +1,9 @@
 from pathlib import Path
-"""Tests for stepflow.context.ContextResolver."""
+"""Tests for skillflow.context.ContextResolver."""
 
 import pytest
 from pathlib import Path
-from stepflow.context import ContextResolver
+from skillflow.context import ContextResolver
 
 
 @pytest.fixture
@@ -83,7 +83,7 @@ class TestContextResolver:
 
 class TestContextResolverEdgeCases:
     def test_cross_config_with_specific_step(self, workspace):
-        from stepflow.context import ContextResolver
+        from skillflow.context import ContextResolver
         resolver = ContextResolver(workspace)
         specs = [{"source": {"config": "meta_conversation", "step": "meta",
                               "output": "brief.md"}}]
@@ -91,34 +91,34 @@ class TestContextResolverEdgeCases:
         assert len(result) == 1
 
     def test_cross_config_nonexistent_config(self, workspace):
-        from stepflow.context import ContextResolver
+        from skillflow.context import ContextResolver
         resolver = ContextResolver(workspace)
         specs = [{"source": {"config": "nonexistent", "output": "brief.md"}}]
         result = resolver.resolve(specs, current_config="dpe_default")
         assert len(result) == 0
 
     def test_step_output_file_not_found(self, workspace):
-        from stepflow.context import ContextResolver
+        from skillflow.context import ContextResolver
         resolver = ContextResolver(workspace)
         specs = [{"source": {"step": "2", "output": "nonexistent.md"}}]
         result = resolver.resolve(specs, current_config="dpe_default")
         assert len(result) == 0
 
     def test_tool_source_no_loader(self, workspace):
-        from stepflow.context import ContextResolver
+        from skillflow.context import ContextResolver
         resolver = ContextResolver(workspace)  # no tool_loader
         specs = [{"source": {"tool": "dir_tree"}}]
         result = resolver.resolve(specs, current_config="dpe_default")
         assert isinstance(result, dict)
 
     def test_extract_interfaces_fallback(self):
-        from stepflow.context import ContextResolver
+        from skillflow.context import ContextResolver
         text = "# Miscellaneous Notes\nJust some notes."
         extracted = ContextResolver._extract_interfaces(text)
         assert "no interface sections found" in extracted.lower()
 
     def test_empty_source(self):
-        from stepflow.context import ContextResolver
+        from skillflow.context import ContextResolver
         resolver = ContextResolver(Path("/nonexistent"))
         result = resolver.resolve([{}], current_config="")
         assert result == {}

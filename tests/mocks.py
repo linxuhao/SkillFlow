@@ -1,6 +1,6 @@
 """Mock StepRunner and ToolLoader for integration tests.
 
-These mocks let tests drive stepflow pipelines without real LLM calls
+These mocks let tests drive skillflow pipelines without real LLM calls
 or actual tool implementations. The StepRunner returns canned responses
 keyed by step_id; the ToolLoader provides duck-typed tool functions
 that return static success/failure dicts.
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from stepflow.core import ClaimedStep, StepResult
+from skillflow.core import ClaimedStep, StepResult
 
 
 class MockStepRunner:
@@ -41,7 +41,7 @@ class MockStepRunner:
 class MockToolLoader:
     """Duck-typed ToolLoader — maps tool names to callables.
 
-    Stepflow calls ``load_fn(name)`` and ``load_schema(name)`` on the
+    SkillFlow calls ``load_fn(name)`` and ``load_schema(name)`` on the
     tool_loader object.  This mock satisfies both without touching the
     filesystem.
 
@@ -49,7 +49,7 @@ class MockToolLoader:
 
         tools = MockToolLoader()
         tools.register("file_exists", lambda **kw: {"passed": True})
-        sf = StepFlow(":memory:", tool_loader=tools)
+        sf = SkillFlow(":memory:", tool_loader=tools)
     """
 
     def __init__(self, tools: dict[str, Callable] | None = None):

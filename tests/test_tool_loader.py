@@ -1,8 +1,8 @@
-"""Tests for stepflow.tool_loader.ToolLoader."""
+"""Tests for skillflow.tool_loader.ToolLoader."""
 
 import pytest
 from pathlib import Path
-from stepflow.tool_loader import ToolLoader
+from skillflow.tool_loader import ToolLoader
 
 
 @pytest.fixture
@@ -120,7 +120,7 @@ class TestToolLoader:
 
 class TestToolLoaderMultiSource:
     def test_multi_source_finds_in_second_dir(self, tmp_path):
-        from stepflow.tool_loader import ToolLoader
+        from skillflow.tool_loader import ToolLoader
 
         dir1 = tmp_path / "native"
         dir1.mkdir()
@@ -137,7 +137,7 @@ class TestToolLoaderMultiSource:
         assert fn() == {"ok": True}
 
     def test_add_tools_dir(self, tmp_path):
-        from stepflow.tool_loader import ToolLoader
+        from skillflow.tool_loader import ToolLoader
 
         dir1 = tmp_path / "native"
         dir1.mkdir()
@@ -154,7 +154,7 @@ class TestToolLoaderMultiSource:
         assert loader.list_tools() == ["echo"]
 
     def test_first_match_wins_on_duplicate(self, tmp_path):
-        from stepflow.tool_loader import ToolLoader
+        from skillflow.tool_loader import ToolLoader
 
         d1 = tmp_path / "d1"
         d1.mkdir()
@@ -175,7 +175,7 @@ class TestToolLoaderMultiSource:
         assert fn() == {"from": "d1"}  # first dir wins
 
     def test_load_schema_from_second_dir(self, tmp_path):
-        from stepflow.tool_loader import ToolLoader
+        from skillflow.tool_loader import ToolLoader
 
         d1 = tmp_path / "d1"
         d1.mkdir()

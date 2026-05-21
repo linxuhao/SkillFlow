@@ -1,8 +1,8 @@
 """Unit tests for validation.py."""
 
 import pytest
-from stepflow.validation import OutputValidator
-from stepflow.exceptions import OutputValidationError
+from skillflow.validation import OutputValidator
+from skillflow.exceptions import OutputValidationError
 
 
 def test_import_error_on_nonexistent_module():

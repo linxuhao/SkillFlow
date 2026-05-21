@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# Install stepflow in a venv and register CLI commands.
+# Install skillflow in a venv and register CLI commands.
 #
 # Usage:
 #   scripts/install.sh                     # install from current repo
 #   curl -sSL https://.../install.sh | bash  # clone + install (future)
 #
-# Creates a venv at ~/.local/share/stepflow/venv/ and registers these
+# Creates a venv at ~/.local/share/skillflow/venv/ and registers these
 # commands in ~/.local/bin/:
-#   stepflow-lint     — validate pipeline YAML files
-#   stepflow-run      — interactive pipeline runner
-#   stepflow-convert  — skill description → pipeline YAML
+#   skillflow-lint     — validate pipeline YAML files
+#   skillflow-run      — interactive pipeline runner
+#   skillflow-convert  — skill description → pipeline YAML
 
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-VENV_DIR="${HOME}/.local/share/stepflow/venv"
+VENV_DIR="${HOME}/.local/share/skillflow/venv"
 BIN_DIR="${HOME}/.local/bin"
 
-echo "=== Stepflow Install ==="
+echo "=== SkillFlow Install ==="
 echo "Repo:  $REPO_DIR"
 echo "Venv:  $VENV_DIR"
 echo "Bin:   $BIN_DIR"
@@ -31,35 +31,35 @@ else
     python3 -m venv "$VENV_DIR"
 fi
 
-# 2. Install stepflow into the venv
-echo "→ Installing stepflow..."
+# 2. Install skillflow into the venv
+echo "→ Installing skillflow..."
 "$VENV_DIR/bin/pip" install -e "$REPO_DIR" --quiet
-echo "  ✓ stepflow installed"
+echo "  ✓ skillflow installed"
 
 # 3. Create bin directory
 mkdir -p "$BIN_DIR"
 
 # 4. Create wrapper scripts pointing at the venv
-cat > "$BIN_DIR/stepflow-lint" << SCRIPT
+cat > "$BIN_DIR/skillflow-lint" << SCRIPT
 #!/usr/bin/env bash
-exec "${VENV_DIR}/bin/python3" "${REPO_DIR}/src/stepflow/plugins/linter/cli.py" "\$@"
+exec "${VENV_DIR}/bin/python3" "${REPO_DIR}/src/skillflow/plugins/linter/cli.py" "\$@"
 SCRIPT
-chmod +x "$BIN_DIR/stepflow-lint"
-echo "  ✓ stepflow-lint     → $BIN_DIR/stepflow-lint"
+chmod +x "$BIN_DIR/skillflow-lint"
+echo "  ✓ skillflow-lint     → $BIN_DIR/skillflow-lint"
 
-cat > "$BIN_DIR/stepflow-run" << SCRIPT
+cat > "$BIN_DIR/skillflow-run" << SCRIPT
 #!/usr/bin/env bash
 exec "${VENV_DIR}/bin/python3" "${REPO_DIR}/scripts/skill_repl.py" "\$@"
 SCRIPT
-chmod +x "$BIN_DIR/stepflow-run"
-echo "  ✓ stepflow-run      → $BIN_DIR/stepflow-run"
+chmod +x "$BIN_DIR/skillflow-run"
+echo "  ✓ skillflow-run      → $BIN_DIR/skillflow-run"
 
-cat > "$BIN_DIR/stepflow-convert" << SCRIPT
+cat > "$BIN_DIR/skillflow-convert" << SCRIPT
 #!/usr/bin/env bash
 exec "${VENV_DIR}/bin/python3" "${REPO_DIR}/scripts/skill_convert.py" "\$@"
 SCRIPT
-chmod +x "$BIN_DIR/stepflow-convert"
-echo "  ✓ stepflow-convert  → $BIN_DIR/stepflow-convert"
+chmod +x "$BIN_DIR/skillflow-convert"
+echo "  ✓ skillflow-convert  → $BIN_DIR/skillflow-convert"
 
 # 5. Check PATH
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
@@ -76,6 +76,6 @@ fi
 
 echo "=== Done ==="
 echo ""
-echo "Try: stepflow-lint --help"
-echo "     stepflow-run <graph.yaml>"
-echo "     stepflow-convert <description.md> -o pipeline.yaml"
+echo "Try: skillflow-lint --help"
+echo "     skillflow-run <graph.yaml>"
+echo "     skillflow-convert <description.md> -o pipeline.yaml"

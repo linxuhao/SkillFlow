@@ -1,33 +1,33 @@
-# Stepflow
+# Skillflow
 
-Config-agnostic LLM pipeline graph executor. Define multi-agent pipelines as YAML DAGs — stepflow handles traversal, tool execution, checkpoints, recovery, and event streaming on SQLite.
+Config-agnostic LLM pipeline graph executor. Define multi-agent pipelines as YAML DAGs — skillflow handles traversal, tool execution, checkpoints, recovery, and event streaming on SQLite.
 
 ## Install
 
 ```bash
-pip install stepflow          # PyPI
-pip install -e ~/stepflow     # from repo (editable)
+pip install skillflow-py      # PyPI
+pip install -e ~/skillflow    # from repo (editable)
 ```
 
 Or clone and use the install script, which also registers CLI commands:
 
 ```bash
-git clone https://github.com/your-org/stepflow.git
-bash stepflow/scripts/install.sh
+git clone https://github.com/your-org/skillflow.git
+bash skillflow/scripts/install.sh
 ```
 
 CLI commands registered in `~/.local/bin/`:
 
 | Command | Description |
 |---------|-------------|
-| `stepflow-lint` | Validate pipeline YAML files (one-shot) |
-| `stepflow-run` | Run a pipeline interactively |
-| `stepflow-convert` | Convert a skill description → pipeline YAML |
+| `skillflow-lint` | Validate pipeline YAML files (one-shot) |
+| `skillflow-run` | Run a pipeline interactively |
+| `skillflow-convert` | Convert a skill description → pipeline YAML |
 
 ```bash
-stepflow-lint configs/*.yaml          # one-shot validation
-stepflow-run pipeline.yaml            # interactive (human or agent drives)
-stepflow-convert my_skill.md -o pipeline.yaml
+skillflow-lint configs/*.yaml          # one-shot validation
+skillflow-run pipeline.yaml            # interactive (human or agent drives)
+skillflow-convert my_skill.md -o pipeline.yaml
 ```
 
 ### PyPI publish
@@ -40,18 +40,18 @@ twine upload dist/*
 
 ## Getting Started
 
-Stepflow runs pipelines in two modes.
+Skillflow runs pipelines in two modes.
 
 ### Framework Mode
 
-Stepflow is embedded in a host application. The host drives the loop — stepflow handles traversal, tool execution, and state. The host only executes agent steps via `StepRunner`.
+Skillflow is embedded in a host application. The host drives the loop — skillflow handles traversal, tool execution, and state. The host only executes agent steps via `StepRunner`.
 
 ```python
-from stepflow import StepFlow, PipelineGraph, StepResult
+from skillflow import SkillFlow, PipelineGraph, StepResult
 
 graph = PipelineGraph.from_yaml("tests/fixtures/minimal_1step.yaml")
 
-sf = StepFlow(":memory:")
+sf = SkillFlow(":memory:")
 sf.register_graph(graph)
 sf.register_agent_config("echo_agent", model="host")
 
@@ -67,20 +67,20 @@ while True:
     sf.confirm_step(claimed.token, StepResult(outputs={}, flags={}))
 ```
 
-In framework mode, **all tools auto-execute** inline — stepflow runs native tools and custom tools without involving the host agent.
+In framework mode, **all tools auto-execute** inline — skillflow runs native tools and custom tools without involving the host agent.
 
 Config reference: `tests/fixtures/minimal_1step.yaml`.
 
 ### Runner Mode
 
-Stepflow is driven interactively via `SkillTool`. The pipeline exposes steps as instructions — a human or LLM agent calls `action="next"` / `"submit"` / `"approve"` / `"reject"`.
+Skillflow is driven interactively via `SkillTool`. The pipeline exposes steps as instructions — a human or LLM agent calls `action="next"` / `"submit"` / `"approve"` / `"reject"`.
 
 ```python
-from stepflow import StepFlow, PipelineGraph
-from plugins.skill_runner import SkillTool
+from skillflow import SkillFlow, PipelineGraph
+from skillflow.plugins.skill_runner import SkillTool
 
 graph = PipelineGraph.from_yaml("tests/fixtures/skill_review.yaml")
-sf = StepFlow(":memory:", delegate_tools_to_agent=True)
+sf = SkillFlow(":memory:", delegate_tools_to_agent=True)
 sf.register_graph(graph)
 sf.register_agent_config("review_analyst", model="host")
 # ... register other agent configs referenced by the graph
@@ -95,14 +95,14 @@ while resp.status == "in_progress":
 # resp.status == "completed"
 ```
 
-In runner mode, **native tools auto-execute** but **custom and unknown tools are delegated** to the agent (via `resp.tool_name` / `resp.tool_params`). Use `stepflow-run` or `stepflow-convert` to drive a pipeline interactively.
+In runner mode, **native tools auto-execute** but **custom and unknown tools are delegated** to the agent (via `resp.tool_name` / `resp.tool_params`). Use `skillflow-run` or `skillflow-convert` to drive a pipeline interactively.
 
 ## Node Types
 
 | Type | Description |
 |------|-------------|
 | `agent` | LLM step — host app executes via `StepRunner` protocol |
-| `tool` | Auto-executed by stepflow (native), or delegated to agent in runner mode (custom) |
+| `tool` | Auto-executed by skillflow (native), or delegated to agent in runner mode (custom) |
 | `gate` | Auto-resolved using match conditions against step output flags |
 | `loop` | Iterates over a JSON list from a workspace file, instantiating sub-steps per item |
 
@@ -138,7 +138,7 @@ sf.reject_checkpoint(run_id, "draft", "Add more detail to the analysis")
 
 ## Output Validation
 
-Steps declare validation specs auto-executed by stepflow. See `tests/fixtures/skill_review.yaml` for inline JSON Schema validation, or `tests/fixtures/lifecycle_hooks.yaml` for syntax_lint + py_compile validators.
+Steps declare validation specs auto-executed by skillflow. See `tests/fixtures/skill_review.yaml` for inline JSON Schema validation, or `tests/fixtures/lifecycle_hooks.yaml` for syntax_lint + py_compile validators.
 
 Available validators: `json_schema`, `syntax_lint`, `py_compile`, `pytest`, `file_exists`.
 
@@ -191,12 +191,12 @@ end_conditions:
 Built into `advance_run`. Claims older than `stale_threshold_seconds` (default 300) are auto-reset:
 
 ```python
-sf = StepFlow("pipeline.db", stale_threshold_seconds=300)
+sf = SkillFlow("pipeline.db", stale_threshold_seconds=300)
 ```
 
 ## Event Streaming
 
-All state transitions are written to `stepflow_outbox`. Poll for real-time notifications:
+All state transitions are written to `skillflow_outbox`. Poll for real-time notifications:
 
 ```python
 events = sf.drain_outbox(batch_size=50)
@@ -208,11 +208,11 @@ sf.ack_outbox([e.id for e in events])
 In-process subscribers via `NotificationBus`:
 
 ```python
-from stepflow import NotificationBus
+from skillflow import NotificationBus
 
 bus = NotificationBus()
 bus.subscribe("step_completed", lambda n: print(n.payload))
-sf = StepFlow(":memory:", notification_bus=bus)
+sf = SkillFlow(":memory:", notification_bus=bus)
 ```
 
 ## Tools
@@ -240,34 +240,34 @@ sf = StepFlow(":memory:", notification_bus=bus)
 Host apps add tool directories. Each tool: `{name}/tool.yaml` + `{name}/impl.py`. Function name must match directory name.
 
 ```python
-from stepflow.tool_loader import ToolLoader
+from skillflow.tool_loader import ToolLoader
 
 loader = ToolLoader()
 loader.add_tools_dir("my_app/tools")
-sf = StepFlow(":memory:", tool_loader=loader)
+sf = SkillFlow(":memory:", tool_loader=loader)
 ```
 
 ## Use Cases
 
-### 1. Framework mode — embed stepflow in your app
+### 1. Framework mode — embed skillflow in your app
 
-Use stepflow as a library. Read the [Getting Started](#getting-started) section above and the fixture examples in `tests/fixtures/`.
+Use skillflow as a library. Read the [Getting Started](#getting-started) section above and the fixture examples in `tests/fixtures/`.
 
 ```python
-from stepflow import StepFlow, PipelineGraph
+from skillflow import SkillFlow, PipelineGraph
 graph = PipelineGraph.from_yaml("my_pipeline.yaml")
-sf = StepFlow(":memory:")
+sf = SkillFlow(":memory:")
 sf.register_graph(graph)
 # ... drive the loop with claim_next_step / confirm_step
 ```
 
 ### 2. Agent mode — convert skills to pipelines
 
-LLM agents use the **converter** + **runner** plugins to turn skill descriptions into stepflow pipelines. The agent calls a tool named `run_skill` repeatedly — the runner tells it what to do at each step.
+LLM agents use the **converter** + **runner** plugins to turn skill descriptions into skillflow pipelines. The agent calls a tool named `run_skill` repeatedly — the runner tells it what to do at each step.
 
 ```python
-from stepflow.plugins.skill_converter import setup_converter
-from stepflow.plugins.skill_runner import load_agent_guide
+from skillflow.plugins.skill_converter import setup_converter
+from skillflow.plugins.skill_runner import load_agent_guide
 
 # Give the agent its user manual
 system_prompt = load_agent_guide()  # ← includes protocol, response format, rules
@@ -282,33 +282,33 @@ Agent manuals are shipped in the package:
 
 | Plugin | Manual | How to load |
 |--------|--------|-------------|
-| `skill_runner` | Agent protocol — actions, SkillResponse format, rules | `load_agent_guide()` from `stepflow.plugins.skill_runner` |
-| `skill_converter` | Step-by-step guide — analyze → design → lint → fix | `load_agent_guide()` from `stepflow.plugins.skill_converter` |
+| `skill_runner` | Agent protocol — actions, SkillResponse format, rules | `load_agent_guide()` from `skillflow.plugins.skill_runner` |
+| `skill_converter` | Step-by-step guide — analyze → design → lint → fix | `load_agent_guide()` from `skillflow.plugins.skill_converter` |
 
 Inject the runner manual into the agent's system prompt. Inject the converter manual when the agent is asked to convert a skill.
 
 CLI tools for manual use:
 
 ```bash
-stepflow-lint pipeline.yaml                # one-shot config validation
-stepflow-run pipeline.yaml                 # drive a pipeline interactively
-stepflow-convert my_skill.md -o out.yaml   # convert a skill description
+skillflow-lint pipeline.yaml                # one-shot config validation
+skillflow-run pipeline.yaml                 # drive a pipeline interactively
+skillflow-convert my_skill.md -o out.yaml   # convert a skill description
 ```
 
-### Linter (`stepflow.plugins.linter`)
+### Linter (`skillflow.plugins.linter`)
 
-Framework utility. Validates pipeline YAML — used as a stepflow tool (`stepflow_lint`) inside the converter's feedback loop, or standalone:
+Framework utility. Validates pipeline YAML — used as a skillflow tool (`skillflow_lint`) inside the converter's feedback loop, or standalone:
 
 ```bash
-stepflow-lint tests/fixtures/skill_review.yaml
-stepflow-lint configs/*.yaml
+skillflow-lint tests/fixtures/skill_review.yaml
+skillflow-lint configs/*.yaml
 ```
 
 ## Package
 
 ```
-src/stepflow/
-├── core.py              # StepFlow orchestrator (create/claim/confirm/advance)
+src/skillflow/
+├── core.py              # SkillFlow orchestrator (create/claim/confirm/advance)
 ├── graph.py             # PipelineGraph, StepNode, Transition, GraphResolver
 ├── tool_loader.py       # Dynamic tool schema + implementation loading
 ├── context.py           # ContextResolver: cross-config, step, tool sources
@@ -318,10 +318,14 @@ src/stepflow/
 ├── validation.py        # Optional external-schema output validation
 ├── recovery.py          # Stale claim recovery
 ├── schema.py            # SQLite DDL + migrations
-├── exceptions.py        # StepFlowError hierarchy
+├── exceptions.py        # SkillFlowError hierarchy
 ├── outbox.py            # OutboxConsumer for event polling
 ├── notifications.py     # NotificationBus for in-process subscribers
 ├── agent_registry.py    # Agent config registry + schema resolution
+├── plugins/             # Built-in plugins
+│   ├── linter/          # Config validator + skillflow_lint tool
+│   ├── skill_runner/    # SkillTool — interactive pipeline facade
+│   └── skill_converter/ # Skill description → pipeline YAML
 └── tools/               # Native tools (13)
     ├── read_file/       ├── write/          ├── list_tree/
     ├── dir_tree/        ├── json_schema/    ├── syntax_lint/
