@@ -1,0 +1,24 @@
+# minimal_1step.yaml — Simplest possible pipeline: one agent step + terminal.
+# Demonstrates: basic run create → start → claim → execute → confirm → complete.
+
+name: "minimal_1step"
+description: "Single agent step with transition to terminal node"
+begin: "do_work"
+
+end_conditions:
+  combinator: or
+  conditions:
+    - type: node_reached
+      node: "done"
+      result: "completed"
+
+steps:
+  - id: "do_work"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    transitions:
+      - to: "done"
+
+  - id: "done"
+    step_type: "agent"
+    agent_config: "echo_agent"

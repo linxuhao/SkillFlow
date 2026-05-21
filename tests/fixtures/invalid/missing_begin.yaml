@@ -1,0 +1,10 @@
+# missing_begin.yaml — Invalid: no "begin" field.
+# Graph validation should report: "Graph begin node is required"
+
+name: "missing_begin"
+description: "Missing begin field — should fail validation"
+
+steps:
+  - id: "step_a"
+    step_type: "agent"
+    agent_config: "echo_agent"

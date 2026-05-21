@@ -1,0 +1,34 @@
+# review_loop.yaml — Agent → Reviewer → loopback on failure.
+# Demonstrates: flag-based match conditions and max_loop on review cycles.
+
+name: "review_loop"
+description: "Agent output reviewed; loops back up to 3 times on failure"
+begin: "writer"
+
+end_conditions:
+  combinator: or
+  conditions:
+    - type: node_reached
+      node: "done"
+      result: "completed"
+
+steps:
+  - id: "writer"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    transitions:
+      - to: "reviewer"
+
+  - id: "reviewer"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    transitions:
+      - to: "done"
+        match: { approved: true }
+      - to: "writer"
+        match: { approved: false }
+        max_loop: 3
+
+  - id: "done"
+    step_type: "agent"
+    agent_config: "echo_agent"

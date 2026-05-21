@@ -1,0 +1,45 @@
+# agent_gate_agent.yaml — Agent → Gate → two terminal branches.
+# Demonstrates: gate resolution based on result flags.
+
+name: "agent_gate_agent"
+description: "Agent produces flags, gate routes to branch A or B"
+begin: "step_a"
+
+end_conditions:
+  combinator: or
+  conditions:
+    - type: node_reached
+      node: "branch_alpha"
+      result: "completed"
+    - type: node_reached
+      node: "branch_beta"
+      result: "completed"
+
+steps:
+  - id: "step_a"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    transitions:
+      - to: "router"
+
+  - id: "router"
+    step_type: "gate"
+    transitions:
+      - to: "branch_alpha"
+        match: { route: "alpha" }
+      - to: "branch_beta"
+        match: { route: "beta" }
+      - to: "none_matched"
+        match: { route: "unknown" }
+
+  - id: "branch_alpha"
+    step_type: "agent"
+    agent_config: "echo_agent"
+
+  - id: "branch_beta"
+    step_type: "agent"
+    agent_config: "echo_agent"
+
+  - id: "none_matched"
+    step_type: "agent"
+    agent_config: "echo_agent"

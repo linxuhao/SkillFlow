@@ -1,0 +1,41 @@
+# end_conditions.yaml — Various end condition types.
+# Demonstrates: node_reached, max_total_steps, flag_match termination.
+
+name: "end_conditions"
+description: "Pipeline terminates via different end condition types"
+begin: "step_1"
+
+end_conditions:
+  combinator: or
+  conditions:
+    - type: node_reached
+      node: "step_4"
+      result: "completed"
+    - type: max_total_steps
+      limit: 10
+    - type: flag_match
+      flag:
+        abort_early: true
+
+steps:
+  - id: "step_1"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    transitions:
+      - to: "step_2"
+
+  - id: "step_2"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    transitions:
+      - to: "step_3"
+
+  - id: "step_3"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    transitions:
+      - to: "step_4"
+
+  - id: "step_4"
+    step_type: "agent"
+    agent_config: "echo_agent"

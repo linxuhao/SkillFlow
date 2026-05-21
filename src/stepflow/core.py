@@ -405,6 +405,30 @@ class StepFlow:
                 (status, project_id),
             )
 
+    def delete_project(self, project_id: str) -> None:
+        """Delete all stepflow state for a project.
+
+        Removes runs, steps, edge counts, loop state, outbox events,
+        and the project row itself.  Safe to call even if the project
+        has no runs.
+        """
+        with self._tx() as conn:
+            # Collect all run IDs for this project
+            run_ids = [
+                r["id"] for r in conn.execute(
+                    "SELECT id FROM stepflow_runs WHERE project_id = ?",
+                    (project_id,),
+                ).fetchall()
+            ]
+            for run_id in run_ids:
+                conn.execute("DELETE FROM stepflow_steps WHERE run_id = ?", (run_id,))
+                conn.execute("DELETE FROM stepflow_edge_counts WHERE run_id = ?", (run_id,))
+                conn.execute("DELETE FROM stepflow_loop_state WHERE run_id = ?", (run_id,))
+                conn.execute("DELETE FROM stepflow_outbox WHERE payload_json LIKE ?",
+                             (f"%{run_id}%",))
+            conn.execute("DELETE FROM stepflow_runs WHERE project_id = ?", (project_id,))
+            conn.execute("DELETE FROM stepflow_projects WHERE id = ?", (project_id,))
+
     # ── Query APIs ──────────────────────────────────────────────────
 
     def list_runs(self, project_id: str = None, status: str = None) -> list[dict]:
@@ -543,6 +567,7 @@ class StepFlow:
 
             error_context = None
             validation_error = None
+            feedback = None
             existing = conn.execute(
                 "SELECT inputs_json FROM stepflow_steps WHERE run_id = ? AND step_id = ?",
                 (run_id, run["current_node"]),
@@ -553,6 +578,8 @@ class StepFlow:
                     error_context = existing_inputs["_error"]
                 if "_validation_error" in existing_inputs:
                     validation_error = existing_inputs["_validation_error"]
+                if "_feedback" in existing_inputs:
+                    feedback = existing_inputs["_feedback"]
 
             conn.execute(
                 """
@@ -641,6 +668,10 @@ class StepFlow:
                         _get_pattern(s, node.output_fixed) for s in node.output_fixed
                     ]
 
+            # Preserve injected feedback from previous tool/step output
+            if feedback is not None:
+                inputs_with_tools["_feedback"] = feedback
+
             # Persist enriched inputs so DB state reflects claim-time resolution
             conn.execute(
                 "UPDATE stepflow_steps SET inputs_json = ?, updated_at = datetime('now') WHERE id = ?",
@@ -725,10 +756,24 @@ class StepFlow:
                     f"Step '{token.step_id}' (instance {token.step_instance_id}) "
                     f"version mismatch: expected {token.version}"
                 )
-            conn.execute(
-                "UPDATE stepflow_runs SET current_node = NULL, updated_at = datetime('now') WHERE id = ?",
-                (token.run_id,),
+
+            # Resolve next transition inline to close the atomicity gap
+            # between confirm_step and advance_run. If process dies here,
+            # the run already knows its next step.
+            next_node = self._resolve_next_in_tx(
+                conn, token.run_id, token.step_id, result.flags, resolver
             )
+            if next_node:
+                conn.execute(
+                    "UPDATE stepflow_runs SET current_node = ?, updated_at = datetime('now') WHERE id = ?",
+                    (next_node, token.run_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE stepflow_runs SET current_node = NULL, updated_at = datetime('now') WHERE id = ?",
+                    (token.run_id,),
+                )
+
             conn.execute(
                 """
                 INSERT INTO stepflow_outbox (event_type, payload_json, created_at)
@@ -852,6 +897,8 @@ class StepFlow:
                 )
                 params.setdefault("workspace_root",
                                   str(self._workspace.get_project_path(row["project_id"])))
+                params.setdefault("project_root",
+                                  str(self._workspace.projects_base / row["project_id"]))
 
         # Built-in step_commit: move tmp→step_dir atomically
         if tool_name == "step_commit":
@@ -1324,6 +1371,46 @@ class StepFlow:
         # Route to body
         return body_target
 
+    def _resolve_next_in_tx(self, conn, run_id: str, step_id: str,
+                            flags: dict, resolver) -> str | None:
+        """Resolve the immediate next step from transitions, within a transaction.
+
+        Returns the next node ID, or None to let advance_run handle the full
+        resolution (checkpoints, gates, loops, max_loop tracking).
+
+        Only resolves simple agent→agent transitions:
+        - No checkpoint steps (need user approval)
+        - No gate or loop targets (need edge count / iteration tracking)
+        - No checkpoint-guarded transitions
+        """
+        node = resolver.get_node(step_id)
+        if not node or not node.transitions:
+            return None
+
+        if node.checkpoint:
+            return None
+
+        run = conn.execute(
+            "SELECT project_id, graph_name FROM stepflow_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        fr = self._make_file_reader(
+            run["project_id"], run["graph_name"], step_id
+        ) if run else None
+
+        from stepflow.graph import _flags_match
+        for t in node.transitions:
+            if t.match is not None:
+                if t.match.get("from") == "checkpoint":
+                    continue
+                if not _flags_match(t.match, flags, file_reader=fr):
+                    continue
+            # Don't resolve to gates, loops, or tools — advance_run handles them
+            if resolver.is_gate(t.to) or resolver.is_loop(t.to) or resolver.is_tool(t.to):
+                return None
+            return t.to
+        return None
+
     def _make_file_reader(self, project_id: str, graph_name: str,
                           step_id: str) -> callable | None:
         """Return a callable for resolving from_file match conditions.
@@ -1402,6 +1489,49 @@ class StepFlow:
                         (current, run_id),
                     )
                     return current
+
+                # If current_node is a tool, auto-execute it inline
+                if resolver.is_tool(current):
+                    tool_node = resolver.get_node(current)
+                    tool_result = self._execute_tool_inline(
+                        tool_node, run_id=run_id,
+                        graph_name=run["graph_name"])
+                    self._confirm_tool_in_tx(conn, run_id, current, tool_result)
+                    step_flags = tool_result
+                    fr = self._make_file_reader(
+                        run["project_id"], run["graph_name"], current)
+                    edge_counts = self._read_edge_counts(conn, run_id)
+                    try:
+                        t, target = resolver.resolve_transition(
+                            current, step_flags, edge_counts, file_reader=fr)
+                    except CycleLimitExceeded:
+                        self._fail_run_in_tx(conn, run_id, "Cycle limit exceeded")
+                        return None
+                    if t and t.feedback and t.to:
+                        error_str = tool_result.get("error", "Tool failed")
+                        self._inject_feedback_in_tx(
+                            conn, run_id, t.to, error_str)
+                    if target:
+                        conn.execute(
+                            "UPDATE stepflow_runs SET current_node = ?, updated_at = datetime('now') WHERE id = ?",
+                            (target, run_id),
+                        )
+                        return target
+                    return None
+
+                # Check end conditions when current_node was pre-resolved
+                # (e.g., by confirm_step inline transition resolution)
+                ec = resolver.graph.end_conditions
+                if ec and ec.conditions:
+                    end_result = self._evaluate_end_conditions(
+                        conn, run_id, ec, run["current_node"]
+                    )
+                    if end_result:
+                        if end_result.status == "completed":
+                            self._complete_run_in_tx(conn, run_id, end_result.reason)
+                        else:
+                            self._fail_run_in_tx(conn, run_id, end_result.reason)
+                        return None
                 return run["current_node"]
 
             claimed = conn.execute(
@@ -1487,8 +1617,12 @@ class StepFlow:
                         graph_name=run["graph_name"])
                     self._confirm_tool_in_tx(conn, run_id, next_node, tool_result)
                     step_flags = tool_result
-                    t, target = resolver.resolve_transition(
-                        next_node, step_flags, {}, file_reader=fr)
+                    try:
+                        t, target = resolver.resolve_transition(
+                            next_node, step_flags, edge_counts, file_reader=fr)
+                    except CycleLimitExceeded:
+                        self._fail_run_in_tx(conn, run_id, "Cycle limit exceeded")
+                        return None
                     if t and t.feedback and t.to:
                         # Inject tool error output into target step for retry context
                         self._inject_feedback_in_tx(conn, run_id, t.to, tool_result)

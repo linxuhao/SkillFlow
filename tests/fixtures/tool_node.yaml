@@ -1,0 +1,32 @@
+# tool_node.yaml — Inline tool node execution.
+# Demonstrates: tool nodes auto-executed by advance_run without external runner.
+
+name: "tool_node"
+description: "Tool node executes inline, then transitions to agent"
+begin: "notify_start"
+
+end_conditions:
+  combinator: or
+  conditions:
+    - type: node_reached
+      node: "done"
+      result: "completed"
+
+steps:
+  - id: "notify_start"
+    step_type: "tool"
+    tool_name: "dir_tree"
+    tool_params:
+      message: "Pipeline started"
+    transitions:
+      - to: "do_work"
+
+  - id: "do_work"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    transitions:
+      - to: "done"
+
+  - id: "done"
+    step_type: "agent"
+    agent_config: "echo_agent"

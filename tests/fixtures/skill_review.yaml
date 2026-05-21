@@ -1,0 +1,105 @@
+# skill_review.yaml — Realistic code review skill as a stepflow pipeline.
+# Demonstrates: checkpoints, review loops, error routing, gates, lifecycle hooks.
+# This is what the converter should be able to produce from a skill description.
+
+name: "skill_review"
+description: "Code review skill with checkpoints and fix suggestions"
+begin: "analyze_diff"
+
+end_conditions:
+  combinator: or
+  conditions:
+    - type: node_reached
+      node: "done"
+      result: "completed"
+    - type: max_total_steps
+      limit: 50
+
+steps:
+  # Phase 1: Analyze the diff
+  - id: "analyze_diff"
+    step_type: "agent"
+    agent_config: "review_analyst"
+    context:
+      - source: { tool: "dir_tree" }
+    output:
+      mode: "content"
+      fixed:
+        findings: { file: "findings.json", format: '{"issues": [issue, ...], "has_critical": bool}' }
+    validation:
+      - files: ["findings.json"]
+        tool: "json_schema"
+        inline_schema:
+          type: object
+          required: [issues, has_critical]
+          properties:
+            issues: { type: array }
+            has_critical: { type: boolean }
+    transitions:
+      - to: "severity_gate"
+
+  # Gate: route based on findings
+  - id: "severity_gate"
+    step_type: "gate"
+    transitions:
+      - to: "flag_critical"
+        match: { has_critical: true }
+      - to: "summarize"
+        match: { has_critical: false }
+
+  # Phase 2a: Expand critical findings
+  - id: "flag_critical"
+    step_type: "agent"
+    agent_config: "review_critic"
+    context:
+      - source: { step: "analyze_diff" }
+    output:
+      mode: "content"
+      fixed:
+        critical_report: { file: "critical_report.md", on_exists: "new" }
+    transitions:
+      - to: "summarize"
+
+  # Phase 2b: Summarize (checkpoint for human review)
+  - id: "summarize"
+    step_type: "agent"
+    agent_config: "review_summarizer"
+    context:
+      - source: { step: "analyze_diff" }
+      - source: { step: "flag_critical" }
+    output:
+      mode: "content"
+      fixed:
+        review: { file: "review_summary.md", on_exists: "new" }
+    checkpoint: true
+    checkpoint_label: "Review Summary — approve to commit, reject to revise"
+    transitions:
+      - to: "apply_fixes"
+        match: { from: "checkpoint", value: "approved" }
+
+  # Phase 3: Apply suggested fixes
+  - id: "apply_fixes"
+    step_type: "agent"
+    agent_config: "review_fixer"
+    context:
+      - source: { step: "analyze_diff" }
+      - source: { step: "summarize" }
+    output:
+      mode: "write"
+    validation:
+      - files: ["*.py"]
+        tool: "syntax_lint"
+    lifecycle:
+      on_deliver:
+        tool: "repo_apply"
+        params:
+          source_dir: "$STEP_DIR"
+        on_failure: "retry"
+        max_retries: 2
+    transitions:
+      - to: "done"
+
+  # Terminal
+  - id: "done"
+    step_type: "agent"
+    agent_config: "echo"

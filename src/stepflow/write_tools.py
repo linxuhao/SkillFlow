@@ -22,8 +22,19 @@ on_exists in the config still controls the default write behaviour.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+
+
+def _ensure_str(value, default: str = "") -> str:
+    """Coerce value to string for write_text. LLM native tool calling may
+    pass structured objects (dict) for parameters typed as 'string'."""
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return default
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _normalize_fixed_entry(value) -> dict:
@@ -171,7 +182,7 @@ def execute_write(slot: str, fixed: dict, params: dict,
     elif mode == "append":
         filename = base_name
         path = directory / filename
-        content = params.get("content", "")
+        content = _ensure_str(params.get("content", ""))
         existing = path.read_text(encoding="utf-8") if path.exists() else ""
         path.write_text(existing + content, encoding="utf-8")
         return {"written": filename}
@@ -180,7 +191,7 @@ def execute_write(slot: str, fixed: dict, params: dict,
 
     path = directory / filename
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = params.get("content") or params.get("initialContent", "")
+    content = _ensure_str(params.get("content") or params.get("initialContent", ""))
     path.write_text(content, encoding="utf-8")
     result = {"written": filename}
     if mode == "new" and archived:
@@ -197,7 +208,7 @@ def execute_create(slot: str, fixed: dict, params: dict,
     archived = _archive_old_file(directory, base_name)
     path = directory / base_name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(params.get("initialContent", ""), encoding="utf-8")
+    path.write_text(_ensure_str(params.get("initialContent", "")), encoding="utf-8")
     result = {"written": base_name}
     if archived:
         result["archived"] = archived
@@ -210,7 +221,7 @@ def execute_append(slot: str, fixed: dict, params: dict,
     base_name = resolve_write_target(slot, fixed, params)
     path = Path(output_dir) / base_name
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = params.get("content", "")
+    content = _ensure_str(params.get("content", ""))
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     path.write_text(existing + content, encoding="utf-8")
     return {"written": base_name}
@@ -225,5 +236,5 @@ def execute_generic_write(params: dict, output_dir: str) -> dict:
         return {"error": "Invalid filename: path traversal denied"}
     path = Path(output_dir) / str(Path(*safe_parts))
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(params.get("content", ""), encoding="utf-8")
+    path.write_text(_ensure_str(params.get("content", "")), encoding="utf-8")
     return {"written": str(Path(*safe_parts))}

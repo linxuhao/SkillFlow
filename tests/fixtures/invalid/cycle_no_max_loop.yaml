@@ -1,0 +1,19 @@
+# cycle_no_max_loop.yaml — Invalid: cycle with no max_loop constraint.
+# Graph validation should report: "Cycle 1: a → b → a has no max_loop constraint on any edge"
+
+name: "cycle_no_max_loop"
+description: "Cycle without max_loop — should fail validation"
+begin: "a"
+
+steps:
+  - id: "a"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    transitions:
+      - to: "b"
+
+  - id: "b"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    transitions:
+      - to: "a"

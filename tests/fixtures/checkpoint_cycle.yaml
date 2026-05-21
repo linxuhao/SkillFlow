@@ -1,0 +1,34 @@
+# checkpoint_cycle.yaml — Checkpoint with approval/rejection cycle.
+# Demonstrates: checkpoint pause, resume, reject, re-execute.
+
+name: "checkpoint_cycle"
+description: "Agent with checkpoint, can be approved or rejected"
+begin: "draft"
+
+end_conditions:
+  combinator: or
+  conditions:
+    - type: node_reached
+      node: "done"
+      result: "completed"
+
+steps:
+  - id: "draft"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    checkpoint: true
+    checkpoint_label: "Review Draft"
+    max_retries: 5
+    transitions:
+      - to: "publish"
+        match: { from: "checkpoint", value: "approved" }
+
+  - id: "publish"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    transitions:
+      - to: "done"
+
+  - id: "done"
+    step_type: "agent"
+    agent_config: "echo_agent"

@@ -1,0 +1,21 @@
+# duplicate_step_id.yaml — Invalid: two steps with the same id.
+# Graph validation should report: "Duplicate step id: 'duplicate'"
+
+name: "duplicate_step_id"
+description: "Duplicate step IDs — should fail validation"
+begin: "duplicate"
+
+steps:
+  - id: "duplicate"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    transitions:
+      - to: "unique"
+
+  - id: "duplicate"
+    step_type: "agent"
+    agent_config: "echo_agent"
+
+  - id: "unique"
+    step_type: "agent"
+    agent_config: "echo_agent"

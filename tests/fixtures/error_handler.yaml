@@ -1,0 +1,33 @@
+# error_handler.yaml — Error transition routing.
+# Demonstrates: _error flag matching to route failures to a handler step.
+
+name: "error_handler"
+description: "Failing step routes to error handler via _error transition"
+begin: "risky_step"
+
+end_conditions:
+  combinator: or
+  conditions:
+    - type: node_reached
+      node: "done"
+      result: "completed"
+
+steps:
+  - id: "risky_step"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    max_retries: 2
+    transitions:
+      - to: "done"
+      - to: "error_handler"
+        match: { _error: true }
+
+  - id: "error_handler"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    transitions:
+      - to: "done"
+
+  - id: "done"
+    step_type: "agent"
+    agent_config: "echo_agent"

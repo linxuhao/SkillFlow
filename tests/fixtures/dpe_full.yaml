@@ -1,0 +1,361 @@
+# dpe_full.yaml — Adapted from AItelier configs/dpe_default.yaml
+# This is a realistic multi-agent pipeline with research, architecture,
+# PM planning, task loop, implementation, verification, and final review.
+# All agent_config names reference mock agents registered during tests.
+#
+# Demonstrates: checkpoints, review loops, gates, loop steps,
+# lifecycle hooks, tool nodes, output validation, end conditions.
+
+name: "dpe_default_v2"
+description: "DPE: Research → Architect → PM → Task Loop → Verify"
+
+begin: "1"
+
+end_conditions:
+  combinator: or
+  conditions:
+    - type: node_reached
+      node: "5_review"
+      result: "completed"
+    - type: max_total_steps
+      limit: 200
+    - type: max_run_duration_seconds
+      limit: 3600
+    - type: flag_match
+      flag:
+        fatal_error: true
+
+steps:
+  # ─── Research ───
+  - id: "1"
+    step_type: "agent"
+    agent_config: "researcher"
+    context:
+      - source: { config: "meta_conversation", output: "brief.md" }
+      - source: { step: "meta", output: "step1_goals.json" }
+      - source: { tool: "dir_tree" }
+    output:
+      mode: "content"
+      fixed:
+        sota: "step1_sota.md"
+    validation:
+      - files: ["step1_sota.md"]
+        tool: "file_exists"
+    checkpoint: true
+    checkpoint_label: "SOTA / Codebase Analysis Review"
+    transitions:
+      - to: "1_review"
+        match: { from: "checkpoint", value: "approved" }
+
+  - id: "1_review"
+    step_type: "agent"
+    agent_config: "researcher_reviewer"
+    context:
+      - source: { config: "meta_conversation", output: "brief.md" }
+      - source: { step: "1" }
+    output:
+      mode: "content"
+      fixed:
+        verdict: { file: "review_verdict.json", on_exists: "new", format: '{"passed": bool, "feedback": str, "suggestions": [str, ...]}' }
+    validation:
+      - files: ["review_verdict.json"]
+        tool: "json_schema"
+        inline_schema:
+          type: object
+          required: [passed]
+          properties:
+            passed: { type: boolean }
+            feedback: { type: string }
+            suggestions: { type: array, items: { type: string } }
+    transitions:
+      - to: "2"
+        match: { from_file: "review_verdict.json", field: "passed", value: true }
+      - to: "1"
+        match: { from_file: "review_verdict.json", field: "passed", value: false }
+        max_loop: 3
+
+  # ─── Architect ───
+  - id: "2"
+    step_type: "agent"
+    agent_config: "architect"
+    context:
+      - source: { config: "meta_conversation", output: "brief.md" }
+      - source: { step: "1" }
+      - source: { step: "2_review" }
+      - source: { tool: "dir_tree" }
+    output:
+      mode: "content"
+      fixed:
+        design: "step2_design.md"
+    validation:
+      - files: ["step2_design.md"]
+        tool: "file_exists"
+    checkpoint: true
+    checkpoint_label: "Architecture Review"
+    transitions:
+      - to: "2_review"
+        match: { from: "checkpoint", value: "approved" }
+
+  - id: "2_review"
+    step_type: "agent"
+    agent_config: "architect_reviewer"
+    context:
+      - source: { config: "meta_conversation", output: "brief.md" }
+      - source: { step: "2" }
+    output:
+      mode: "content"
+      fixed:
+        verdict: { file: "review_verdict.json", on_exists: "new", format: '{"passed": bool, "feedback": str, "suggestions": [str, ...]}' }
+    validation:
+      - files: ["review_verdict.json"]
+        tool: "json_schema"
+        inline_schema:
+          type: object
+          required: [passed]
+          properties:
+            passed: { type: boolean }
+            feedback: { type: string }
+    transitions:
+      - to: "3"
+        match: { from_file: "review_verdict.json", field: "passed", value: true }
+      - to: "2"
+        match: { from_file: "review_verdict.json", field: "passed", value: false }
+        max_loop: 3
+
+  # ─── PM ───
+  - id: "3"
+    step_type: "agent"
+    agent_config: "pm"
+    max_retries: 3
+    max_tool_turns: 20
+    context:
+      - source: { config: "meta_conversation", output: "brief.md" }
+      - source: { step: "1" }
+      - source: { step: "2" }
+      - source: { step: "3_review" }
+      - source: { tool: "dir_tree" }
+    output:
+      mode: "content"
+      fixed:
+        tasks_manifest: { file: "tasks_manifest.json", format: '{"tasks": [task, ...], "execution_order": [[str, ...], ...]}' }
+        task_card: { file: "tasks/*.json", format: '{"id": str, "description": str, "detailed_requirements": str, "artifact_requirement": str, "dependencies": [str, ...], "task_type": str, "interface_contract": str}' }
+    validation:
+      - files: ["tasks_manifest.json"]
+        tool: "json_schema"
+        inline_schema:
+          type: object
+          required: [tasks]
+          properties:
+            tasks: { type: array }
+            execution_order: { type: array }
+    checkpoint: true
+    checkpoint_label: "Review Task Breakdown"
+    transitions:
+      - to: "3_review"
+        match: { from: "checkpoint", value: "approved" }
+      - to: "task_loop"
+        match: { _error: true }
+
+  - id: "3_review"
+    step_type: "agent"
+    agent_config: "pm_reviewer"
+    context:
+      - source: { step: "3" }
+    output:
+      mode: "content"
+      fixed:
+        verdict: { file: "review_verdict.json", on_exists: "new", format: '{"passed": bool, "feedback": str, "suggestions": [str, ...]}' }
+    validation:
+      - files: ["review_verdict.json"]
+        tool: "json_schema"
+        inline_schema:
+          type: object
+          required: [passed]
+          properties:
+            passed: { type: boolean }
+            feedback: { type: string }
+    transitions:
+      - to: "task_loop"
+        match: { from_file: "review_verdict.json", field: "passed", value: true }
+      - to: "3"
+        match: { from_file: "review_verdict.json", field: "passed", value: false }
+        max_loop: 3
+
+  # ─── Task Loop ───
+  - id: "task_loop"
+    step_type: "loop"
+    loop:
+      source:
+        step: "3"
+        file: "tasks_manifest.json"
+        field: "execution_order"
+      item_as: "current_task"
+      max_iterations: 200
+    transitions:
+      - to: "t_plan"
+        max_loop: 200
+      - to: "5"
+
+  # ─── Task Plan ───
+  - id: "t_plan"
+    step_type: "agent"
+    agent_config: "task_planner"
+    context:
+      - source: { config: "meta_conversation", output: "brief.md" }
+      - source: { step: "1", mode: "summary" }
+      - source: { step: "2", mode: "interfaces" }
+      - source: { step: "t_plan_review" }
+      - source: { tool: "dir_tree" }
+    output:
+      mode: "content"
+      fixed:
+        plan: "task_plan.md"
+        subtask_manifest: { file: "subtasks_manifest.json", format: '{"subtasks": [subtask, ...], "execution_order": [[str, ...], ...]}' }
+    transitions:
+      - to: "t_plan_review"
+
+  - id: "t_plan_review"
+    step_type: "agent"
+    agent_config: "task_planner_reviewer"
+    context:
+      - source: { step: "t_plan" }
+    output:
+      mode: "content"
+      fixed:
+        verdict: { file: "review_verdict.json", on_exists: "new", format: '{"passed": bool, "feedback": str, "suggestions": [str, ...]}' }
+    transitions:
+      - to: "t_impl"
+        match: { from_file: "review_verdict.json", field: "passed", value: true }
+      - to: "t_plan"
+        match: { from_file: "review_verdict.json", field: "passed", value: false }
+        max_loop: 3
+
+  # ─── Task Implement ───
+  - id: "t_impl"
+    step_type: "agent"
+    agent_config: "task_implementer"
+    context:
+      - source: { config: "meta_conversation", output: "brief.md" }
+      - source: { step: "2", mode: "interfaces" }
+      - source: { step: "t_plan" }
+      - source: { step: "t_impl_review" }
+      - source: { tool: "dir_tree" }
+    output:
+      mode: "write"
+    validation:
+      - files: ["*.py"]
+        tool: "syntax_lint"
+      - files: ["*.py"]
+        tool: "py_compile"
+    lifecycle:
+      on_deliver:
+        tool: "repo_apply"
+        params:
+          source_dir: "$STEP_DIR"
+        on_failure: "retry"
+        max_retries: 3
+      after_deliver:
+        - tool: "syntax_lint"
+          files: ["*.py", "*.js", "*.html"]
+        - tool: "py_compile"
+          files: ["*.py"]
+        - tool: "pytest"
+          files: ["*_test.py", "test_*.py"]
+    transitions:
+      - to: "t_impl_review"
+
+  - id: "t_impl_review"
+    step_type: "agent"
+    agent_config: "task_implementer_reviewer"
+    context:
+      - source: { config: "meta_conversation", output: "brief.md" }
+      - source: { step: "2", mode: "interfaces" }
+      - source: { step: "t_plan" }
+      - source: { step: "t_impl" }
+      - source: { tool: "dir_tree" }
+    output:
+      mode: "content"
+      fixed:
+        verdict: { file: "review_verdict.json", on_exists: "new", format: '{"passed": bool, "feedback": str, "suggestions": [str, ...]}' }
+    transitions:
+      - to: "t_verify"
+        match: { from_file: "review_verdict.json", field: "passed", value: true }
+      - to: "t_impl"
+        match: { from_file: "review_verdict.json", field: "passed", value: false }
+        max_loop: 3
+
+  # ─── Task Verify ───
+  - id: "t_verify"
+    step_type: "agent"
+    agent_config: "task_verifier"
+    context:
+      - source: { config: "meta_conversation", output: "brief.md" }
+      - source: { step: "t_plan" }
+      - source: { step: "t_verify_review" }
+      - source: { tool: "dir_tree" }
+    output:
+      mode: "content"
+      fixed:
+        report: { file: "task_verify_report.json", format: '{"task_id": str, "all_criteria_met": bool, "verified_items": [str, ...], "issues": [str, ...], "interface_compliant": bool}' }
+    transitions:
+      - to: "t_verify_review"
+
+  - id: "t_verify_review"
+    step_type: "agent"
+    agent_config: "task_verifier_reviewer"
+    context:
+      - source: { step: "t_verify" }
+    output:
+      mode: "content"
+      fixed:
+        verdict: { file: "review_verdict.json", on_exists: "new", format: '{"passed": bool, "feedback": str, "suggestions": [str, ...]}' }
+    transitions:
+      - to: "task_loop"
+        match: { from_file: "review_verdict.json", field: "passed", value: true }
+      - to: "t_verify"
+        match: { from_file: "review_verdict.json", field: "passed", value: false }
+        max_loop: 3
+
+  # ─── Final Verify ───
+  - id: "5"
+    step_type: "agent"
+    agent_config: "final_verifier"
+    context:
+      - source: { config: "meta_conversation", output: "brief.md" }
+      - source: { step: "1" }
+      - source: { step: "2" }
+      - source: { step: "5_review" }
+      - source: { tool: "dir_tree" }
+    output:
+      mode: "content"
+      fixed:
+        readme: "final/README.md"
+        report: { file: "final/verify_report.json", format: '{"all_goals_met": bool, "verified_subtasks": [str, ...], "issues": [str, ...], "ready_for_deploy": bool}' }
+    transitions:
+      - to: "5_review"
+
+  - id: "5_review"
+    step_type: "agent"
+    agent_config: "final_verifier_reviewer"
+    context:
+      - source: { config: "meta_conversation", output: "brief.md" }
+      - source: { step: "5" }
+    output:
+      mode: "content"
+      fixed:
+        verdict: { file: "review_verdict.json", on_exists: "new", format: '{"passed": bool, "feedback": str, "suggestions": [str, ...]}' }
+    validation:
+      - files: ["review_verdict.json"]
+        tool: "json_schema"
+        inline_schema:
+          type: object
+          required: [passed]
+          properties:
+            passed: { type: boolean }
+            feedback: { type: string }
+    transitions:
+      - to: null    # end — graph terminates here
+        match: { from_file: "review_verdict.json", field: "passed", value: true }
+      - to: "5"
+        match: { from_file: "review_verdict.json", field: "passed", value: false }
+        max_loop: 3

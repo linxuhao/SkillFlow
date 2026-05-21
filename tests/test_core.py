@@ -210,7 +210,7 @@ def test_confirm_step(sf: StepFlow):
     sf.confirm_step(claimed.token, result)
 
     run = sf.get_run(run_id)
-    assert run["current_node"] is None  # Cleared by confirm
+    assert run["current_node"] == "b"  # Inline transition resolved by confirm
 
 
 def test_confirm_step_version_conflict(sf: StepFlow):

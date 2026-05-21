@@ -1,0 +1,41 @@
+# lifecycle_hooks.yaml — Lifecycle hooks: after_validate, on_deliver, after_deliver.
+# Demonstrates: output validation → deliver to repo → post-deliver checks.
+
+name: "lifecycle_hooks"
+description: "Agent with lifecycle hooks for output delivery and validation"
+begin: "coder"
+
+end_conditions:
+  combinator: or
+  conditions:
+    - type: node_reached
+      node: "done"
+      result: "completed"
+
+steps:
+  - id: "coder"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    output:
+      mode: "write"
+    validation:
+      - files: ["*.py"]
+        tool: "syntax_lint"
+    lifecycle:
+      on_deliver:
+        tool: "repo_apply"
+        params:
+          source_dir: "$STEP_DIR"
+        on_failure: "retry"
+        max_retries: 2
+      after_deliver:
+        - tool: "syntax_lint"
+          files: ["*.py"]
+        - tool: "py_compile"
+          files: ["*.py"]
+    transitions:
+      - to: "done"
+
+  - id: "done"
+    step_type: "agent"
+    agent_config: "echo_agent"

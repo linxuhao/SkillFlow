@@ -1,0 +1,15 @@
+name: stepflow_lint
+description:
+  Validate a stepflow pipeline YAML config file or raw YAML content.
+  Returns detailed, fixable lint results including error/warning severity,
+  location references, and fix suggestions.
+  Returns {passed: bool, errors: int, warnings: int, issues: [{severity, message, location, suggestion}, ...]}
+parameters:
+  path:
+    type: string
+    description: Path to the stepflow YAML config file to validate
+    required: false
+  content:
+    type: string
+    description: Raw YAML content as a string (alternative to path)
+    required: false

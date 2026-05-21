@@ -1,6 +1,7 @@
 # CLAUDE.md — Stepflow
 
 Stepflow is a config-agnostic LLM pipeline graph executor. It is a pure Python 3.12 library with zero dependencies beyond PyYAML and httpx (for web tools).
+Under Developpement, no backward compatbility is needed.
 
 ## Project Rules
 

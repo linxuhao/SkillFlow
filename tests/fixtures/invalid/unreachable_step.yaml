@@ -1,0 +1,21 @@
+# unreachable_step.yaml — Invalid: a step not reachable from begin.
+# Graph validation should report: "Step 'orphan' is unreachable from begin 'start'"
+
+name: "unreachable_step"
+description: "Orphan step not reachable from begin"
+begin: "start"
+
+steps:
+  - id: "start"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    transitions:
+      - to: "middle"
+
+  - id: "middle"
+    step_type: "agent"
+    agent_config: "echo_agent"
+
+  - id: "orphan"
+    step_type: "agent"
+    agent_config: "echo_agent"
