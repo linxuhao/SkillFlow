@@ -1,146 +1,107 @@
 #!/usr/bin/env python3
-"""Interactive converter — turn a skill description into a skillflow pipeline.
-
-Drives the skill_converter meta-pipeline interactively. The user (or LLM
-agent) responds to each prompt with JSON. On completion, the generated
-pipeline YAML is saved to the output path.
+"""Stateless converter wrapper — calls skillflow-run with the fixed converter pipeline.
 
 Usage:
-    skillflow-convert my_skill.md -o pipeline.yaml
-    skillflow-convert -d "Code review skill..." -o pipeline.yaml
+    skillflow-convert --desc "Code review skill..." --action next
+    skillflow-convert --desc-file my_skill.md --action next
+    skillflow-convert --action submit --run-id <id> --result '{"analysis": {...}}'
 """
 
+import argparse
 import json
 import os
+import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-# Ensure package is importable when run from repo without pip install
-_repo_root = Path(__file__).parent.parent
-_src = _repo_root / "src"
-if str(_src) not in sys.path:
-    sys.path.insert(0, str(_src))
-
-from skillflow.core import SkillFlow
-from skillflow.tool_loader import ToolLoader
-from skillflow.plugins.skill_runner import SkillTool
-from skillflow.plugins.skill_converter import setup_converter, save_output
+_REPO_ROOT = Path(__file__).parent.parent
+_CONVERTER_YAML = _REPO_ROOT / "src" / "skillflow" / "plugins" / "skill_converter" / "skill_converter.yaml"
+_WORKSPACE = os.path.expanduser("~/.skillflow/workspaces")
+_PROJECT_ID = "skill-converter"
 
 
 def main():
-    args = sys.argv[1:]
-    desc_file = None
-    desc_text = ""
-    output = "pipeline.yaml"
-
-    i = 0
-    while i < len(args):
-        if args[i] == "-d" and i + 1 < len(args):
-            i += 1
-            desc_text = args[i]
-        elif args[i] == "-o" and i + 1 < len(args):
-            i += 1
-            output = args[i]
-        elif not args[i].startswith("-") and desc_file is None:
-            desc_file = args[i]
-        i += 1
-
-    if desc_file:
-        desc_text = Path(desc_file).read_text(encoding="utf-8")
-    elif not desc_text:
-        print("Usage: skillflow-convert <description.md> [-o pipeline.yaml]")
-        print("       skillflow-convert -d 'skill description...' [-o pipeline.yaml]")
-        sys.exit(1)
-
-    tmp = tempfile.mkdtemp(prefix="skillflow_convert_")
-
-    # Load tools
-    loader = ToolLoader()
-    import skillflow.plugins
-    loader.add_tools_dir(str(Path(skillflow.plugins.__path__[0]) / "linter" / "tools"))
-
-    sf = SkillFlow(
-        ":memory:",
-        tool_loader=loader,
-        delegate_tools_to_agent=True,
-        workspace_base=os.path.join(tmp, "ws"),
-        projects_base=os.path.join(tmp, "projects"),
+    parser = argparse.ArgumentParser(
+        description="Stateless skill-to-pipeline converter — wraps skillflow-run "
+                    "with the built-in skill_converter pipeline.",
+        epilog=(
+            "Examples:\n"
+            "  skillflow-convert --desc \"Code review skill...\" --action next\n"
+            "  skillflow-convert --desc-file my_skill.md --action next\n"
+            "  skillflow-convert --action submit --run-id <id> --result '{\"analysis\":{...}}'\n"
+            "  skillflow-convert --action next --run-id <id>       # reconnect\n"
+            "\n"
+            "Workflow:\n"
+            "  1. Start:    --desc \"...\" --action next            → returns JSON with run_id + step\n"
+            "  2. Submit:   --action submit --run-id <id> --result '{...}'\n"
+            "  3. Continue as with skillflow-run for remaining steps.\n"
+            "\n"
+            "On completion, the generated pipeline YAML is at:\n"
+            "  ~/.skillflow/workspaces/skill-converter/skill_converter/design_graph/skill_pipeline.yaml\n"
+            "\n"
+            "This is a thin wrapper — it writes the skill description to the workspace\n"
+            "then calls skillflow-run with the fixed converter pipeline graph."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--desc", default="", help="Skill description text (required on first call)")
+    parser.add_argument("--desc-file", default="", help="Path to skill description markdown file")
+    parser.add_argument("--action", default="next",
+                        choices=["next", "submit", "approve", "reject", "abort"],
+                        help="Action: next (start/advance), submit (confirm step)")
+    parser.add_argument("--run-id", default="", help="Run ID from previous JSON response")
+    parser.add_argument("--step-id", default="", help="Step ID from response")
+    parser.add_argument("--result", default="{}", help="Result JSON for submit")
+    parser.add_argument("--feedback", default="", help="Feedback message for reject")
+    args = parser.parse_args()
 
-    tool = setup_converter(sf, description=desc_text)
+    # Validate required argument combinations
+    if args.action in ("submit", "approve", "reject", "abort") and not args.run_id:
+        parser.error(f"--action {args.action} requires --run-id")
+    if args.action == "next" and not args.run_id and not args.desc and not args.desc_file:
+        parser.error("--action next requires --desc/--desc-file (first call) or --run-id (resume)")
 
-    print(f"Skill description: {len(desc_text)} chars")
-    print(f"Output: {output}")
-    print()
+    # On first call (no run-id), write the skill description to workspace
+    if args.action == "next" and not args.run_id:
+        desc_text = args.desc
+        if args.desc_file:
+            desc_text = Path(args.desc_file).read_text(encoding="utf-8")
+        if not desc_text.strip():
+            print(json.dumps({"status": "failed", "error": "No skill description provided (--desc or --desc-file)"}))
+            sys.exit(1)
 
-    # Interactive loop
-    resp = tool(action="next")
+        desc_dir = Path(_WORKSPACE) / _PROJECT_ID
+        desc_dir.mkdir(parents=True, exist_ok=True)
+        (desc_dir / "skill_description.md").write_text(desc_text, encoding="utf-8")
 
-    while resp.status not in ("completed", "failed"):
-        if resp.status == "paused":
-            print(f"\nPaused: {resp.checkpoint_label}")
-            print("[A]pprove or [R]eject? ", end="")
-            choice = input().strip().lower()
-            if choice in ("", "a", "y"):
-                resp = tool(action="approve")
-            else:
-                print("Feedback: ", end="")
-                fb = input().strip() or "Rejected"
-                resp = tool(action="reject", feedback=fb)
-            continue
+    # Build skillflow-run command
+    runner = str(_REPO_ROOT / "scripts" / "skill_run.py")
+    cmd = [
+        sys.executable, runner,
+        "--graph", str(_CONVERTER_YAML),
+        "--project-id", _PROJECT_ID,
+        "--delegate-tools",
+        "--action", args.action,
+    ]
+    if args.run_id:
+        cmd.extend(["--run-id", args.run_id])
+    if args.step_id:
+        cmd.extend(["--step-id", args.step_id])
+    if args.result:
+        cmd.extend(["--result", args.result])
+    if args.feedback:
+        cmd.extend(["--feedback", args.feedback])
 
-        if resp.status != "in_progress":
-            break
+    # Ensure PYTHONPATH includes src/
+    env = os.environ.copy()
+    src_path = str(_REPO_ROOT / "src")
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{src_path}:{existing}" if existing else src_path
 
-        print(f"\n{'='*60}")
-        print(f"STEP: {resp.step}")
-        print(f"{'='*60}")
-        print(f"\n{resp.instruction}")
-        if resp.tool_name:
-            print(f"\nTool: {resp.tool_name}")
-            print(f"Params: {json.dumps(resp.tool_params, indent=2)}")
-        if resp.tools:
-            print(f"Available: {', '.join(sorted(resp.tools.keys()))}")
-
-        print("\nEnter JSON result (empty line to finish, /skip, /quit, /abort):")
-        lines = []
-        while True:
-            try:
-                line = input()
-            except EOFError:
-                return
-            if line.strip() == "" and lines and lines[-1].strip() == "":
-                break
-            lines.append(line)
-
-        text = "\n".join(lines).strip()
-        if text == "/quit":
-            break
-        if text == "/abort":
-            resp = tool(action="abort")
-            break
-        if text == "/skip":
-            result = {}
-        else:
-            try:
-                result = json.loads(text)
-            except json.JSONDecodeError as e:
-                print(f"Invalid JSON: {e}")
-                continue
-
-        tool.write_output_files(resp.step, result)
-        resp = tool(action="submit", result=result)
-
-    print()
-    if resp.status == "completed":
-        saved = save_output(sf, tool.run_id, output)
-        print(f"COMPLETED — pipeline saved to {saved}")
-    elif resp.status == "failed":
-        print(f"FAILED: {resp.error}")
-
-    import shutil
-    shutil.rmtree(tmp, ignore_errors=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    sys.stdout.write(proc.stdout)
+    sys.stderr.write(proc.stderr)
+    sys.exit(proc.returncode)
 
 
 if __name__ == "__main__":

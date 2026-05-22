@@ -8,7 +8,7 @@
 # Creates a venv at ~/.local/share/skillflow/venv/ and registers these
 # commands in ~/.local/bin/:
 #   skillflow-lint     — validate pipeline YAML files
-#   skillflow-run      — interactive pipeline runner
+#   skillflow-run      — stateless pipeline runner (agent calls via CLI)
 #   skillflow-convert  — skill description → pipeline YAML
 
 set -euo pipefail
@@ -49,7 +49,7 @@ echo "  ✓ skillflow-lint     → $BIN_DIR/skillflow-lint"
 
 cat > "$BIN_DIR/skillflow-run" << SCRIPT
 #!/usr/bin/env bash
-exec "${VENV_DIR}/bin/python3" "${REPO_DIR}/scripts/skill_repl.py" "\$@"
+exec "${VENV_DIR}/bin/python3" "${REPO_DIR}/scripts/skill_run.py" "\$@"
 SCRIPT
 chmod +x "$BIN_DIR/skillflow-run"
 echo "  ✓ skillflow-run      → $BIN_DIR/skillflow-run"
@@ -77,5 +77,5 @@ fi
 echo "=== Done ==="
 echo ""
 echo "Try: skillflow-lint --help"
-echo "     skillflow-run <graph.yaml>"
+echo "     skillflow-run --graph pipeline.yaml --action next"
 echo "     skillflow-convert <description.md> -o pipeline.yaml"

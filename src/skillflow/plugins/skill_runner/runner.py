@@ -27,6 +27,7 @@ class SkillResponse:
     """Returned by SkillTool to instruct the agent what to do next."""
 
     status: str  # "in_progress" | "paused" | "completed" | "failed"
+    run_id: str = ""
     step: str = ""
     instruction: str = ""
     tools: dict[str, dict] = field(default_factory=dict)
@@ -113,7 +114,8 @@ class SkillTool:
 
     def __call__(self, action: str = "next", step_id: str = "",
                  result: dict | None = None,
-                 feedback: str = "") -> SkillResponse:
+                 feedback: str = "",
+                 run_id: str = "") -> SkillResponse:
         """Execute an action and return the next instruction.
 
         Args:
@@ -121,10 +123,29 @@ class SkillTool:
             step_id: Required for "submit" and "reject" (to identify the step).
             result: Output dict for "submit".
             feedback: Rejection reason for "reject".
+            run_id: Resume an existing run. If empty and action is "next", a new run is created.
 
         Returns:
             SkillResponse with the next instruction or termination status.
         """
+        # ── Reconnect to existing run if run_id provided ──────────
+        if run_id and self.run_id is None:
+            run = self.sf.get_run(run_id)
+            if run is None:
+                return SkillResponse(status="failed", error=f"Run not found: {run_id}")
+            self.run_id = run_id
+            self.graph_name = run.get("graph_name", self.graph_name)
+            # Reset any step claimed by a previous process and re-claim
+            with self.sf._tx() as conn:
+                conn.execute(
+                    "UPDATE skillflow_steps SET status = 'pending', version = version + 1, "
+                    "claimed_at = NULL, claimed_by = NULL, updated_at = datetime('now') "
+                    "WHERE run_id = ? AND status = 'claimed'",
+                    (run_id,)
+                )
+            self.sf.advance_run(run_id)
+            self._current_claim = self.sf.claim_next_step(run_id)
+
         # ── Handle action ─────────────────────────────────────────
         if action == "abort":
             if self.run_id is not None:
@@ -134,7 +155,7 @@ class SkillTool:
                     pass
             self.run_id = None
             self._current_claim = None
-            return SkillResponse(status="aborted")
+            return SkillResponse(status="aborted", run_id=self.run_id or "")
 
         if action == "next" and self.run_id is None:
             pid = self._project_id
@@ -196,6 +217,7 @@ class SkillTool:
 
         return SkillResponse(
             status="in_progress",
+            run_id=self.run_id or "",
             step=claimed.step_id,
             instruction=self._assembler.assemble(claimed),
             tools=claimed.inputs.get("_tool_schemas", {}),
@@ -247,7 +269,7 @@ class SkillTool:
 
             run = self.sf.get_run(self.run_id)
             if run is None:
-                return SkillResponse(status="failed", error="Run not found")
+                return SkillResponse(status="failed", error="Run not found", run_id=self.run_id or "")
 
             status = run.get("status")
 
@@ -255,7 +277,8 @@ class SkillTool:
                 return self._completed_response(run)
             if status == "failed":
                 return SkillResponse(status="failed",
-                                     error=run.get("error_reason", "Unknown error"))
+                                     error=run.get("error_reason", "Unknown error"),
+                                     run_id=self.run_id or "")
             if status == "paused":
                 return self._paused_response(run)
 
@@ -269,7 +292,8 @@ class SkillTool:
             return self._make_response(claimed)
 
         return SkillResponse(status="failed",
-                             error="Advance loop exceeded 100 iterations")
+                             error="Advance loop exceeded 100 iterations",
+                             run_id=self.run_id or "")
 
     def _completed_response(self, run: dict) -> SkillResponse:
         """Collect final outputs from all completed steps."""
@@ -288,6 +312,7 @@ class SkillTool:
 
         return SkillResponse(
             status="completed",
+            run_id=self.run_id or "",
             outputs=outputs,
             steps_completed=len(completed),
         )
@@ -314,6 +339,7 @@ class SkillTool:
 
         return SkillResponse(
             status="paused",
+            run_id=self.run_id or "",
             step=checkpoint_step_id,
             checkpoint_label=label,
             instruction=(

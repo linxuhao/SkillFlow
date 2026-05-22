@@ -21,12 +21,13 @@ CLI commands registered in `~/.local/bin/`:
 | Command | Description |
 |---------|-------------|
 | `skillflow-lint` | Validate pipeline YAML files (one-shot) |
-| `skillflow-run` | Run a pipeline interactively |
+| `skillflow-run` | Stateless pipeline runner (agent calls via CLI) |
 | `skillflow-convert` | Convert a skill description → pipeline YAML |
 
 ```bash
-skillflow-lint configs/*.yaml          # one-shot validation
-skillflow-run pipeline.yaml            # interactive (human or agent drives)
+skillflow-lint configs/*.yaml               # one-shot validation
+skillflow-run --graph pipeline.yaml --action next   # start a pipeline (returns JSON)
+skillflow-run --action submit --run-id <id> --result '{"key": "val"}'
 skillflow-convert my_skill.md -o pipeline.yaml
 ```
 
@@ -95,7 +96,7 @@ while resp.status == "in_progress":
 # resp.status == "completed"
 ```
 
-In runner mode, **native tools auto-execute** but **custom and unknown tools are delegated** to the agent (via `resp.tool_name` / `resp.tool_params`). Use `skillflow-run` or `skillflow-convert` to drive a pipeline interactively.
+In runner mode, **native tools auto-execute** but **custom and unknown tools are delegated** to the agent (via `resp.tool_name` / `resp.tool_params`). Use `skillflow-convert` to generate a pipeline, then drive it via `SkillTool`.
 
 ## Node Types
 
@@ -290,9 +291,9 @@ Inject the runner manual into the agent's system prompt. Inject the converter ma
 CLI tools for manual use:
 
 ```bash
-skillflow-lint pipeline.yaml                # one-shot config validation
-skillflow-run pipeline.yaml                 # drive a pipeline interactively
-skillflow-convert my_skill.md -o out.yaml   # convert a skill description
+skillflow-lint pipeline.yaml                    # one-shot config validation
+skillflow-run --graph pipeline.yaml --action next  # start a pipeline
+skillflow-convert my_skill.md -o out.yaml       # convert a skill description
 ```
 
 ### Linter (`skillflow.plugins.linter`)

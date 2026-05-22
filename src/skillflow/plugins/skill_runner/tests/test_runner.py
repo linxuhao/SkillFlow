@@ -249,3 +249,80 @@ def test_abort_clears_state_and_allows_restart(sf):
     # State cleared — can start a fresh run
     resp = tool(action="next")
     assert resp.status == "in_progress"
+
+
+# ── Stateless reconnection (run_id) ──────────────────────────────────
+
+def test_reconnect_with_run_id(sf):
+    """Create a run with one SkillTool, continue with a fresh instance using run_id."""
+    sf.register_graph(_simple_skill_graph())
+
+    # First instance: start the run
+    tool1 = SkillTool(sf, "simple_skill")
+    resp = tool1(action="next")
+    assert resp.status == "in_progress"
+    assert resp.step == "analyze"
+    assert resp.run_id
+    run_id = resp.run_id
+
+    # Submit with route=a → gate resolves to branch_a
+    resp = tool1(action="submit", result={"route": "a"})
+    assert resp.step == "branch_a"
+    assert resp.run_id == run_id
+
+    # Second instance: reconnect and continue
+    tool2 = SkillTool(sf, "")
+    resp = tool2(action="next", run_id=run_id)
+    assert resp.status == "in_progress"
+    assert resp.step == "branch_a"
+    assert resp.run_id == run_id
+
+    # Submit branch_a → done → completed
+    resp = tool2(action="submit", result={})
+    assert resp.status == "completed"
+    assert resp.run_id == run_id
+
+
+def test_reconnect_completed_run(sf):
+    """Reconnecting to a completed run returns completed status."""
+    sf.register_graph(_simple_skill_graph())
+
+    tool1 = SkillTool(sf, "simple_skill")
+    tool1(action="next")
+    tool1(action="submit", result={"route": "a"})
+    resp = tool1(action="submit", result={})
+    assert resp.status == "completed"
+    run_id = resp.run_id
+
+    tool2 = SkillTool(sf, "")
+    resp = tool2(action="next", run_id=run_id)
+    assert resp.status == "completed"
+    assert resp.run_id == run_id
+
+
+def test_reconnect_nonexistent_run(sf):
+    """Reconnecting to a nonexistent run returns failed."""
+    tool = SkillTool(sf, "")
+    resp = tool(action="next", run_id="nonexistent-id")
+    assert resp.status == "failed"
+    assert "not found" in resp.error.lower()
+
+
+def test_reconnect_preserves_claimed_step(sf):
+    """After process restart, reconnection picks up the currently claimed step."""
+    sf.register_graph(_simple_skill_graph())
+
+    tool1 = SkillTool(sf, "simple_skill")
+    resp = tool1(action="next")
+    assert resp.step == "analyze"
+    run_id = resp.run_id
+
+    # Fresh instance reconnects — claimed step is re-presented
+    tool2 = SkillTool(sf, "")
+    resp = tool2(action="next", run_id=run_id)
+    assert resp.status == "in_progress"
+    assert resp.step == "analyze"
+
+    # Submit and continue
+    resp = tool2(action="submit", result={"route": "a"})
+    assert resp.step == "branch_a"

@@ -11,7 +11,11 @@ Execute a skillflow pipeline by calling this tool interactively. You never see t
   "parameters": {
     "action": {
       "type": "string",
-      "enum": ["next", "submit", "approve", "reject"]
+      "enum": ["next", "submit", "approve", "reject", "abort"]
+    },
+    "run_id": {
+      "type": "string",
+      "description": "The run_id from the previous SkillResponse. Required to resume an existing run. Omit on first call to create a new run."
     },
     "step_id": {
       "type": "string",
@@ -102,13 +106,15 @@ Report the error to the user.
 
 ## Rules
 
-1. Start with `action="next"`
-2. On `status="in_progress"`: do the work, then `action="submit"` with `step_id` and `result`
-3. On `status="paused"`: decide — `action="approve"` or `action="reject"` with feedback
-4. On `status="completed"`: done — present outputs
-5. On `status="failed"`: report error
-6. Never `submit` twice in a row — wait for a new `in_progress`
-7. `action="next"` while a step is pending returns the same instruction (idempotent)
+1. Start with `action="next"` (no `run_id`) — saves `run_id` from the response
+2. Always pass `run_id` back on every subsequent call to resume the session
+3. On `status="in_progress"`: do the work, then `action="submit"` with `step_id`, `run_id`, and `result`
+4. On `status="paused"`: decide — `action="approve"` or `action="reject"` with `run_id` and feedback
+5. On `status="completed"`: done — present outputs
+6. On `status="failed"`: report error
+7. Never `submit` twice in a row — wait for a new `in_progress`
+8. `action="next"` while a step is pending returns the same instruction (idempotent)
+9. If you lose state, call `action="next"` with the last known `run_id` to reconnect
 
 ## Tool nodes
 
