@@ -36,6 +36,7 @@ SKILLFLOW_RUNS = """
 CREATE TABLE IF NOT EXISTS skillflow_runs (
     id              TEXT PRIMARY KEY,
     graph_name      TEXT NOT NULL,
+    graph_path      TEXT,
     project_id      TEXT,
     status          TEXT NOT NULL DEFAULT 'pending',
     context_json    TEXT NOT NULL DEFAULT '{}',
@@ -134,4 +135,10 @@ ALL_DDL: list[str] = [
     SKILLFLOW_EDGE_COUNTS,
     SKILLFLOW_LOOP_STATE,
     SKILLFLOW_OUTBOX,
+]
+
+# ── Migrations (run after DDL, errors are non-fatal) ──────────────────
+
+SKILLFLOW_MIGRATIONS: list[str] = [
+    "ALTER TABLE skillflow_runs ADD COLUMN graph_path TEXT;",
 ]

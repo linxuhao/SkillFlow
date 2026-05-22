@@ -1,23 +1,29 @@
 #!/usr/bin/env python3
 """Stateless CLI runner for skillflow pipelines.
 
-An LLM agent calls this via shell to drive a pipeline interactively.
-Each invocation creates fresh SkillFlow + SkillTool instances; state
-persists in a file-based SQLite DB via run_id reconnection.
+An LLM agent calls this via shell to drive a pipeline step by step.
+Each invocation creates a fresh SkillFlow + SkillTool instance — no
+in-process state. The only shared state is the SQLite DB file.
 
 Usage:
-    skillflow-run --graph pipeline.yaml --action next
+    # Start a pipeline (pass --graph once)
+    skillflow-run --graph pipeline.yaml --action start
+
+    # All subsequent calls use --run-id (no --graph needed)
+    skillflow-run --action next --run-id <id>
     skillflow-run --action submit --run-id <id> --result '{"key": "val"}'
     skillflow-run --action approve --run-id <id>
     skillflow-run --action reject --run-id <id> --feedback "reason"
-    skillflow-run --action abort --run-id <id>
 """
 
 import argparse
 import json
+import logging
 import os
 import sys
 from pathlib import Path
+
+logger = logging.getLogger("skillflow-run")
 
 # Ensure package is importable when run from repo without pip install
 _repo_root = Path(__file__).parent.parent
@@ -31,40 +37,121 @@ from skillflow.tool_loader import ToolLoader
 from skillflow.plugins.skill_runner import SkillTool
 
 
+# ── Helpers ───────────────────────────────────────────────────────────
+
+def _register_graph_and_agents(sf: SkillFlow, graph: PipelineGraph,
+                                graph_path: str) -> None:
+    """Register a graph and its referenced agent configs on a SkillFlow instance."""
+    for step in graph.steps:
+        if step.agent_config:
+            sf.register_agent_config(step.agent_config, model="host")
+    sf.register_graph(graph)
+
+    if "skill_converter" in graph_path:
+        try:
+            from skillflow.plugins.skill_converter.converter import (
+                _register_converter_agents,
+            )
+            _register_converter_agents(sf)
+        except ImportError:
+            logger.debug("Converter agents module not available")
+        except Exception:
+            logger.warning("Converter agent registration failed", exc_info=True)
+
+
+def _ensure_graph_loaded(sf: SkillFlow, run_id: str) -> str:
+    """Reload graph from the path stored in the DB.  Returns graph_name.
+
+    If the graph is already registered on this SkillFlow instance (e.g.
+    because start registered it moments ago), this is a no-op.
+    """
+    run = sf.get_run(run_id)
+    if not run:
+        raise SystemExit(json.dumps({
+            "status": "failed",
+            "error": f"Run not found: {run_id}",
+        }))
+
+    graph_name = run.get("graph_name", "")
+    graph_path = run.get("graph_path", "")
+
+    # Already registered?  (e.g. start registered it in the same process)
+    try:
+        sf._get_resolver(graph_name)
+        return graph_name
+    except Exception:
+        pass
+
+    if not graph_path:
+        raise SystemExit(json.dumps({
+            "status": "failed",
+            "error": "Run has no graph_path stored. "
+                     "Recreate the run with --action start --graph <file>.",
+        }))
+
+    if not Path(graph_path).exists():
+        raise SystemExit(json.dumps({
+            "status": "failed",
+            "error": f"Graph file not found: {graph_path}",
+        }))
+
+    graph = PipelineGraph.from_yaml(graph_path)
+    _register_graph_and_agents(sf, graph, graph_path)
+    return graph.name
+
+
+# ── Main ──────────────────────────────────────────────────────────────
+
 def main():
     parser = argparse.ArgumentParser(
         description="Stateless skillflow pipeline runner — an LLM agent calls this "
-                    "via shell to drive a pipeline step by step.",
+                    "via shell to drive a pipeline step by step. "
+                    "Use --action start --graph once; all subsequent calls use "
+                    "--run-id (the graph path is stored in the DB).",
         epilog=(
             "Examples:\n"
-            "  skillflow-run --graph pipeline.yaml --action next\n"
+            "  # Start a new run (--graph only on start)\n"
+            "  skillflow-run --graph pipeline.yaml --action start\n"
+            "\n"
+            "  # Get the next step (no --graph needed)\n"
+            "  skillflow-run --action next --run-id <id>\n"
+            "\n"
+            "  # Submit the result (no --graph needed)\n"
             "  skillflow-run --action submit --run-id <id> --result '{\"key\":\"val\"}'\n"
+            "\n"
+            "  # Approve or reject a checkpoint (no --graph needed)\n"
             "  skillflow-run --action approve --run-id <id>\n"
             "  skillflow-run --action reject --run-id <id> --feedback \"reason\"\n"
-            "  skillflow-run --action next --run-id <id>         # reconnect after restart\n"
             "\n"
-            "Workflow:\n"
-            "  1. Start:    --graph <file> --action next         → returns JSON with run_id + step\n"
-            "  2. Submit:   --action submit --run-id <id> --result '{...}'\n"
-            "  3. Approve:  --action approve --run-id <id>       (at checkpoints)\n"
-            "  4. Reject:   --action reject --run-id <id> --feedback \"reason\"\n"
-            "  5. Reconnect: --action next --run-id <id>          (after restart, no --graph needed)\n"
+            "Typical agent loop:\n"
+            "  1. start   → returns {run_id, step, instruction, tools}\n"
+            "  2. submit  → returns {next step} or {status: \"paused\"}\n"
+            "  3. approve → returns {next step after checkpoint}\n"
+            "  4. submit  → ... repeat until status = \"completed\"\n"
             "\n"
-            'State is persisted in ~/.skillflow/runs.db (SQLite).'
+            "State persists in the SQLite DB (default: ~/.skillflow/runs.db).\n"
+            "The graph path is stored in the DB at start time — no need to pass\n"
+            "--graph on every call."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--graph", help="Pipeline YAML file. Required on first call, omitted on resume.")
+    parser.add_argument("--graph", default="",
+                        help="Pipeline YAML file. Only for --action start.")
     parser.add_argument("--db", default=os.path.expanduser("~/.skillflow/runs.db"),
                         help="SQLite DB path (default: ~/.skillflow/runs.db)")
     parser.add_argument("--action", default="next",
-                        choices=["next", "submit", "approve", "reject", "abort"],
-                        help="Action: next (start/advance), submit (confirm step), "
+                        choices=["start", "next", "submit", "approve", "reject", "abort"],
+                        help="Action: start (create run with --graph), "
+                             "next (advance and claim step), "
+                             "submit (confirm step), "
                              "approve/reject (checkpoint), abort (cancel run)")
     parser.add_argument("--run-id", default="", help="Run ID from previous JSON response")
     parser.add_argument("--step-id", default="", help="Step ID from response (for approve/reject)")
-    parser.add_argument("--result", default="{}", help="Result JSON for submit (e.g. '{\"issues\":[]}')")
+    parser.add_argument("--result", default="{}",
+                        help="Result JSON for submit (e.g. '{\"issues\":[]}')")
     parser.add_argument("--feedback", default="", help="Feedback message for reject")
+    parser.add_argument("--redirect-to", default="",
+                        help="Step ID to redirect to on reject (from checkpoint_reject_to in SkillResponse)")
     parser.add_argument("--delegate-tools", action="store_true",
                         help="Delegate unknown tools to the agent instead of auto-executing")
     parser.add_argument("--workspace", default=os.path.expanduser("~/.skillflow/workspaces"),
@@ -73,22 +160,29 @@ def main():
                         help="Project ID for workspace-scoped runs")
     args = parser.parse_args()
 
-    # Validate required argument combinations
-    if args.action in ("submit", "approve", "reject", "abort") and not args.run_id:
-        parser.error(f"--action {args.action} requires --run-id")
-    if args.action == "next" and not args.graph and not args.run_id:
-        parser.error("--action next requires --graph (first call) or --run-id (resume)")
+    # ── Validation ──────────────────────────────────────────────────
+    if args.action == "start":
+        if not args.graph:
+            parser.error("--action start requires --graph")
+        if args.run_id:
+            parser.error("--action start does not accept --run-id")
+    else:
+        if not args.run_id:
+            parser.error(f"--action {args.action} requires --run-id")
+        if args.graph:
+            parser.error(f"--graph is only valid with --action start")
+
+    # Parse result JSON early
+    result = {}
+    try:
+        result = json.loads(args.result)
+    except json.JSONDecodeError:
+        print(json.dumps({"status": "failed", "error": f"Invalid JSON: {args.result}"}))
+        sys.exit(1)
 
     # Ensure DB directory exists
     db_path = Path(args.db)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Bootstrap: graph is required on first call, optional on resume
-    graph_name = ""
-    project_id = args.project_id
-    if args.graph:
-        graph = PipelineGraph.from_yaml(args.graph)
-        graph_name = graph.name
 
     # Init SkillFlow with file DB + tool loader + workspace
     loader = ToolLoader()
@@ -100,51 +194,36 @@ def main():
         projects_base=os.path.join(args.workspace, "projects"),
     )
 
-    # Register graph if provided
-    if args.graph:
-        # Register agent configs referenced by the graph
-        for step in graph.steps:
-            if step.agent_config:
-                try:
-                    sf.register_agent_config(step.agent_config, model="host")
-                except Exception:
-                    pass
-        try:
-            sf.register_graph(graph)
-        except Exception:
-            pass  # Already registered
+    project_id = args.project_id or None
 
-        # If this is the converter pipeline, register converter agents
-        if "skill_converter" in str(args.graph):
-            try:
-                from skillflow.plugins.skill_converter.converter import _register_converter_agents
-                _register_converter_agents(sf)
-            except Exception:
-                pass
-
-    # If resuming, resolve graph_name from the run
-    if not graph_name and args.run_id:
+    # ── start — create run with graph_path ─────────────────────────
+    if args.action == "start":
+        # Auto-generate project_id when not provided (matches SkillTool behavior)
+        if project_id is None:
+            import uuid
+            project_id = f"skill-{uuid.uuid4().hex[:8]}"
+        graph = PipelineGraph.from_yaml(args.graph)
+        _register_graph_and_agents(sf, graph, args.graph)
+        run_id = sf.create_run(graph.name, project_id=project_id,
+                               graph_path=args.graph)
+        sf.start_run(run_id)
+        # Use SkillTool to advance + claim the first step
+        tool = SkillTool(sf, graph.name, project_id=project_id)
+        resp = tool(action="next", run_id=run_id)
+    else:
+        # ── All other actions — reload graph from DB, then execute ──
+        graph_name = _ensure_graph_loaded(sf, args.run_id)
         run = sf.get_run(args.run_id)
-        if run:
-            graph_name = run.get("graph_name", "")
-
-    # Parse result JSON
-    result = {}
-    try:
-        result = json.loads(args.result)
-    except json.JSONDecodeError:
-        print(json.dumps({"status": "failed", "error": f"Invalid JSON: {args.result}"}))
-        sys.exit(1)
-
-    # Execute
-    tool = SkillTool(sf, graph_name, project_id=project_id or None)
-    resp = tool(
-        action=args.action,
-        run_id=args.run_id or "",
-        step_id=args.step_id,
-        result=result if result else None,
-        feedback=args.feedback,
-    )
+        pid = project_id or (run.get("project_id") if run else None)
+        tool = SkillTool(sf, graph_name, project_id=pid)
+        resp = tool(
+            action=args.action,
+            run_id=args.run_id,
+            step_id=args.step_id,
+            result=result if result else None,
+            feedback=args.feedback,
+            redirect_to=args.redirect_to,
+        )
 
     # Output response as JSON
     output = {
@@ -156,9 +235,13 @@ def main():
         "tool_name": resp.tool_name,
         "tool_params": resp.tool_params,
         "checkpoint_label": resp.checkpoint_label,
+        "checkpoint_reject_to": resp.checkpoint_reject_to,
         "outputs": resp.outputs,
         "error": resp.error,
         "steps_completed": resp.steps_completed,
+        "output_dir": resp.output_dir,
+        "expected_files": resp.expected_files,
+        "validation_error": resp.validation_error,
     }
     print(json.dumps(output))
 

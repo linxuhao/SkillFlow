@@ -124,4 +124,4 @@ def test_converter_yaml_loads_as_pipeline_graph():
     graph = PipelineGraph.from_yaml(str(_CONVERTER_DIR / "skill_converter.yaml"))
     assert graph.name == "skill_converter"
     assert graph.begin == "analyze_skill"
-    assert len(graph.steps) == 6  # analyze, design, validate_design, fix, validate_fix, done
+    assert len(graph.steps) == 7  # analyze, design, explain, validate, fix, validate_fix, done

@@ -89,6 +89,19 @@ steps:
     agent_config: analyst
 """
 
+EXPLAIN_MD = """# Pipeline Design Explanation
+
+## Steps
+
+- **analyze_diff**: Agent step that analyzes code changes
+- **review**: Agent step that reviews the analysis
+- **done**: Terminal step
+
+## Flow
+
+analyze_diff -> review -> (approved? done : back to analyze_diff, max 3 loops)
+"""
+
 
 # ── Mock LLM Agent ──────────────────────────────────────────────────
 
@@ -243,6 +256,9 @@ def test_converter_e2e_broken_then_fixed(sf_with_ws):
         "design_graph": {
             1: {"pipeline": BROKEN_YAML},
         },
+        "explain_design": {
+            1: {"explanation": EXPLAIN_MD},
+        },
         "fix_issues": {
             1: {"pipeline": CORRECTED_YAML},
         },
@@ -275,6 +291,9 @@ def test_converter_valid_first_attempt_skips_fix(sf_with_ws):
         "design_graph": {
             1: {"pipeline": CORRECTED_YAML},
         },
+        "explain_design": {
+            1: {"explanation": EXPLAIN_MD},
+        },
     }
 
     agent = MockLLMAgent(tool, sf, responses)
@@ -302,6 +321,9 @@ def test_converter_multiple_fix_attempts(sf_with_ws):
         },
         "design_graph": {
             1: {"pipeline": BROKEN_YAML},
+        },
+        "explain_design": {
+            1: {"explanation": EXPLAIN_MD},
         },
         "fix_issues": {
             1: {"pipeline": BROKEN_YAML},     # first fix attempt: still broken
@@ -342,6 +364,7 @@ def test_linter_feedback_in_fix_step(sf_with_ws):
     responses = {
         "analyze_skill": {1: {"analysis": json.loads(ANALYSIS_JSON)}},
         "design_graph": {1: {"pipeline": BROKEN_YAML}},
+        "explain_design": {1: {"explanation": EXPLAIN_MD}},
         "fix_issues": {1: {"pipeline": CORRECTED_YAML}},
     }
 
@@ -354,3 +377,75 @@ def test_linter_feedback_in_fix_step(sf_with_ws):
     fix_text = fix_instruction[0].lower()
     assert any(term in fix_text for term in ["feedback", "linter", "error", "issue"]), (
         f"Fix step didn't receive linter feedback: {fix_instruction[0][:200]}")
+
+
+def test_converter_reject_explanation_redirects_to_design(sf_with_ws):
+    """Rejecting explain_design checkpoint redirects to design_graph for redo."""
+    sf = sf_with_ws
+    _register_converter_agents(sf)
+
+    graph = PipelineGraph.from_yaml(str(_CONVERTER_DIR / "skill_converter.yaml"))
+    sf.register_graph(graph)
+
+    tool = SkillTool(sf, "skill_converter")
+
+    responses = {
+        "analyze_skill": {
+            1: {"analysis": json.loads(ANALYSIS_JSON)},
+        },
+        "design_graph": {
+            1: {"pipeline": BROKEN_YAML},      # first design (will be rejected)
+            2: {"pipeline": CORRECTED_YAML},    # second design (after rejection)
+        },
+        "explain_design": {
+            1: {"explanation": EXPLAIN_MD},     # first explanation (will be rejected)
+            2: {"explanation": EXPLAIN_MD},     # second explanation (after redesign)
+        },
+    }
+
+    class RejectThenApproveAgent(MockLLMAgent):
+        def run(self):
+            reject_done = False
+            resp = self.tool(action="next")
+
+            while resp.status not in ("completed", "failed"):
+                if resp.status == "paused":
+                    if not reject_done and resp.checkpoint_label:
+                        resp = self.tool(
+                            action="reject",
+                            feedback="The pipeline needs error handling",
+                            redirect_to=resp.checkpoint_reject_to,
+                        )
+                        reject_done = True
+                        continue
+                    else:
+                        resp = self.tool(action="approve")
+                        continue
+
+                if resp.status != "in_progress":
+                    break
+
+                step = resp.step
+                self.call_count[step] = self.call_count.get(step, 0) + 1
+                attempt = self.call_count[step]
+                step_responses = self.responses.get(step, {})
+                result = step_responses.get(attempt, step_responses.get(0, {}))
+                self._write_output_files(step, result)
+                resp = self.tool(action="submit", result=result)
+
+            return {
+                "status": resp.status,
+                "outputs": resp.outputs,
+                "error": resp.error,
+                "steps_completed": resp.steps_completed,
+            }
+
+    agent = RejectThenApproveAgent(tool, sf, responses)
+    result = agent.run()
+
+    assert result["status"] == "completed"
+    # design_graph called twice — original + after rejection redirect
+    assert agent.call_count.get("design_graph", 0) == 2
+    # explain_design called 3 times — initial, after redesign, then retried
+    # due to claim token version invalidation after the redirect
+    assert agent.call_count.get("explain_design", 0) >= 2

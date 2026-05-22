@@ -74,29 +74,71 @@ Config reference: `tests/fixtures/minimal_1step.yaml`.
 
 ### Runner Mode
 
-Skillflow is driven interactively via `SkillTool`. The pipeline exposes steps as instructions — a human or LLM agent calls `action="next"` / `"submit"` / `"approve"` / `"reject"`.
+Runner mode is the **language-agnostic** interface. An LLM agent (or any program) drives a pipeline by calling `skillflow-run` as a CLI tool. Each invocation is a **fresh process** — only the SQLite DB persists state.
 
-```python
-from skillflow import SkillFlow, PipelineGraph
-from skillflow.plugins.skill_runner import SkillTool
+Pass `--graph` **once** with `--action start`. The graph path is stored in the DB. All subsequent calls use `--run-id` to reconnect — no `--graph` needed.
 
-graph = PipelineGraph.from_yaml("tests/fixtures/skill_review.yaml")
-sf = SkillFlow(":memory:", delegate_tools_to_agent=True)
-sf.register_graph(graph)
-sf.register_agent_config("review_analyst", model="host")
-# ... register other agent configs referenced by the graph
+```bash
+# 1. Start a pipeline — pass --graph once, get the first step back
+$ skillflow-run --graph pipeline.yaml --action start
+{"status": "in_progress", "run_id": "abc123", "step": "analyze", "instruction": "..."}
 
-tool = SkillTool(sf, "skill_review")
-resp = tool(action="next")
+# 2. Submit work for the current step (no --graph needed)
+$ skillflow-run --action submit --run-id abc123 \
+    --result '{"issues": [{"file": "app.py", "severity": "high"}]}'
+{"status": "in_progress", "run_id": "abc123", "step": "summarize", "instruction": "..."}
 
-while resp.status == "in_progress":
-    print(resp.instruction)
-    # Agent does work, produces output...
-    resp = tool(action="submit", result={"findings": {...}})
-# resp.status == "completed"
+# 3. When a checkpoint step completes, the run pauses
+{"status": "paused", "checkpoint_label": "Review Summary — approve to commit, reject to revise"}
+
+# 3a. Human approves (no --graph needed)
+$ skillflow-run --action approve --run-id abc123
+{"status": "in_progress", "run_id": "abc123", "step": "apply_fixes", ...}
+
+# 3b. Or human rejects with feedback
+$ skillflow-run --action reject --run-id abc123 \
+    --feedback "Severity of bare except should be high, not medium"
+
+# 4. Loop continues until the pipeline completes
+{"status": "completed", "steps_completed": 3, "outputs": {...}}
 ```
 
-In runner mode, **native tools auto-execute** but **custom and unknown tools are delegated** to the agent (via `resp.tool_name` / `resp.tool_params`). Use `skillflow-convert` to generate a pipeline, then drive it via `SkillTool`.
+**The agent loop in pseudocode:**
+
+```
+resp = run("--graph", graph, "--action", "start")
+while resp.status == "in_progress":
+    # Steps with output.fixed require files written to output_dir before submit
+    if resp.expected_files:
+        for fname in resp.expected_files:
+            write_file(resp.output_dir / fname, generate_content(resp))
+    work = do_the_work(resp.instruction, resp.tools)
+    resp = run("--action", "submit", "--run-id", resp.run_id,
+               "--result", json(work))
+    # If validation failed, resp.validation_error is set and resp.step repeats
+    if resp.validation_error:
+        fix_the_error(resp.validation_error)
+        continue
+    if resp.status == "paused":
+        show_checkpoint_to_human(resp.checkpoint_label)
+        if human_approves:
+            resp = run("--action", "approve", "--run-id", resp.run_id)
+        else:
+            resp = run("--action", "reject", "--run-id", resp.run_id,
+                       "--feedback", human_feedback)
+# resp.status == "completed" — pipeline done
+```
+
+**Response fields beyond status:**
+
+| Field | When present | Meaning |
+|-------|-------------|---------|
+| `output_dir` | Steps with `output.fixed` | Write expected files here before calling submit |
+| `expected_files` | Steps with `output.fixed` | File names to create (e.g. `["findings.json"]`) |
+| `validation_error` | Submit rejected by validator | Why the previous submit failed — fix and re-submit |
+| `tools` | Agent steps | Write helpers (`write_*`, `create_*`, `append_*`) with format specs |
+
+Runner mode delegates unknown tools to the agent (`resp.tool_name` / `resp.tool_params`). For programmatic use, the same API is available via `SkillTool`.
 
 ## Node Types
 
@@ -264,36 +306,32 @@ sf.register_graph(graph)
 
 ### 2. Agent mode — convert skills to pipelines
 
-LLM agents use the **converter** + **runner** plugins to turn skill descriptions into skillflow pipelines. The agent calls a tool named `run_skill` repeatedly — the runner tells it what to do at each step.
-
-```python
-from skillflow.plugins.skill_converter import setup_converter
-from skillflow.plugins.skill_runner import load_agent_guide
-
-# Give the agent its user manual
-system_prompt = load_agent_guide()  # ← includes protocol, response format, rules
-
-tool = setup_converter(sf, description_file="my_skill.md")
-resp = tool(action="next")
-# ... agent loops: submit result → get next instruction → ...
-# resp.status == "completed" → pipeline YAML ready
-```
-
-Agent manuals are shipped in the package:
-
-| Plugin | Manual | How to load |
-|--------|--------|-------------|
-| `skill_runner` | Agent protocol — actions, SkillResponse format, rules | `load_agent_guide()` from `skillflow.plugins.skill_runner` |
-| `skill_converter` | Step-by-step guide — analyze → design → lint → fix | `load_agent_guide()` from `skillflow.plugins.skill_converter` |
-
-Inject the runner manual into the agent's system prompt. Inject the converter manual when the agent is asked to convert a skill.
-
-CLI tools for manual use:
+`skillflow-convert` is a thin wrapper that calls `skillflow-run` with the built-in converter pipeline. The agent drives it the same way:
 
 ```bash
-skillflow-lint pipeline.yaml                    # one-shot config validation
-skillflow-run --graph pipeline.yaml --action next  # start a pipeline
-skillflow-convert my_skill.md -o out.yaml       # convert a skill description
+# Start conversion with a skill description
+$ skillflow-convert --desc "Code review skill..." --action start
+{"status": "in_progress", "run_id": "abc123", "step": "analyze_skill", "instruction": "..."}
+
+# Submit analysis, continue through design → lint → fix → done (no --desc needed)
+$ skillflow-convert --action submit --run-id abc123 --result '{"analysis": {...}}'
+```
+
+On completion, the generated pipeline YAML is at `~/.skillflow/workspaces/skill-converter/.../skill_pipeline.yaml`.
+
+Agent manuals (the tool schema + rules) are shipped in the package:
+
+| Plugin | Manual | Load via |
+|--------|--------|----------|
+| `skill_runner` | Actions, response format, rules | `load_agent_guide()` from `skillflow.plugins.skill_runner` |
+| `skill_converter` | Step-by-step: analyze → design → lint → fix | `load_agent_guide()` from `skillflow.plugins.skill_converter` |
+
+Inject these into the agent's system prompt so it knows how to call the CLI tools.
+
+```bash
+skillflow-lint pipeline.yaml                             # one-shot config validation
+skillflow-run --graph pipeline.yaml --action start        # start a pipeline (returns JSON, --graph only once)
+skillflow-convert --desc "..." --action start             # start a conversion
 ```
 
 ### Linter (`skillflow.plugins.linter`)

@@ -42,6 +42,60 @@ end_conditions:
 4. Checkpoint nodes need `checkpoint: true` and a checkpoint transition
 5. Use `tool_name: "skillflow_lint"` for validation steps (NOT "yaml_valid")
 
+### Minimal pipeline example
+
+Here is a valid 4-step pipeline showing agent, gate, tool, and checkpoint patterns:
+
+```yaml
+name: "example_skill"
+description: "Minimal example pipeline"
+begin: "process"
+
+end_conditions:
+  combinator: or
+  conditions:
+    - type: node_reached
+      node: "done"
+      result: "completed"
+
+steps:
+  - id: "process"
+    step_type: "agent"
+    agent_config: "processor"
+    transitions:
+      - to: "check_result"
+
+  - id: "check_result"
+    step_type: "tool"
+    tool_name: "skillflow_lint"
+    tool_params:
+      path: "$CONFIG_DIR/process/output.yaml"
+    transitions:
+      - to: "done"
+        match: { passed: true }
+      - to: "process"
+        match: { passed: false }
+        max_loop: 3
+
+  - id: "done"
+    step_type: "agent"
+    agent_config: "processor"
+```
+
+### Tool parameter variables
+
+When writing `tool_params`, you may reference these path variables:
+
+| Variable | Resolves to |
+|----------|------------|
+| `$CONFIG_DIR` | The graph's per-config workspace directory |
+| `$STEP_DIR` | The promoted output directory of a step |
+| `$STEP_TMP_DIR` | The temporary staging directory for step output |
+| `$PROJECT_ROOT` | The project root directory on disk |
+| `$TASK_DIR` | The project's tasks subdirectory |
+
+Example: `path: "$CONFIG_DIR/design_graph/skill_pipeline.yaml"` resolves to the workspace location where `design_graph` writes its output.
+
 ## Output Format
 
 Output a complete skillflow YAML file `skill_pipeline.yaml`.

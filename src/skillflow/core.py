@@ -136,6 +136,14 @@ class SkillFlow:
         from skillflow.schema import SKILLFLOW_INDEXES
         for stmt in SKILLFLOW_INDEXES:
             self._conn.execute(stmt)
+        # Migrations — idempotent DDL (skip if already applied)
+        from skillflow.schema import SKILLFLOW_MIGRATIONS
+        for stmt in SKILLFLOW_MIGRATIONS:
+            try:
+                self._conn.execute(stmt)
+            except sqlite3.OperationalError:
+                # Column/index already exists or DB locked — fine
+                pass
         self._conn.commit()
 
         # Notification bus — shared with host app for real-time push
@@ -279,7 +287,8 @@ class SkillFlow:
     # ── Run lifecycle ──────────────────────────────────────────────
 
     def create_run(self, graph_name: str, context: dict | None = None,
-                   project_id: str = None) -> str:
+                   project_id: str = None, *,
+                   graph_path: str | None = None) -> str:
         resolver = self._get_resolver(graph_name)
         graph = resolver.graph
         run_id = str(uuid.uuid4())
@@ -292,10 +301,10 @@ class SkillFlow:
         with self._tx() as conn:
             conn.execute(
                 """
-                INSERT INTO skillflow_runs (id, graph_name, project_id, context_json, current_node, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                INSERT INTO skillflow_runs (id, graph_name, graph_path, project_id, context_json, current_node, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
                 """,
-                (run_id, graph_name, project_id, self._serialize(ctx), graph.begin),
+                (run_id, graph_name, graph_path, project_id, self._serialize(ctx), graph.begin),
             )
             for node in graph.steps:
                 conn.execute(
@@ -691,9 +700,13 @@ class SkillFlow:
                         _get_pattern(s, node.output_fixed) for s in node.output_fixed
                     ]
 
-            # Preserve injected feedback from previous tool/step output
+            # Preserve injected context from previous attempts
             if feedback is not None:
                 inputs_with_tools["_feedback"] = feedback
+            if validation_error is not None:
+                inputs_with_tools["_validation_error"] = validation_error
+            if error_context is not None:
+                inputs_with_tools["_error"] = error_context
 
             # Persist enriched inputs so DB state reflects claim-time resolution
             conn.execute(
@@ -1543,6 +1556,18 @@ class SkillFlow:
                         self._inject_feedback_in_tx(
                             conn, run_id, t.to, error_str)
                     if target:
+                        # Check end conditions before returning the target
+                        ec = resolver.graph.end_conditions
+                        if ec and ec.conditions:
+                            end_result = self._evaluate_end_conditions(
+                                conn, run_id, ec, target
+                            )
+                            if end_result:
+                                if end_result.status == "completed":
+                                    self._complete_run_in_tx(conn, run_id, end_result.reason)
+                                else:
+                                    self._fail_run_in_tx(conn, run_id, end_result.reason)
+                                return None
                         conn.execute(
                             "UPDATE skillflow_runs SET current_node = ?, updated_at = datetime('now') WHERE id = ?",
                             (target, run_id),
@@ -1615,6 +1640,20 @@ class SkillFlow:
                     # Fall through — first_target set from checkpoint transition
                 edges_taken.append((last["step_id"], first_target))
                 next_node = first_target
+
+            # Checkpoint — pause BEFORE auto-advancing through gates/tools
+            if last:
+                last_node = resolver.get_node(last["step_id"])
+                if last_node and last_node.checkpoint:
+                    conn.execute(
+                        "UPDATE skillflow_runs SET current_node = ?, updated_at = datetime('now') WHERE id = ?",
+                        (next_node, run_id),
+                    )
+                    conn.execute(
+                        "UPDATE skillflow_runs SET status = 'paused', updated_at = datetime('now') WHERE id = ?",
+                        (run_id,),
+                    )
+                    return None
 
             # Auto-advance through gates AND auto-execute tool nodes
             # Merge flags from ALL completed steps so gates see flags
@@ -1702,27 +1741,14 @@ class SkillFlow:
                         self._fail_run_in_tx(conn, run_id, end_result.reason)
                     return None
 
-            # Checkpoint
-            if last:
-                last_node = resolver.get_node(last["step_id"])
-                if last_node and last_node.checkpoint:
-                    conn.execute(
-                        "UPDATE skillflow_runs SET current_node = ?, updated_at = datetime('now') WHERE id = ?",
-                        (next_node, run_id),
-                    )
-                    conn.execute(
-                        "UPDATE skillflow_runs SET status = 'paused', updated_at = datetime('now') WHERE id = ?",
-                        (run_id,),
-                    )
-                    return None
-
             conn.execute(
                 "UPDATE skillflow_runs SET current_node = ?, updated_at = datetime('now') WHERE id = ?",
                 (next_node, run_id),
             )
             return next_node
 
-    def reject_checkpoint(self, run_id: str, step_id: str, feedback: str) -> None:
+    def reject_checkpoint(self, run_id: str, step_id: str, feedback: str,
+                          redirect_to: str = "") -> None:
         with self._tx() as conn:
             run = conn.execute(
                 "SELECT * FROM skillflow_runs WHERE id = ?", (run_id,)
@@ -1757,8 +1783,19 @@ class SkillFlow:
             )
             conn.execute(
                 "UPDATE skillflow_runs SET current_node = ?, status = 'running', updated_at = datetime('now') WHERE id = ?",
-                (step_id, run_id),
+                (redirect_to or step_id, run_id),
             )
+            # When redirecting, inject feedback into the redirect target
+            if redirect_to:
+                conn.execute(
+                    """
+                    UPDATE skillflow_steps
+                    SET inputs_json = json_set(inputs_json, '$._feedback', ?),
+                        updated_at = datetime('now')
+                    WHERE run_id = ? AND step_id = ? AND status = 'pending'
+                    """,
+                    (feedback, run_id, redirect_to),
+                )
             conn.execute(
                 """
                 INSERT INTO skillflow_outbox (event_type, payload_json, created_at)

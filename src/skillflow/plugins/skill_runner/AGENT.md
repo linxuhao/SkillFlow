@@ -62,14 +62,18 @@ Agent                         run_skill
 {
   "status": "in_progress",
   "step": "analyze_diff",
-  "instruction": "## Context\n\n### Source\n...\n\n## Task\nExecute step `analyze_diff`.",
+  "instruction": "## Task\nExecute step `analyze_diff`.\nWrite output files to the output directory:\n- `findings.json`",
   "tools": {
-    "read_file": {"name": "read_file", ...},
-    "grep": {...}
-  }
+    "write_findings": {"name": "write_findings", "description": "Replace findings.json...", "parameters": {"content": {"type": "string", "required": true}}}
+  },
+  "output_dir": "/path/to/analyze_diff.tmp",
+  "expected_files": ["findings.json"],
+  "validation_error": ""
 }
 ```
-Call `submit` with your result to advance.
+If `expected_files` is non-empty, **write those files to `output_dir`** before calling `submit`. Use the `tools` (write_*/create_*/append_* helpers) to understand the expected format for each file. Call `submit` with your result to advance.
+
+If `validation_error` is non-empty, the previous `submit` was rejected. Fix the issue described and re-submit.
 
 ### Paused at checkpoint
 ```json
@@ -108,13 +112,14 @@ Report the error to the user.
 
 1. Start with `action="next"` (no `run_id`) — saves `run_id` from the response
 2. Always pass `run_id` back on every subsequent call to resume the session
-3. On `status="in_progress"`: do the work, then `action="submit"` with `step_id`, `run_id`, and `result`
+3. On `status="in_progress"`: if `expected_files` is non-empty, write those files to `output_dir` before submitting. Then `action="submit"` with `step_id`, `run_id`, and `result`
 4. On `status="paused"`: decide — `action="approve"` or `action="reject"` with `run_id` and feedback
 5. On `status="completed"`: done — present outputs
 6. On `status="failed"`: report error
 7. Never `submit` twice in a row — wait for a new `in_progress`
-8. `action="next"` while a step is pending returns the same instruction (idempotent)
-9. If you lose state, call `action="next"` with the last known `run_id` to reconnect
+8. If `validation_error` is set on the response, fix the issue and re-submit (the step repeats)
+9. `action="next"` while a step is pending returns the same instruction (idempotent)
+10. If you lose state, call `action="next"` with the last known `run_id` to reconnect
 
 ## Tool nodes
 
@@ -137,6 +142,23 @@ the result. The runner stores it and advances the graph.
 
 Without delegation (default), tool nodes are auto-executed by skillflow
 and you never see them.
+
+### Variable substitution
+
+You may encounter `$CONFIG_DIR`, `$STEP_DIR`, `$STEP_TMP_DIR`, `$PROJECT_ROOT`,
+or `$TASK_DIR` in `tool_params`. These are path variables resolved at runtime:
+
+| Variable | Resolves to |
+|----------|------------|
+| `$CONFIG_DIR` | The graph's per-config workspace directory |
+| `$STEP_DIR` | The promoted output directory of the current step |
+| `$STEP_TMP_DIR` | The temporary staging directory for step output |
+| `$PROJECT_ROOT` | The project root directory on disk |
+| `$TASK_DIR` | The project's tasks subdirectory |
+
+You do not need to expand these yourself. They are resolved before the tool
+executes. Example: `"$CONFIG_DIR/design_graph/skill_pipeline.yaml"` points to
+the `skill_pipeline.yaml` output of the `design_graph` step.
 
 ## Checkpoints are for your user, not you
 

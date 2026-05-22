@@ -12,6 +12,7 @@ content for prompt injection. Supports five source types:
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 
@@ -64,6 +65,8 @@ class ContextResolver:
                         label = f"{config_name}/{source['step']}/{output_file}"
                         return label, content
                     except Exception:
+                        logger = logging.getLogger("skillflow.context")
+                        logger.debug("Failed to read %s", file_path, exc_info=True)
                         return "", ""
 
         # Otherwise scan all step dirs (new-style) and legacy Outbox_Final_* dirs

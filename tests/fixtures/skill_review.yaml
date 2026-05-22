@@ -74,10 +74,27 @@ steps:
     checkpoint: true
     checkpoint_label: "Review Summary — approve to commit, reject to revise"
     transitions:
+      - to: "plan"
+        match: { from: "checkpoint", value: "approved" }
+
+  # Phase 3: Plan fix implementation
+  - id: "plan"
+    step_type: "agent"
+    agent_config: "review_planner"
+    context:
+      - source: { step: "analyze_diff" }
+      - source: { step: "summarize" }
+    output:
+      mode: "content"
+      fixed:
+        plan: { file: "fix_plan.md", on_exists: "new" }
+    checkpoint: true
+    checkpoint_label: "Review Fix Plan — approve to apply, reject to revise"
+    transitions:
       - to: "apply_fixes"
         match: { from: "checkpoint", value: "approved" }
 
-  # Phase 3: Apply suggested fixes
+  # Phase 4: Apply suggested fixes
   - id: "apply_fixes"
     step_type: "agent"
     agent_config: "review_fixer"

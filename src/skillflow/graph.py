@@ -100,6 +100,7 @@ class StepNode:
     transitions: list[Transition] = field(default_factory=list)
     checkpoint: bool = False
     checkpoint_label: str = ""
+    checkpoint_reject_to: str = ""
     config: dict = field(default_factory=dict)
     max_retries: int = 3
     max_tool_turns: int = 0  # 0 = use agent config default
@@ -236,6 +237,7 @@ class PipelineGraph:
                     transitions=transitions,
                     checkpoint=s.get("checkpoint", False),
                     checkpoint_label=s.get("checkpoint_label", ""),
+                    checkpoint_reject_to=s.get("checkpoint_reject_to", ""),
                     config=s.get("config", {}),
                     max_retries=s.get("max_retries", 3),
                     max_tool_turns=s.get("max_tool_turns", 0),
@@ -293,6 +295,8 @@ class PipelineGraph:
                 sd["checkpoint"] = True
                 if s.checkpoint_label:
                     sd["checkpoint_label"] = s.checkpoint_label
+                if s.checkpoint_reject_to:
+                    sd["checkpoint_reject_to"] = s.checkpoint_reject_to
             if s.max_retries != 3:
                 sd["max_retries"] = s.max_retries
             if s.max_tool_turns:

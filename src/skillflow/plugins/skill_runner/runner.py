@@ -35,9 +35,14 @@ class SkillResponse:
     tool_name: str = ""
     tool_params: dict = field(default_factory=dict)
     checkpoint_label: str = ""
+    checkpoint_reject_to: str = ""
     outputs: dict = field(default_factory=dict)
     error: str = ""
     steps_completed: int = 0
+    # Output file contract — where to write fixed-output files before submit
+    output_dir: str = ""
+    expected_files: list[str] = field(default_factory=list)
+    validation_error: str = ""
 
 
 class PromptAssembler:
@@ -50,6 +55,24 @@ class PromptAssembler:
         """Build the instruction from step context and agent config."""
         parts: list[str] = []
         inputs = step.inputs
+
+        # Human-readable step label (from snake_case id)
+        label = step.step_id.replace("_", " ").title()
+
+        # Validation error from a previous submit failure
+        validation_error = inputs.get("_validation_error")
+        if validation_error:
+            parts.append(f"## Validation failed\n\n{validation_error}\n")
+
+        # Feedback from a rejected checkpoint or failed lifecycle hook
+        feedback = inputs.get("_feedback")
+        if feedback:
+            parts.append(f"## Feedback from previous attempt\n\n{feedback}\n")
+
+        # Error context from a previous failure (error_handler routing)
+        error_ctx = inputs.get("_error")
+        if error_ctx:
+            parts.append(f"## Previous error\n\n{error_ctx}\n")
 
         # Resolved context from graph context specs
         resolved = inputs.get("_resolved_context", {})
@@ -64,18 +87,22 @@ class PromptAssembler:
         if system_prompt:
             parts.append(f"## Role\n\n{system_prompt}\n")
 
-        # Feedback from a rejected checkpoint or failed validation
-        feedback = inputs.get("_feedback")
-        if feedback:
-            parts.append(f"## Feedback from previous attempt\n\n{feedback}\n")
-
-        # Error context from a previous failure (error_handler routing)
-        error_ctx = inputs.get("_error")
-        if error_ctx:
-            parts.append(f"## Previous error\n\n{error_ctx}\n")
-
         # The step task itself
-        parts.append(f"## Task\n\nExecute step `{step.step_id}`.")
+        parts.append(f"## Task: {label}\n\nExecute step `{step.step_id}`.")
+
+        # Expected output files
+        expected_files = inputs.get("_expected_files", [])
+        if expected_files:
+            files_list = "\n".join(f"- `{f}`" for f in expected_files)
+            parts.append(f"Write output files to the output directory:\n{files_list}")
+
+        # Output format hints from tool schemas (write_* / create_* tools)
+        tool_schemas = inputs.get("_tool_schemas", {})
+        for name, schema in tool_schemas.items():
+            desc = schema.get("description", "")
+            if desc:
+                parts.append(f"### {name}\n{desc}")
+
         parts.append("Produce the expected output in the format specified.")
 
         return "\n\n".join(parts)
@@ -115,6 +142,7 @@ class SkillTool:
     def __call__(self, action: str = "next", step_id: str = "",
                  result: dict | None = None,
                  feedback: str = "",
+                 redirect_to: str = "",
                  run_id: str = "") -> SkillResponse:
         """Execute an action and return the next instruction.
 
@@ -123,6 +151,7 @@ class SkillTool:
             step_id: Required for "submit" and "reject" (to identify the step).
             result: Output dict for "submit".
             feedback: Rejection reason for "reject".
+            redirect_to: Step ID to redirect to on reject (optional, from SkillResponse.checkpoint_reject_to).
             run_id: Resume an existing run. If empty and action is "next", a new run is created.
 
         Returns:
@@ -194,6 +223,7 @@ class SkillTool:
                 self.sf.reject_checkpoint(
                     self.run_id, step_id or "",
                     feedback or "Rejected",
+                    redirect_to=redirect_to,
                 )
                 self._current_claim = None
 
@@ -223,6 +253,9 @@ class SkillTool:
             tools=claimed.inputs.get("_tool_schemas", {}),
             tool_name=tool_name,
             tool_params=tool_params,
+            output_dir=claimed.inputs.get("_output_dir", ""),
+            expected_files=claimed.inputs.get("_expected_files", []),
+            validation_error=claimed.validation_error or claimed.inputs.get("_validation_error", ""),
         )
 
     def write_output_files(self, step_id: str, result: dict):
@@ -323,6 +356,7 @@ class SkillTool:
         # (current_node points to the NEXT step, the checkpoint target)
         label = "Review"
         checkpoint_step_id = ""
+        checkpoint_reject_to = ""
         try:
             steps = self.sf.get_steps(self.run_id)
             completed = [s for s in steps if s.get("status") == "completed"]
@@ -334,6 +368,8 @@ class SkillTool:
                     checkpoint_step_id = last_step_id
                     if node.checkpoint_label:
                         label = node.checkpoint_label
+                    if node.checkpoint_reject_to:
+                        checkpoint_reject_to = node.checkpoint_reject_to
         except Exception:
             pass
 
@@ -342,6 +378,7 @@ class SkillTool:
             run_id=self.run_id or "",
             step=checkpoint_step_id,
             checkpoint_label=label,
+            checkpoint_reject_to=checkpoint_reject_to,
             instruction=(
                 f"Pipeline paused at checkpoint: {label}\n"
                 f"Call run_skill(action='approve') to continue, "

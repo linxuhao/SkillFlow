@@ -35,7 +35,24 @@ steps:
       fixed:
         pipeline: { file: "skill_pipeline.yaml", on_exists: "new" }
     transitions:
+      - to: "explain_design"
+
+  - id: "explain_design"
+    step_type: "agent"
+    agent_config: "design_explainer"
+    context:
+      - source: { step: "analyze_skill" }
+      - source: { step: "design_graph" }
+    output:
+      mode: "content"
+      fixed:
+        explanation: { file: "design_explanation.md" }
+    checkpoint: true
+    checkpoint_label: "Design Review — approve to validate, reject to revise"
+    checkpoint_reject_to: "design_graph"
+    transitions:
       - to: "validate_design"
+        match: { from: "checkpoint", value: "approved" }
 
   - id: "validate_design"
     step_type: "tool"

@@ -157,6 +157,11 @@ def _register_converter_agents(sf: SkillFlow):
             "tools": ["read_file", "write"],
             "system_prompt": _load_prompt("fix_issues.md"),
         },
+        "design_explainer": {
+            "model": "host",
+            "tools": ["read_file", "write"],
+            "system_prompt": _load_prompt("explain_design.md"),
+        },
     }
     for name, cfg in agents.items():
         try:
