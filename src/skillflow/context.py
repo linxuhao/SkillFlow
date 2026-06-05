@@ -24,25 +24,30 @@ class ContextResolver:
         self._tool_loader = tool_loader
 
     def resolve(self, specs: list[dict],
-                current_config: str = "") -> dict[str, str]:
+                current_config: str = "",
+                loop_context: dict[str, str] | None = None) -> dict[str, str]:
         """Resolve a list of context specs into a dict of label→content.
 
         Returns a dict keyed by human-readable labels (e.g. "Project Brief",
         "Architecture Design") suitable for prompt assembly.
+
+        If *loop_context* is provided, ``$variable`` references in ``file:``
+        fields are substituted with the corresponding loop variable values.
         """
         result: dict[str, str] = {}
         for spec in specs:
             source = spec.get("source", spec)
-            label, content = self._resolve_one(source, current_config)
+            label, content = self._resolve_one(source, current_config, loop_context)
             if content:
                 result[label] = content
         return result
 
-    def _resolve_one(self, source: dict, current_config: str) -> tuple[str, str]:
+    def _resolve_one(self, source: dict, current_config: str,
+                     loop_context: dict[str, str] | None = None) -> tuple[str, str]:
         if "config" in source:
             return self._resolve_cross_config(source, current_config)
         if "step" in source:
-            return self._resolve_step_output(source, current_config)
+            return self._resolve_step_output(source, current_config, loop_context)
         if "tool" in source:
             return self._resolve_tool(source)
         return "", ""
@@ -86,11 +91,23 @@ class ContextResolver:
 
         return "", ""
 
-    def _resolve_step_output(self, source: dict, current_config: str) -> tuple[str, str]:
+    def _resolve_step_output(self, source: dict, current_config: str,
+                              loop_context: dict[str, str] | None = None) -> tuple[str, str]:
+        import re
+
         step_id = source["step"]
         output_file = source.get("output") or source.get("file")
         mode = source.get("mode", "full")
         cfg = current_config or "dpe_default"
+
+        # Substitute $variable references from loop context
+        if output_file and "$" in output_file and loop_context:
+            def _sub(m):
+                var_name = m.group(1)
+                # Look up both [var_name] and plain var_name keys
+                return loop_context.get(f"[{var_name}]",
+                       loop_context.get(var_name, m.group(0)))
+            output_file = re.sub(r'\$(\w+)', _sub, output_file)
 
         # New path: workspace/{project}/{config}/{step_id}/
         step_dir = self._workspace_root / cfg / step_id

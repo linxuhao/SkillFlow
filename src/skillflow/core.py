@@ -107,6 +107,7 @@ class SkillFlow:
                  notification_bus: "NotificationBus | None" = None,
                  workspace_base: str = "",
                  projects_base: str = "",
+                 code_dir: str = "",
                  delegate_tools_to_agent: bool = False):
         self._db_path = db_path
         self._graphs: dict[str, PipelineGraph] = {}
@@ -119,7 +120,8 @@ class SkillFlow:
         self.delegate_tools_to_agent = delegate_tools_to_agent
         if workspace_base:
             from skillflow.workspace import WorkspaceManager
-            self._workspace = WorkspaceManager(workspace_base, projects_base=projects_base)
+            self._workspace = WorkspaceManager(workspace_base, projects_base=projects_base,
+                                                 code_dir=code_dir)
 
         from skillflow.agent_registry import AgentRegistry
         self.agent_registry = AgentRegistry()
@@ -538,7 +540,7 @@ class SkillFlow:
         with self._lock:
             row = self._conn.execute(
                 """SELECT * FROM skillflow_runs
-                   WHERE project_id = ? AND status NOT IN ('completed','failed')
+                   WHERE project_id = ? AND status NOT IN ('completed')
                    ORDER BY created_at DESC LIMIT 1""",
                 (project_id,),
             ).fetchone()
@@ -688,21 +690,8 @@ class SkillFlow:
             if agent_cfg:
                 inputs_with_tools["_agent_config"] = agent_cfg.to_dict()
 
-            # Resolve context specs from the graph step node
-            if self._workspace and node.context:
-                try:
-                    from skillflow.context import ContextResolver
-                    config_path = self._workspace.get_project_path(
-                        run["project_id"]
-                    )
-                    resolver = ContextResolver(config_path, self._tool_loader)
-                    resolved = resolver.resolve(node.context, current_config=run["graph_name"])
-                    if resolved:
-                        inputs_with_tools["_resolved_context"] = resolved
-                except Exception:
-                    pass  # Context resolution is best-effort
-
-            # Inject loop item context if this step is inside a loop body
+            # Extract loop item context FIRST so context resolution can reference it
+            loop_context: dict[str, str] = {}
             loop_row = conn.execute(
                 "SELECT current_index, items_json, item_context_key "
                 "FROM skillflow_loop_state WHERE run_id = ?",
@@ -714,11 +703,35 @@ class SkillFlow:
                 key = loop_row["item_context_key"] or "loop_item"
                 if 0 <= idx < len(items):
                     item = items[idx]
-                    if "_resolved_context" not in inputs_with_tools:
-                        inputs_with_tools["_resolved_context"] = {}
-                    inputs_with_tools["_resolved_context"][f"[{key}]"] = (
-                        self._serialize(item) if not isinstance(item, str) else item
+                    val = self._serialize(item) if not isinstance(item, str) else item
+                    loop_context[f"[{key}]"] = val
+                    loop_context[key] = val
+
+            # Resolve context specs from the graph step node (loop vars available as $var)
+            if self._workspace and node.context:
+                try:
+                    from skillflow.context import ContextResolver
+                    config_path = self._workspace.get_project_path(
+                        run["project_id"]
                     )
+                    resolver = ContextResolver(config_path, self._tool_loader)
+                    resolved = resolver.resolve(
+                        node.context,
+                        current_config=run["graph_name"],
+                        loop_context=loop_context if loop_context else None,
+                    )
+                    if resolved:
+                        inputs_with_tools["_resolved_context"] = resolved
+                except Exception:
+                    pass  # Context resolution is best-effort
+
+            # Also inject loop variables directly for prompt-level access
+            if loop_context:
+                if "_resolved_context" not in inputs_with_tools:
+                    inputs_with_tools["_resolved_context"] = {}
+                for k, v in loop_context.items():
+                    if k.startswith("[") and k not in inputs_with_tools["_resolved_context"]:
+                        inputs_with_tools["_resolved_context"][k] = v
 
             # Merge dynamic write tool schemas from graph's output.fixed
             if node.output_mode and node.output_fixed:
@@ -805,7 +818,7 @@ class SkillFlow:
                     token, node, hook_name, hook_spec
                 )
                 if not hook_result.get("passed", False):
-                    error = hook_result.get("error", "Lifecycle hook failed")
+                    error = hook_result.get("error", f"Lifecycle hook '{hook_name}' failed")
                     on_failure = hook_spec.get("on_failure", "fail") if isinstance(hook_spec, dict) else "fail"
                     if on_failure == "retry":
                         self._handle_lifecycle_retry(token, error)
@@ -979,7 +992,7 @@ class SkillFlow:
                 params.setdefault("workspace_root",
                                   str(self._workspace.get_project_path(row["project_id"])))
                 params.setdefault("project_root",
-                                  str(self._workspace.projects_base / row["project_id"]))
+                                  str(self._workspace.get_project_code_path(row["project_id"])))
 
         # Built-in step_commit: move tmp→step_dir atomically
         if tool_name == "step_commit":
@@ -1025,13 +1038,26 @@ class SkillFlow:
 
         # after_deliver checks against the project repo, not step output
         if hook_name == "after_deliver":
-            check_dir = self._workspace.projects_base / pid
+            check_dir = self._workspace.get_project_code_path(pid)
         else:
             check_dir = self._workspace.get_step_dir(pid, gname, token.step_id)
 
         from skillflow.step_validation import StepValidator
         validator = StepValidator(self._tool_loader, check_dir)
-        return validator.validate(check_specs)
+        result = validator.validate(check_specs)
+        # Normalize: StepValidator returns "errors" (plural list),
+        # but callers expect "error" (singular string).
+        if "errors" in result and "error" not in result:
+            err_list = result["errors"]
+            if err_list:
+                parts = []
+                for e in err_list:
+                    if isinstance(e, dict):
+                        parts.append(f"{e.get('tool','?')}: {e.get('error', str(e))}")
+                    else:
+                        parts.append(str(e))
+                result["error"] = "; ".join(parts)
+        return result
 
     def _step_commit(self, token: ClaimToken) -> dict:
         """Built-in: atomic rename tmp_dir → step_dir."""

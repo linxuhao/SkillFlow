@@ -33,11 +33,12 @@ class WorkspaceManager:
     """
 
     def __init__(self, base_path: str = "~/.skillflow/workspaces",
-                 projects_base: str = ""):
+                 projects_base: str = "", code_dir: str = ""):
         self.base_path = Path(base_path).expanduser().resolve()
         self.base_path.mkdir(parents=True, exist_ok=True)
         self.projects_base = Path(projects_base).expanduser().resolve() if projects_base else self.base_path / "projects"
         self.projects_base.mkdir(parents=True, exist_ok=True)
+        self._code_dir = Path(code_dir).expanduser().resolve() if code_dir else None
 
     # ── Project-level paths ──────────────────────────────────────────
 
@@ -63,6 +64,18 @@ class WorkspaceManager:
         p = self.get_project_path(project_id) / "tasks"
         p.mkdir(parents=True, exist_ok=True)
         return p
+
+    def get_project_code_path(self, project_id: str) -> Path:
+        """Return the project's code repository root path.
+
+        Default: _code_dir / project_id if code_dir was set,
+        otherwise projects_base / project_id.
+        Hosts with custom repo paths (e.g. 'existing' repos) should
+        pass code_dir to __init__.
+        """
+        if self._code_dir:
+            return (self._code_dir / project_id).resolve()
+        return (self.projects_base / project_id).resolve()
 
     # ── Step-level paths ─────────────────────────────────────────────
 
