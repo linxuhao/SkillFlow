@@ -50,6 +50,10 @@ class NotificationBus:
         self._subscribers: list[Subscriber] = []
         self._db_path = db_path
         self._conn = None  # lazy init from SkillFlow's connection
+        # B3: asyncio only holds a weak ref to fire-and-forget tasks, so they get
+        # GC'd while pending ("Task was destroyed but it is pending!"). Keep a
+        # strong ref until each task completes.
+        self._bg_tasks: set = set()
 
     # ── Subscriber management ──────────────────────────────────────
 
@@ -99,9 +103,11 @@ class NotificationBus:
             )
             self._write_outbox(notification)
             return
-        loop.create_task(self.publish(event_type, payload,
-                                      step_id=step_id, run_id=run_id,
-                                      target=target))
+        task = loop.create_task(self.publish(event_type, payload,
+                                             step_id=step_id, run_id=run_id,
+                                             target=target))
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
     # ── Outbox ──────────────────────────────────────────────────────
 

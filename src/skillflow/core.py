@@ -69,6 +69,11 @@ class ClaimedStep:
         default=lambda event_type, payload: _noop_emit(event_type, payload)
     )
 
+    @property
+    def step_instance_id(self) -> int:
+        """FW-7: top-level convenience accessor for token.step_instance_id."""
+        return self.token.step_instance_id
+
     def flat_inputs(self) -> dict:
         result: dict = {}
         for step_outputs in self.inputs.values():
