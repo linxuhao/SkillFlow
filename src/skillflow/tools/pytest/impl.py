@@ -26,8 +26,12 @@ def pytest(file: str, *, workspace_root: str = "") -> dict:
         [sys.executable, "-m", "pytest", str(full), "-q", "--tb=short"],
         capture_output=True, text=True, timeout=60, cwd=cwd, env=env
     )
-    if r.returncode != 0:
-        return {"verdict": "failed",
-                "feedback": r.stdout.strip()[-500:] or r.stderr.strip()[-500:]}
-
-    return {"verdict": "passed", "feedback": ""}
+    # pytest exit codes: 0=passed, 1=failures, 2=interrupted, 3=internal,
+    # 4=usage, 5=no tests collected. The lifecycle hook runs pytest on EVERY
+    # written .py file (incl. non-test modules), so exit 5 ("no tests ran") is
+    # expected and must NOT fail the build — only real test failures (exit 1)
+    # and infra errors (2/3) should.
+    if r.returncode in (0, 5):
+        return {"verdict": "passed", "feedback": ""}
+    return {"verdict": "failed",
+            "feedback": r.stdout.strip()[-500:] or r.stderr.strip()[-500:]}
