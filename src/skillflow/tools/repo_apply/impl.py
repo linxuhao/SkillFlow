@@ -47,7 +47,14 @@ def repo_apply(source_dir: str, *, workspace_root: str = "",
         cwd=dst, capture_output=True, text=True
     )
     if r.returncode != 0:
+        # "nothing to commit" is not a failure: the files were copied but are
+        # byte-identical to what's already committed (idempotent re-apply, e.g.
+        # a t_impl retry). The desired state is present, so report success
+        # rather than triggering a wasteful on_deliver retry loop.
+        combined = (r.stdout + r.stderr).lower()
+        if "nothing to commit" in combined or "no changes added" in combined:
+            return {"applied": True, "files": applied_files, "committed": False}
         return {"applied": False, "files": applied_files,
-                "error": f"git commit failed: {r.stderr.strip()}"}
+                "error": f"git commit failed: {(r.stderr or r.stdout).strip()}"}
 
-    return {"applied": True, "files": applied_files}
+    return {"applied": True, "files": applied_files, "committed": True}

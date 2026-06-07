@@ -15,13 +15,19 @@ def pytest(file: str, *, workspace_root: str = "") -> dict:
     if not file.endswith(".py"):
         return {"verdict": "passed", "feedback": ""}
 
-    # NB-4: run pytest FROM the project root (the dir holding the test file, where
-    # the implementation is assembled), not the server CWD. Tests that shell out
-    # to the CLI by relative path (subprocess.run([sys.executable, "add.py", ...]))
-    # or import the module need to resolve it relative to that dir.
-    cwd = str(full.parent)
+    # Run pytest FROM the repo root (workspace_root), not the test file's
+    # directory. A test like tests/test_pkg.py that does `from pkg.mod import x`
+    # needs the repo root on sys.path so the `pkg/` package (at the repo root)
+    # resolves — running from tests/ put only tests/ on the path and caused
+    # `ModuleNotFoundError: No module named 'pkg'` (AT-9 fallout). We still add
+    # the test file's own dir to PYTHONPATH for tests that shell out to sibling
+    # files by relative path (the prior NB-4 case).
+    repo_root = str(Path(workspace_root).resolve()) if workspace_root else str(full.parent)
+    test_parent = str(full.parent)
+    cwd = repo_root
+    pp_parts = [repo_root, test_parent, os.environ.get("PYTHONPATH", "")]
     env = {**os.environ,
-           "PYTHONPATH": cwd + os.pathsep + os.environ.get("PYTHONPATH", "")}
+           "PYTHONPATH": os.pathsep.join(p for p in pp_parts if p)}
     r = subprocess.run(
         [sys.executable, "-m", "pytest", str(full), "-q", "--tb=short"],
         capture_output=True, text=True, timeout=60, cwd=cwd, env=env

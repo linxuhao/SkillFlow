@@ -10,10 +10,15 @@ def dir_tree(config_name: str = "", *, workspace_root: str = "",
     """Return a combined tree of workspace + project directories."""
     parts = []
 
-    # Project repo tree
+    # Project repo tree. The header is a COMMENT, not a path component: an
+    # earlier version emitted a bare "project/" line, which models read as a
+    # real directory and mirrored into write paths (e.g. project/pkg/x.py
+    # alongside pkg/x.py) — see AT-9. Render entries as "./"-rooted, repo-
+    # relative paths so there is exactly one unambiguous root to write to.
     proj = Path(project_root) if project_root else Path(workspace_root)
     if proj.exists():
-        parts.append("project/")
+        parts.append("# repo root (write paths are relative to here, e.g. ./pkg/mod.py):")
+        parts.append("./")
         for item in sorted(proj.rglob("*"))[:100]:
             rel = item.relative_to(proj)
             if len(rel.parts) > 3:

@@ -227,11 +227,26 @@ def execute_append(slot: str, fixed: dict, params: dict,
     return {"written": base_name}
 
 
+def normalize_repo_path(raw: str) -> list[str]:
+    """Sanitize a model-supplied write path to repo-relative components.
+
+    Drops '.', '..', absolute leading slashes (traversal defence) AND strips a
+    leading 'project/' phantom-root component (AT-9): some models prepend it
+    because a dir_tree header looked like a real directory, producing
+    project/pkg/x.py alongside pkg/x.py. Collapsing to a single canonical root
+    keeps each logical file at one path.
+    """
+    parts = [p for p in Path(raw).parts
+             if p not in ('.', '..') and not p.startswith('/')]
+    if parts and parts[0] == "project":
+        parts = parts[1:]
+    return parts
+
+
 def execute_generic_write(params: dict, output_dir: str) -> dict:
     """Execute a generic write(file, content) call. Sanitizes filename."""
     raw = params.get("file") or params.get("filename") or params.get("path", "")
-    safe_parts = [p for p in Path(raw).parts
-                  if p not in ('.', '..') and not p.startswith('/')]
+    safe_parts = normalize_repo_path(raw)
     if not safe_parts:
         return {"error": "Invalid filename: path traversal denied"}
     path = Path(output_dir) / str(Path(*safe_parts))

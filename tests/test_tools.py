@@ -74,7 +74,11 @@ class TestDirTree:
 
         result = dir_tree(workspace_root=str(tmp_path),
                           project_root=str(proj))
-        assert "project/" in result["tree"]
+        # AT-9: tree is rooted at ./ with a clarifying comment, NOT a bare
+        # "project/" line that models mirror into write paths.
+        assert "./" in result["tree"]
+        assert "repo root" in result["tree"]
+        assert "\nproject/" not in result["tree"]
         assert "index.html" in result["tree"]
 
 
@@ -306,3 +310,81 @@ class TestPytestToolEdgeCases:
         (tmp_path / "README.md").write_text("# readme")
         result = pytest_tool("README.md", workspace_root=str(tmp_path))
         assert result["verdict"] == "passed"
+
+
+class TestWritePathNormalization:
+    """AT-9: collapse the phantom 'project/' root in write paths."""
+
+    def test_generic_write_strips_project_prefix(self, tmp_path):
+        from skillflow.write_tools import execute_generic_write, normalize_repo_path
+        assert normalize_repo_path("project/strkit/core.py") == ["strkit", "core.py"]
+        assert normalize_repo_path("strkit/core.py") == ["strkit", "core.py"]
+        assert normalize_repo_path("core.py") == ["core.py"]
+        # write lands at the collapsed path
+        r = execute_generic_write({"file": "project/strkit/core.py", "content": "x=1"}, str(tmp_path))
+        assert r["written"] == "strkit/core.py"
+        assert (tmp_path / "strkit" / "core.py").read_text() == "x=1"
+
+    def test_generic_write_dedup_collapses_to_one_file(self, tmp_path):
+        from skillflow.write_tools import execute_generic_write
+        execute_generic_write({"file": "project/strkit/core.py", "content": "A"}, str(tmp_path))
+        execute_generic_write({"file": "strkit/core.py", "content": "B"}, str(tmp_path))
+        # both resolve to the same path → one file, last wins
+        assert (tmp_path / "strkit" / "core.py").read_text() == "B"
+        assert not (tmp_path / "project").exists()
+
+    def test_write_tool_strips_project_prefix(self, tmp_path):
+        from skillflow.tools.write.impl import write
+        r = write("project/pkg/m.py", "x=1", workspace_root=str(tmp_path))
+        assert r["written"] == "pkg/m.py"
+        assert (tmp_path / "pkg" / "m.py").exists()
+
+
+class TestRepoApplyIdempotent:
+    """AT-9 fallout: 'nothing to commit' is success, not a retry-triggering error."""
+
+    def test_reapply_identical_is_success(self, tmp_path):
+        import subprocess
+        from skillflow.tools.repo_apply.impl import repo_apply
+        repo = tmp_path / "repo"; repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=repo)
+        src = tmp_path / "src"; src.mkdir()
+        (src / "a.py").write_text("x=1")
+        r1 = repo_apply(source_dir=str(src), project_root=str(repo))
+        assert r1["applied"] and r1.get("committed") is True
+        # second identical apply → nothing to commit, still success
+        r2 = repo_apply(source_dir=str(src), project_root=str(repo))
+        assert r2["applied"] is True
+        assert r2.get("committed") is False
+        assert "error" not in r2
+
+
+class TestPytestPackageImport:
+    """AT-9 fallout: tests/test_x.py importing a repo-root package must resolve."""
+
+    def test_repo_root_package_import_resolves(self, tmp_path):
+        # repo_root/strkit/core.py + repo_root/tests/test_core.py importing it
+        (tmp_path / "strkit").mkdir()
+        (tmp_path / "strkit" / "__init__.py").write_text("")
+        (tmp_path / "strkit" / "core.py").write_text("def reverse(s):\n    return s[::-1]\n")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_core.py").write_text(
+            "from strkit.core import reverse\n"
+            "def test_reverse():\n    assert reverse('ab') == 'ba'\n"
+        )
+        result = pytest_tool("tests/test_core.py", workspace_root=str(tmp_path))
+        assert result["verdict"] == "passed", result.get("feedback")
+
+    def test_namespace_package_without_init_resolves(self, tmp_path):
+        # PEP 420: package dir without __init__.py still imports if repo root on path
+        (tmp_path / "strkit").mkdir()
+        (tmp_path / "strkit" / "core.py").write_text("def f():\n    return 1\n")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_core.py").write_text(
+            "from strkit.core import f\n"
+            "def test_f():\n    assert f() == 1\n"
+        )
+        result = pytest_tool("tests/test_core.py", workspace_root=str(tmp_path))
+        assert result["verdict"] == "passed", result.get("feedback")
