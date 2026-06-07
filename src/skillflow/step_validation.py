@@ -24,9 +24,20 @@ if TYPE_CHECKING:
 class StepValidator:
     """Runs validation tool specs against step output files."""
 
-    def __init__(self, tool_loader: "ToolLoader", workspace_root: Path):
+    def __init__(self, tool_loader: "ToolLoader", workspace_root: Path,
+                 trace_sink=None):
         self._tool_loader = tool_loader
         self._workspace_root = Path(workspace_root)
+        # Optional callable(event: str, payload: dict) — pre-bound by the caller
+        # with run/step ids so validation/check tools land in the run trace too.
+        self._trace_sink = trace_sink
+
+    def _trace(self, event: str, payload: dict) -> None:
+        if self._trace_sink:
+            try:
+                self._trace_sink(event, payload)
+            except Exception:
+                pass
 
     def validate(self, specs: list[dict]) -> dict:
         """Run all validation specs. Returns {passed: True} or {passed: False, errors: [...]}."""
@@ -42,7 +53,9 @@ class StepValidator:
                 fn = self._tool_loader.load_fn(tool_name)
             except ImportError as e:
                 errors.append({"tool": tool_name, "error": f"Tool not found: {e}"})
+                self._trace(tool_name, {"source": "validation", "error": f"not found: {e}"})
                 continue
+            self._trace(tool_name, {"source": "validation", "files": file_patterns})
 
             sig = inspect.signature(fn)
             takes_singular = "file" in sig.parameters

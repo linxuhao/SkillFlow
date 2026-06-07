@@ -1219,3 +1219,49 @@ def test_claimed_step_trace_bound(sf: SkillFlow):
     assert recs[0]["step_instance_id"] == claimed.step_instance_id
     # The claim itself is also traced.
     assert any(r["event"] == "claimed" for r in sf.get_trace(rid, category="step"))
+
+
+def test_trace_records_tool_step_node(sf: SkillFlow, tmp_path: Path):
+    """A tool-type STEP node (not agent-invoked) is traced with source=tool_step."""
+    from skillflow.graph import StepNode
+    tool_node = StepNode(id="apply", step_type="tool", tool_name="notify",
+                         tool_params={"message": "hi", "level": "info"})
+    sf._tool_loader = ToolLoader(Path(__file__).parent.parent / "src" / "skillflow" / "tools")
+    sf._workspace = WorkspaceManager(str(tmp_path / "ws"))
+    rid = "run-toolstep"
+    # create a run row so project_root resolution works
+    sf._conn.execute(
+        "INSERT INTO skillflow_runs (id, graph_name, project_id, status, context_json) "
+        "VALUES (?,?,?,?,?)", (rid, "g", "pid", "running", "{}"))
+    sf._conn.commit()
+
+    sf._execute_tool_inline(tool_node, run_id=rid, graph_name="g")
+
+    cats = [(r["category"], r["event"], r["payload"].get("source")) for r in sf.get_trace(rid)]
+    assert ("tool_call", "notify", "tool_step") in cats
+    assert ("tool_result", "notify", "tool_step") in cats
+
+
+def test_trace_records_validation_tools(sf: SkillFlow, tmp_path: Path):
+    """Validation specs run via StepValidator are traced (source=validation)."""
+    node = StepNode(
+        id="s1", step_type="agent", output_mode="write",
+        validation=[{"files": ["*.py"], "tool": "syntax_lint"}],
+        transitions=[Transition(to=None)],
+    )
+    g = PipelineGraph(name="t_val", begin="s1", steps=[node])
+    sf.register_graph(g)
+    sf._tool_loader = ToolLoader(Path(__file__).parent.parent / "src" / "skillflow" / "tools")
+    sf._workspace = WorkspaceManager(str(tmp_path / "wsv"))
+    rid = sf.create_run("t_val", {"project_id": "pidv"})
+    sf.start_run(rid)
+    sf.advance_run(rid)
+    claimed = sf.claim_next_step(rid)
+    # write a valid python file to the step tmp dir
+    tmp = sf._workspace.get_step_tmp_dir("pidv", "t_val", "s1")
+    (tmp / "ok.py").write_text("x = 1\n")
+
+    sf.confirm_step(claimed.token, StepResult(outputs={}, flags={}))
+
+    val = [r for r in sf.get_trace(rid) if r["payload"].get("source") == "validation"]
+    assert any(r["event"] == "syntax_lint" for r in val)

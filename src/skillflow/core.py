@@ -993,8 +993,18 @@ class SkillFlow:
         gname = self._get_graph_name(token.run_id)
         tmp_dir = self._workspace.get_step_tmp_dir(pid, gname, token.step_id)
         from skillflow.step_validation import StepValidator
-        validator = StepValidator(self._tool_loader, tmp_dir)
+        validator = StepValidator(self._tool_loader, tmp_dir,
+                                  trace_sink=self._validation_trace_sink(token))
         return validator.validate(node.validation)
+
+    def _validation_trace_sink(self, token: ClaimToken):
+        """Pre-bound (event, payload) sink so validation/check tools land in
+        the run trace under category 'tool_call' with source='validation'."""
+        def sink(event: str, payload: dict):
+            self.trace(token.run_id, "tool_call", event, payload,
+                       step_id=token.step_id,
+                       step_instance_id=token.step_instance_id)
+        return sink
 
     # ── Lifecycle hooks ─────────────────────────────────────────────
 
@@ -1108,7 +1118,8 @@ class SkillFlow:
             check_dir = self._workspace.get_step_dir(pid, gname, token.step_id)
 
         from skillflow.step_validation import StepValidator
-        validator = StepValidator(self._tool_loader, check_dir)
+        validator = StepValidator(self._tool_loader, check_dir,
+                                  trace_sink=self._validation_trace_sink(token))
         result = validator.validate(check_specs)
         # Normalize: StepValidator returns "errors" (plural list),
         # but callers expect "error" (singular string).
@@ -1378,9 +1389,35 @@ class SkillFlow:
                                       str(self._workspace.projects_base / pid))
             except Exception:
                 pass  # variable resolution is best-effort
+        # Trace tool-type STEP nodes (e.g. repo_apply/repo_validate/notify as
+        # whole steps) the same way agent-invoked tools are traced.
+        param_summary = {k: (f"<{len(v)} chars>" if isinstance(v, str) and len(v) > 200 else v)
+                         for k, v in kwargs.items()
+                         if k not in ("run_id", "workspace_root", "project_root")}
+        self.trace(run_id, "tool_call", tool_node.tool_name,
+                   {"source": "tool_step", "params": param_summary},
+                   step_id=tool_node.id)
+        # Filter injected context kwargs to what the tool actually accepts
+        # (consistent with _execute_tool_hook / execute_tool). Without this,
+        # a tool-step tool that doesn't declare e.g. project_root crashes.
+        import inspect as _inspect
+        try:
+            sig = _inspect.signature(fn)
+            if not any(p.kind == _inspect.Parameter.VAR_KEYWORD
+                       for p in sig.parameters.values()):
+                kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+        except (ValueError, TypeError):
+            pass
         result = fn(**kwargs)
         if not isinstance(result, dict):
             result = {"output": result}
+        res_summary = {k: result[k] for k in ("written", "error", "applied", "files", "passed")
+                       if k in result}
+        if isinstance(res_summary.get("files"), list):
+            res_summary["files"] = len(res_summary["files"])
+        self.trace(run_id, "tool_result", tool_node.tool_name,
+                   {"source": "tool_step", **(res_summary or {"keys": sorted(result.keys())})},
+                   step_id=tool_node.id)
         return result
 
     def _confirm_tool_in_tx(self, conn, run_id: str, step_id: str,
@@ -2154,18 +2191,19 @@ class SkillFlow:
         # Trace the call (params summarized — content fields can be huge).
         param_summary = {k: (f"<{len(v)} chars>" if isinstance(v, str) and len(v) > 200 else v)
                          for k, v in (params or {}).items()}
-        self.trace(run_id, "tool_call", name, {"params": param_summary},
+        self.trace(run_id, "tool_call", name,
+                   {"source": "agent", "params": param_summary},
                    step_id=step_id)
         result = self._execute_tool_impl(name, params, run_id=run_id,
                                          step_id=step_id, project_root=project_root)
         # Trace the result (key fields only).
-        res_summary: dict = {}
+        res_summary: dict = {"source": "agent"}
         if isinstance(result, dict):
             for k in ("written", "error", "applied", "size"):
                 if k in result:
                     res_summary[k] = result[k]
-            if not res_summary:
-                res_summary = {"keys": sorted(result.keys())}
+            if len(res_summary) == 1:
+                res_summary["keys"] = sorted(result.keys())
         self.trace(run_id, "tool_result", name, res_summary, step_id=step_id)
         return result
 
