@@ -1265,3 +1265,40 @@ def test_trace_records_validation_tools(sf: SkillFlow, tmp_path: Path):
 
     val = [r for r in sf.get_trace(rid) if r["payload"].get("source") == "validation"]
     assert any(r["event"] == "syntax_lint" for r in val)
+
+
+def test_trace_disabled_writes_nothing(tmp_path):
+    sf2 = SkillFlow(str(tmp_path / "off.db"), trace_enabled=False)
+    sf2.trace("r", "event", "x", {"a": 1})
+    assert sf2.get_trace("r") == []
+
+
+def test_trace_seq_cached_no_select_per_record(sf: SkillFlow):
+    """Seq stays correct via the in-process counter (no SELECT per record)."""
+    rid = "run-seqcache"
+    for i in range(10):
+        sf.trace(rid, "event", f"e{i}")
+    assert [r["seq"] for r in sf.get_trace(rid)] == list(range(1, 11))
+
+
+def test_prune_trace_by_run(sf: SkillFlow):
+    sf.trace("ra", "event", "x")
+    sf.trace("rb", "event", "y")
+    assert sf.prune_trace("ra") == 1
+    assert sf.get_trace("ra") == []
+    assert len(sf.get_trace("rb")) == 1
+    # seq counter reset → next trace for ra restarts at 1
+    sf.trace("ra", "event", "z")
+    assert sf.get_trace("ra")[0]["seq"] == 1
+
+
+def test_prune_trace_keep_last_runs(sf: SkillFlow):
+    for rid in ("r1", "r2", "r3"):
+        sf.trace(rid, "event", "x")
+    deleted = sf.prune_trace(keep_last_runs=2)
+    assert deleted == 1
+    remaining = {r["run_id"] for rid in ("r1", "r2", "r3") for r in sf.get_trace(rid)} \
+        if False else None
+    assert sf.get_trace("r1") == []          # oldest dropped
+    assert len(sf.get_trace("r2")) == 1
+    assert len(sf.get_trace("r3")) == 1

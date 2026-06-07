@@ -129,12 +129,19 @@ class SkillFlow:
                  workspace_base: str = "",
                  projects_base: str = "",
                  code_dir: str = "",
-                 delegate_tools_to_agent: bool = False):
+                 delegate_tools_to_agent: bool = False,
+                 trace_enabled: bool = True):
         self._db_path = db_path
         self._graphs: dict[str, PipelineGraph] = {}
         self._resolvers: dict[str, GraphResolver] = {}
         self._lock = threading.RLock()
         self._tool_loader = tool_loader
+        # Durable run trace. Per-run seq is cached in-process so a hot path
+        # never pays a SELECT MAX(seq) per record (that scan dominated the
+        # write cost in benchmarks). Set trace_enabled=False to disable the
+        # trace entirely (zero write overhead) for latency-sensitive hosts.
+        self._trace_enabled = trace_enabled
+        self._trace_seq: dict[str, int] = {}
         self._load_native_tools()
         self._stale_threshold = stale_threshold_seconds
         self._workspace = None
@@ -2115,16 +2122,22 @@ class SkillFlow:
                   'agent_response').
         payload:  arbitrary JSON-able detail; long strings are clipped.
         """
-        if not run_id:
+        if not run_id or not self._trace_enabled:
             return
         clean = {k: self._clip(v) for k, v in (payload or {}).items()}
         try:
             with self._lock:
-                row = self._conn.execute(
-                    "SELECT COALESCE(MAX(seq), 0) + 1 FROM skillflow_trace WHERE run_id = ?",
-                    (run_id,),
-                ).fetchone()
-                seq = row[0] if row else 1
+                # Per-run seq from an in-process counter; seed once from the DB
+                # (one SELECT per run, not per record) so restarts stay ordered.
+                seq = self._trace_seq.get(run_id)
+                if seq is None:
+                    row = self._conn.execute(
+                        "SELECT COALESCE(MAX(seq), 0) FROM skillflow_trace WHERE run_id = ?",
+                        (run_id,),
+                    ).fetchone()
+                    seq = row[0] if row else 0
+                seq += 1
+                self._trace_seq[run_id] = seq
                 self._conn.execute(
                     """
                     INSERT INTO skillflow_trace
@@ -2138,6 +2151,37 @@ class SkillFlow:
         except Exception:
             # Tracing must never break a run.
             pass
+
+    def prune_trace(self, run_id: str | None = None, *,
+                    keep_last_runs: int | None = None) -> int:
+        """Delete trace records to bound growth (the table is append-only).
+
+        - run_id: drop all trace for one run.
+        - keep_last_runs: keep only the N most recently-traced runs, drop older.
+        Returns the number of rows deleted. Host calls this as housekeeping
+        (e.g. on run deletion or a periodic cap); skillflow never auto-prunes.
+        """
+        deleted = 0
+        with self._lock:
+            if run_id is not None:
+                cur = self._conn.execute(
+                    "DELETE FROM skillflow_trace WHERE run_id = ?", (run_id,))
+                deleted += cur.rowcount
+                self._trace_seq.pop(run_id, None)
+            if keep_last_runs is not None:
+                keep = [r[0] for r in self._conn.execute(
+                    "SELECT run_id FROM skillflow_trace GROUP BY run_id "
+                    "ORDER BY MAX(id) DESC LIMIT ?", (keep_last_runs,)).fetchall()]
+                if keep:
+                    ph = ",".join("?" * len(keep))
+                    cur = self._conn.execute(
+                        f"DELETE FROM skillflow_trace WHERE run_id NOT IN ({ph})", keep)
+                    deleted += cur.rowcount
+                    for rid in list(self._trace_seq):
+                        if rid not in keep:
+                            self._trace_seq.pop(rid, None)
+            self._conn.commit()
+        return deleted
 
     def get_trace(self, run_id: str, *, step_instance_id: int | None = None,
                   category: str | None = None) -> list[dict]:
