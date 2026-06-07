@@ -112,6 +112,20 @@ CREATE TABLE IF NOT EXISTS skillflow_outbox (
 );
 """
 
+SKILLFLOW_TRACE = """
+CREATE TABLE IF NOT EXISTS skillflow_trace (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id           TEXT NOT NULL,
+    step_id          TEXT,
+    step_instance_id INTEGER,
+    seq              INTEGER NOT NULL,
+    category         TEXT NOT NULL,
+    event            TEXT NOT NULL,
+    payload_json     TEXT NOT NULL DEFAULT '{}',
+    created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
 # ── Indexes ─────────────────────────────────────────────────────────
 
 SKILLFLOW_INDEXES = [
@@ -123,6 +137,8 @@ SKILLFLOW_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_skillflow_edge_counts_run ON skillflow_edge_counts(run_id);",
     "CREATE INDEX IF NOT EXISTS idx_skillflow_outbox_status ON skillflow_outbox(status);",
     "CREATE INDEX IF NOT EXISTS idx_skillflow_loop_state_run ON skillflow_loop_state(run_id);",
+    "CREATE INDEX IF NOT EXISTS idx_skillflow_trace_run ON skillflow_trace(run_id, seq);",
+    "CREATE INDEX IF NOT EXISTS idx_skillflow_trace_step ON skillflow_trace(step_instance_id);",
 ]
 
 # ── Ordered DDL list ────────────────────────────────────────────────
@@ -135,6 +151,7 @@ ALL_DDL: list[str] = [
     SKILLFLOW_EDGE_COUNTS,
     SKILLFLOW_LOOP_STATE,
     SKILLFLOW_OUTBOX,
+    SKILLFLOW_TRACE,
 ]
 
 # ── Migrations (run after DDL, errors are non-fatal) ──────────────────

@@ -68,6 +68,11 @@ class ClaimedStep:
     emit: Callable[[str, dict], Awaitable[None]] = field(
         default=lambda event_type, payload: _noop_emit(event_type, payload)
     )
+    # Durable trace sink — bound by claim_next_step to SkillFlow.trace with the
+    # run/step/instance ids prefilled. Lets the host record full prompts,
+    # responses and actions to the append-only trace. No-op by default so a
+    # ClaimedStep built in isolation (tests) still works.
+    trace: Callable[..., None] = field(default=lambda category, event, payload=None: None)
 
     @property
     def step_instance_id(self) -> int:
@@ -800,13 +805,29 @@ class SkillFlow:
                 (self._serialize(inputs_with_tools), step_row["id"]),
             )
 
+            claimed_step_id = run["current_node"]
+            claimed_instance_id = token.step_instance_id
+
+            def _trace(category: str, event: str, payload: dict | None = None,
+                       _rid=token.run_id, _sid=claimed_step_id, _inst=claimed_instance_id):
+                self.trace(_rid, category, event, payload,
+                           step_id=_sid, step_instance_id=_inst)
+
+            # Record the claim itself, so the trace shows step boundaries +
+            # any reopen reason (reject feedback / validation error).
+            _trace("step", "claimed", {
+                "attempt_feedback": bool(inputs_with_tools.get("_feedback")),
+                "validation_error": validation_error,
+            })
+
             return ClaimedStep(
-                token=token, step_id=run["current_node"],
+                token=token, step_id=claimed_step_id,
                 step_config=node.config,
                 run_context=self._deserialize(run["context_json"]),
                 inputs=inputs_with_tools,
                 validation_error=validation_error,
                 error_context=error_context,
+                trace=_trace,
             )
 
     def confirm_step(self, token: ClaimToken, result: StepResult) -> None:
@@ -849,14 +870,25 @@ class SkillFlow:
                     error = hook_result.get("error", f"Lifecycle hook '{hook_name}' failed")
                     on_failure = hook_spec.get("on_failure", "fail") if isinstance(hook_spec, dict) else "fail"
                     if on_failure == "retry":
+                        self._emit_lifecycle_event(token, hook_name, "retry", error)
                         self._handle_lifecycle_retry(token, error)
                         return
                     elif on_failure == "skip":
                         self._emit_lifecycle_event(token, hook_name, "skipped", error)
                         continue
                     else:
+                        self._emit_lifecycle_event(token, hook_name, "failed", error)
                         self._handle_lifecycle_failure(token, error)
                         return
+                # Success: emit the terminal event the trace was missing. Surface
+                # any useful detail the hook returned (e.g. files applied count).
+                detail = ""
+                files = hook_result.get("files")
+                if isinstance(files, list):
+                    detail = f"{len(files)} file(s)"
+                elif hook_result.get("committed"):
+                    detail = "committed"
+                self._emit_lifecycle_event(token, hook_name, "completed", detail)
 
         with self._tx() as conn:
             cursor = conn.execute(
@@ -906,8 +938,13 @@ class SkillFlow:
                     "step_instance_id": token.step_instance_id,
                 }),),
             )
+        self.trace(token.run_id, "step", "completed",
+                   {"flags": result.flags, "next_node": next_node},
+                   step_id=token.step_id, step_instance_id=token.step_instance_id)
 
     def _handle_validation_failure(self, token: ClaimToken, error: str) -> None:
+        self.trace(token.run_id, "step", "validation_failed", {"error": error},
+                   step_id=token.step_id, step_instance_id=token.step_instance_id)
         resolver = self._get_resolver_for_run(token.run_id)
         node = resolver.get_node(token.step_id)
         if not node:
@@ -1170,6 +1207,11 @@ class SkillFlow:
                 (self._serialize(payload),),
             )
             self._conn.commit()
+        # Mirror to the durable trace (outbox rows are drained + deleted).
+        self.trace(token.run_id, "lifecycle", hook_name,
+                   {"status": status, "detail": detail},
+                   step_id=token.step_id,
+                   step_instance_id=token.step_instance_id)
 
     def fail_step(self, token: ClaimToken, error: str, retryable: bool = True) -> None:
         with self._tx() as conn:
@@ -2010,6 +2052,80 @@ class SkillFlow:
                 event_ids,
             )
 
+    # ── Durable run trace (append-only audit log) ───────────────────
+    # Unlike the outbox (drained + ack'd for SSE delivery), the trace is
+    # never deleted. It records every event/prompt/tool-action/lifecycle
+    # outcome keyed by step_instance_id, so loop iterations never overwrite
+    # one another and a finished run can be reconstructed offline.
+
+    # Truncate oversized payload strings so a giant prompt/response doesn't
+    # bloat the DB. Full content over this is clipped with a marker.
+    _TRACE_MAX_FIELD = 20000
+
+    def _clip(self, value):
+        if isinstance(value, str) and len(value) > self._TRACE_MAX_FIELD:
+            return value[: self._TRACE_MAX_FIELD] + f"\n…[clipped {len(value) - self._TRACE_MAX_FIELD} chars]"
+        return value
+
+    def trace(self, run_id: str, category: str, event: str,
+              payload: dict | None = None, *, step_id: str = "",
+              step_instance_id: int | None = None) -> None:
+        """Append one durable trace record for a run.
+
+        category: one of 'event' | 'prompt' | 'response' | 'tool_call' |
+                  'tool_result' | 'lifecycle' | 'step'.
+        event:    a short verb/name (e.g. 'tool_call', 'on_deliver',
+                  'agent_response').
+        payload:  arbitrary JSON-able detail; long strings are clipped.
+        """
+        if not run_id:
+            return
+        clean = {k: self._clip(v) for k, v in (payload or {}).items()}
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 FROM skillflow_trace WHERE run_id = ?",
+                    (run_id,),
+                ).fetchone()
+                seq = row[0] if row else 1
+                self._conn.execute(
+                    """
+                    INSERT INTO skillflow_trace
+                        (run_id, step_id, step_instance_id, seq, category, event, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (run_id, step_id or None, step_instance_id, seq,
+                     category, event, self._serialize(clean)),
+                )
+                self._conn.commit()
+        except Exception:
+            # Tracing must never break a run.
+            pass
+
+    def get_trace(self, run_id: str, *, step_instance_id: int | None = None,
+                  category: str | None = None) -> list[dict]:
+        """Return trace records for a run in chronological (seq) order."""
+        q = "SELECT seq, step_id, step_instance_id, category, event, payload_json, created_at " \
+            "FROM skillflow_trace WHERE run_id = ?"
+        args: list = [run_id]
+        if step_instance_id is not None:
+            q += " AND step_instance_id = ?"
+            args.append(step_instance_id)
+        if category is not None:
+            q += " AND category = ?"
+            args.append(category)
+        q += " ORDER BY seq ASC"
+        out = []
+        for r in self._conn.execute(q, args).fetchall():
+            out.append({
+                "seq": r["seq"], "step_id": r["step_id"],
+                "step_instance_id": r["step_instance_id"],
+                "category": r["category"], "event": r["event"],
+                "payload": self._deserialize(r["payload_json"]),
+                "created_at": r["created_at"],
+            })
+        return out
+
     def _get_project_id(self, run_id: str) -> str:
         row = self._conn.execute(
             "SELECT project_id FROM skillflow_runs WHERE id = ?", (run_id,)
@@ -2032,7 +2148,30 @@ class SkillFlow:
         Resolves the allowed tool list from the graph node internally.
         Write tools write to the skillflow-managed draft directory.
         Read/exploration tools receive ``project_root`` as their workspace.
+
+        Every call + result is recorded to the durable run trace.
         """
+        # Trace the call (params summarized — content fields can be huge).
+        param_summary = {k: (f"<{len(v)} chars>" if isinstance(v, str) and len(v) > 200 else v)
+                         for k, v in (params or {}).items()}
+        self.trace(run_id, "tool_call", name, {"params": param_summary},
+                   step_id=step_id)
+        result = self._execute_tool_impl(name, params, run_id=run_id,
+                                         step_id=step_id, project_root=project_root)
+        # Trace the result (key fields only).
+        res_summary: dict = {}
+        if isinstance(result, dict):
+            for k in ("written", "error", "applied", "size"):
+                if k in result:
+                    res_summary[k] = result[k]
+            if not res_summary:
+                res_summary = {"keys": sorted(result.keys())}
+        self.trace(run_id, "tool_result", name, res_summary, step_id=step_id)
+        return result
+
+    def _execute_tool_impl(self, name: str, params: dict, *,
+                           run_id: str = "", step_id: str = "",
+                           project_root: str = "") -> dict:
         if self._tool_loader is None:
             return {"error": "No ToolLoader configured"}
 

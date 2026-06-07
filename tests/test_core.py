@@ -1128,3 +1128,94 @@ def test_lifecycle_events_in_outbox(sf: SkillFlow, tmp_path: Path):
         (rid, "s1"),
     ).fetchone()
     assert step["status"] == "completed"
+
+
+# ── Durable run trace ─────────────────────────────────────────────────
+
+def test_trace_append_and_get(sf: SkillFlow):
+    """trace() appends ordered records; get_trace() returns them by seq."""
+    rid = "run-trace-1"
+    sf.trace(rid, "event", "first", {"a": 1})
+    sf.trace(rid, "tool_call", "write", {"params": {"file": "x.py"}}, step_id="s1",
+             step_instance_id=7)
+    sf.trace(rid, "event", "third")
+
+    recs = sf.get_trace(rid)
+    assert [r["seq"] for r in recs] == [1, 2, 3]
+    assert [r["event"] for r in recs] == ["first", "write", "third"]
+    assert recs[1]["category"] == "tool_call"
+    assert recs[1]["step_instance_id"] == 7
+    assert recs[1]["payload"]["params"]["file"] == "x.py"
+
+
+def test_trace_filters(sf: SkillFlow):
+    rid = "run-trace-2"
+    sf.trace(rid, "tool_call", "write", step_id="s1", step_instance_id=1)
+    sf.trace(rid, "tool_call", "read_file", step_id="s2", step_instance_id=2)
+    sf.trace(rid, "lifecycle", "on_deliver", step_id="s1", step_instance_id=1)
+
+    assert len(sf.get_trace(rid, step_instance_id=1)) == 2
+    assert len(sf.get_trace(rid, category="tool_call")) == 2
+    assert sf.get_trace(rid, step_instance_id=2)[0]["event"] == "read_file"
+
+
+def test_trace_clips_huge_fields(sf: SkillFlow):
+    rid = "run-trace-3"
+    big = "x" * (sf._TRACE_MAX_FIELD + 5000)
+    sf.trace(rid, "prompt", "user_prompt", {"text": big})
+    rec = sf.get_trace(rid)[0]
+    assert "clipped" in rec["payload"]["text"]
+    assert len(rec["payload"]["text"]) < len(big)
+
+
+def test_trace_isolated_per_run(sf: SkillFlow):
+    r1 = "run-trace-4a"
+    r2 = "run-trace-4b"
+    sf.trace(r1, "event", "a")
+    sf.trace(r2, "event", "b")
+    assert len(sf.get_trace(r1)) == 1
+    assert sf.get_trace(r1)[0]["event"] == "a"
+    assert sf.get_trace(r2)[0]["event"] == "b"
+
+
+def test_trace_records_tool_exec(sf: SkillFlow, tmp_path: Path):
+    """execute_tool records a tool_call + tool_result pair to the trace."""
+    node = StepNode(id="s1", step_type="agent", output_mode="write",
+                    transitions=[Transition(to=None)])
+    g = PipelineGraph(name="t_tool", begin="s1", steps=[node])
+    sf.register_graph(g)
+    sf._tool_loader = ToolLoader(Path(__file__).parent.parent / "src" / "skillflow" / "tools")
+    sf._workspace = WorkspaceManager(str(tmp_path / "ws"))
+    rid = sf.create_run("t_tool", {"project_id": "pid"})
+    sf.start_run(rid)
+    sf.advance_run(rid)
+    sf.claim_next_step(rid)
+
+    sf.execute_tool("write", {"file": "a.py", "content": "x = 1"},
+                    run_id=rid, step_id="s1")
+
+    cats = [(r["category"], r["event"]) for r in sf.get_trace(rid)]
+    assert ("tool_call", "write") in cats
+    assert ("tool_result", "write") in cats
+    # The result trace carries the written filename.
+    res = [r for r in sf.get_trace(rid, category="tool_result") if r["event"] == "write"][0]
+    assert res["payload"].get("written") == "a.py"
+
+
+def test_claimed_step_trace_bound(sf: SkillFlow):
+    """ClaimedStep.trace is wired so the host can append prompts/responses."""
+    graph = _simple_graph()
+    sf.register_graph(graph)
+    rid = sf.create_run("test", {"project_id": "p"})
+    sf.start_run(rid)
+    sf.advance_run(rid)
+    claimed = sf.claim_next_step(rid)
+
+    claimed.trace("prompt", "user_prompt", {"text": "hello"})
+    recs = sf.get_trace(rid, category="prompt")
+    assert len(recs) == 1
+    assert recs[0]["payload"]["text"] == "hello"
+    assert recs[0]["step_id"] == claimed.step_id
+    assert recs[0]["step_instance_id"] == claimed.step_instance_id
+    # The claim itself is also traced.
+    assert any(r["event"] == "claimed" for r in sf.get_trace(rid, category="step"))
