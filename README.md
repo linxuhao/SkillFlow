@@ -1,6 +1,8 @@
 # Skillflow
 
-Config-agnostic LLM pipeline graph executor. Define multi-agent pipelines as YAML DAGs — skillflow handles traversal, tool execution, checkpoints, recovery, and event streaming on SQLite.
+Config-agnostic LLM pipeline graph executor with **human-in-the-loop by design**. Define multi-agent pipelines as YAML DAGs — skillflow handles deterministic traversal, tool execution, approval/reject checkpoints, loops, recovery, a full durable audit trace, and event streaming on SQLite. Provider-agnostic, custom tools, clean per-agent context.
+
+Two ways agents plug in: **embed** skillflow in a host app so it *drives* real agents step-by-step (forced execution order — see [Framework Mode](#framework-mode)), or have an **external agent** (e.g. Goose) drive pipelines over a stateless CLI ([Runner Mode](#runner-mode)). An agent can even *generate* a pipeline from a natural-language description (`skillflow-convert`) and then execute it.
 
 ## Install
 
@@ -265,6 +267,27 @@ bus.subscribe("step_completed", lambda n: print(n.payload))
 sf = SkillFlow(":memory:", notification_bus=bus)
 ```
 
+## Durable Run Trace
+
+Unlike the outbox (drained + ack'd for delivery), the **trace is an append-only audit log that is never deleted**. It records every step claim/completion, prompt, model response, tool call + result, and lifecycle-hook outcome — keyed by `step_instance_id`, so loop iterations never overwrite one another and a finished run can be reconstructed offline. Tool calls are traced across **all** invocation paths (agent-invoked incl. custom tools, tool-step nodes, lifecycle hooks, validators), each tagged with a `source`.
+
+```python
+sf.trace(run_id, "event", "note", {"x": 1})          # hosts can add their own records
+records = sf.get_trace(run_id)                        # chronological, by seq
+for r in records:
+    print(r["seq"], r["category"], r["event"], r["payload"])
+```
+
+Within a host, the claimed step exposes `step.trace(category, event, payload)` so prompts/responses land in the same timeline. Long fields are clipped; writes are cheap (an in-process per-run seq counter avoids a SELECT per record). Retention is the host's call:
+
+```python
+SkillFlow(db, trace_enabled=False)                   # opt out entirely (zero overhead)
+sf.prune_trace(run_id="...")                          # drop one run's trace
+sf.prune_trace(keep_last_runs=200)                    # cap to recent runs
+```
+
+`delete_project` removes a project's trace automatically. This is what turns "why did this run do X?" from forensic git-archaeology into one query.
+
 ## Tools
 
 ### Native (13 built-in)
@@ -383,6 +406,6 @@ src/skillflow/
 ## Tests
 
 ```bash
-pytest tests/ -v       # 306 tests
-pytest plugins/ -v     # 21 plugin tests
+pytest tests/ -v                    # 316 tests
+pytest src/skillflow/plugins -v     # 27 plugin tests
 ```
