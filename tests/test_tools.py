@@ -16,6 +16,7 @@ from skillflow.tools.repo_apply.impl import repo_apply
 from skillflow.tools.syntax_lint.impl import syntax_lint
 from skillflow.tools.py_compile.impl import py_compile
 from skillflow.tools.pytest.impl import pytest as pytest_tool
+from skillflow.tools.file_exists.impl import file_exists
 
 
 class TestReadFile:
@@ -388,3 +389,37 @@ class TestPytestPackageImport:
         )
         result = pytest_tool("tests/test_core.py", workspace_root=str(tmp_path))
         assert result["verdict"] == "passed", result.get("feedback")
+
+
+class TestFileExists:
+    """file_exists is used by graph validation specs to verify step outputs
+    exist. If a required file is missing, it must return passed=False with
+    an error_message — this is the signal that triggers step retry."""
+
+    def test_existing_file_passes(self, tmp_path):
+        (tmp_path / "step1_sota.md").write_text("# SOTA Report")
+        result = file_exists(["step1_sota.md"], workspace_root=str(tmp_path))
+        assert result["all_passed"] is True
+        assert result["results"][0]["passed"] is True
+
+    def test_missing_file_fails_with_message(self, tmp_path):
+        result = file_exists(["step1_sota.md"], workspace_root=str(tmp_path))
+        assert result["all_passed"] is False
+        assert result["results"][0]["passed"] is False
+        assert result["results"][0]["error_message"] == "File not found"
+
+    def test_multiple_files_mixed(self, tmp_path):
+        (tmp_path / "existing.txt").write_text("ok")
+        result = file_exists(
+            ["existing.txt", "missing.txt"], workspace_root=str(tmp_path)
+        )
+        assert result["all_passed"] is False
+        assert result["results"][0]["passed"] is True   # existing.txt
+        assert result["results"][1]["passed"] is False  # missing.txt
+
+    def test_glob_pattern(self, tmp_path):
+        (tmp_path / "a.md").write_text("a")
+        (tmp_path / "b.md").write_text("b")
+        result = file_exists(["*.md"], workspace_root=str(tmp_path))
+        assert result["all_passed"] is True
+        assert len(result["results"]) == 2

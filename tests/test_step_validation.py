@@ -130,3 +130,51 @@ class TestStepValidatorEdgeCases:
         """Spec without 'tool' key is skipped silently."""
         result = validator_with_tools.validate([{"files": ["x.json"]}])
         assert result["passed"] is True
+
+
+class TestStepValidatorFileExists:
+    """file_exists is the validation tool used by graph configs to verify
+    step outputs exist (e.g. researcher step validates step1_sota.md).
+    A missing file must produce {passed: False, errors: [...]} so the
+    framework retries the step — this is the signal that triggers the
+    infinite retry loop when the LLM doesn't call the write tool."""
+
+    @pytest.fixture
+    def validator_with_file_exists(self, tmp_path):
+        from skillflow.tool_loader import ToolLoader
+        import skillflow as sf_pkg
+        native_dir = Path(sf_pkg.__file__).parent / "tools"
+        loader = ToolLoader(native_dir)
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        from skillflow.step_validation import StepValidator
+        return StepValidator(loader, ws)
+
+    def test_existing_file_passes(self, validator_with_file_exists, tmp_path):
+        ws = validator_with_file_exists._workspace_root
+        (ws / "step1_sota.md").write_text("# SOTA Report")
+
+        result = validator_with_file_exists.validate([{
+            "files": ["step1_sota.md"],
+            "tool": "file_exists",
+        }])
+        assert result["passed"] is True
+
+    def test_missing_file_fails_with_error(self, validator_with_file_exists):
+        result = validator_with_file_exists.validate([{
+            "files": ["step1_sota.md"],
+            "tool": "file_exists",
+        }])
+        assert result["passed"] is False
+        assert len(result["errors"]) >= 1
+        assert "File not found" in result["errors"][0].get("error_message", "")
+
+    def test_mixed_existing_and_missing(self, validator_with_file_exists, tmp_path):
+        ws = validator_with_file_exists._workspace_root
+        (ws / "existing.json").write_text("{}")
+
+        result = validator_with_file_exists.validate([
+            {"files": ["existing.json"], "tool": "file_exists"},
+            {"files": ["missing.md"], "tool": "file_exists"},
+        ])
+        assert result["passed"] is False
