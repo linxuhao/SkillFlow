@@ -374,6 +374,144 @@ def test_loop_iteration(sf_with_workspace):
     assert sf.get_run(run_id)["status"] == "completed"
 
 
+# ── Dynamic sub-graph loop — extended coverage ─────────────────────────
+
+def _loop_prepare(sf, execution_order, project_id="test-loop", write_file=True):
+    """Load loop_step.yaml, run 'prepare', write the manifest with the given
+    execution_order list. Returns run_id positioned at the loop step."""
+    import json
+    _load_and_register(sf, "loop_step.yaml")
+    run_id = sf.create_run("loop_step", project_id=project_id)
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+    assert claimed.step_id == "prepare"
+    if write_file:
+        gname = sf._get_graph_name(run_id)
+        step_dir = sf._workspace.get_step_tmp_dir(project_id, gname, "prepare")
+        step_dir.mkdir(parents=True, exist_ok=True)
+        (step_dir / "tasks_manifest.json").write_text(
+            json.dumps({"execution_order": execution_order})
+        )
+    sf.confirm_step(claimed.token, StepResult(outputs={}, flags={}))
+    return run_id
+
+
+def _drive_loop(sf, run_id, body_step="process_task", max_iter=200):
+    """Advance the run to a terminal state, counting body executions and
+    recording the item injected into each body claim. Returns (count, items)."""
+    body_count = 0
+    items: list = []
+    for _ in range(max_iter):
+        sf.advance_run(run_id)
+        run = sf.get_run(run_id)
+        if run["status"] in ("completed", "failed", "paused"):
+            break
+        claimed = sf.claim_next_step(run_id)
+        if claimed is None:
+            continue
+        if claimed.step_id == body_step:
+            body_count += 1
+            rc = claimed.inputs.get("_resolved_context") or {}
+            items.append(rc.get("[current_task]"))
+        sf.confirm_step(claimed.token, StepResult())
+    return body_count, items
+
+
+def test_loop_item_injection(sf_with_workspace):
+    """Each body iteration sees the current item injected as item_as context."""
+    sf = sf_with_workspace
+    run_id = _loop_prepare(sf, [["alpha", "beta", "gamma"]])
+    count, items = _drive_loop(sf, run_id)
+    assert sf.get_run(run_id)["status"] == "completed"
+    assert count == 3
+    assert items == ["alpha", "beta", "gamma"]  # correct item per iteration, in order
+
+
+def test_loop_empty_list_routes_to_done(sf_with_workspace):
+    """An empty dynamic list skips the body entirely and completes."""
+    sf = sf_with_workspace
+    run_id = _loop_prepare(sf, [])
+    count, _ = _drive_loop(sf, run_id)
+    assert count == 0  # body never runs
+    assert sf.get_run(run_id)["status"] == "completed"
+
+
+def test_loop_missing_source_file(sf_with_workspace):
+    """Missing source file emits loop_source_missing and routes to done."""
+    sf = sf_with_workspace
+    run_id = _loop_prepare(sf, [], write_file=False)
+    count, _ = _drive_loop(sf, run_id)
+    assert count == 0
+    assert sf.get_run(run_id)["status"] == "completed"
+    with sf._tx() as conn:
+        types = [r["event_type"] for r in conn.execute(
+            "SELECT event_type FROM skillflow_outbox")]
+    assert "loop_source_missing" in types
+
+
+def test_loop_multiple_groups_flattened(sf_with_workspace):
+    """execution_order groups are flattened into a single iteration sequence."""
+    sf = sf_with_workspace
+    run_id = _loop_prepare(sf, [["a"], ["b", "c"]])
+    count, items = _drive_loop(sf, run_id)
+    assert sf.get_run(run_id)["status"] == "completed"
+    assert count == 3
+    assert items == ["a", "b", "c"]
+
+
+def test_loop_flat_list(sf_with_workspace):
+    """A flat (non-nested) list iterates without flattening surprises."""
+    sf = sf_with_workspace
+    run_id = _loop_prepare(sf, ["one", "two"])
+    count, items = _drive_loop(sf, run_id)
+    assert sf.get_run(run_id)["status"] == "completed"
+    assert count == 2
+    assert items == ["one", "two"]
+
+
+def test_loop_body_resolves_per_item_file(sf_with_workspace):
+    """Loop body context resolves a per-item file via $current_task — the
+    mechanism dpe uses to scope each task_loop iteration to its task card."""
+    import json
+    sf = sf_with_workspace
+    _load_and_register(sf, "loop_item_file.yaml")
+    pid = "test-loop-file"
+    run_id = sf.create_run("loop_item_file", project_id=pid)
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+    assert claimed.step_id == "prepare"
+
+    gname = sf._get_graph_name(run_id)
+    step_dir = sf._workspace.get_step_tmp_dir(pid, gname, "prepare")
+    (step_dir / "items").mkdir(parents=True, exist_ok=True)
+    (step_dir / "tasks_manifest.json").write_text(
+        json.dumps({"execution_order": [["a", "b"]]}))
+    (step_dir / "items" / "a.json").write_text('{"id": "a", "detail": "ALPHA-DETAIL"}')
+    (step_dir / "items" / "b.json").write_text('{"id": "b", "detail": "BETA-DETAIL"}')
+    sf.confirm_step(claimed.token, StepResult(outputs={}, flags={}))
+
+    seen = []
+    for _ in range(50):
+        sf.advance_run(run_id)
+        if sf.get_run(run_id)["status"] in ("completed", "failed", "paused"):
+            break
+        c = sf.claim_next_step(run_id)
+        if c is None:
+            continue
+        if c.step_id == "process_task":
+            rc = c.inputs.get("_resolved_context") or {}
+            blob = json.dumps(rc)
+            seen.append("ALPHA-DETAIL" if "ALPHA-DETAIL" in blob else
+                        ("BETA-DETAIL" if "BETA-DETAIL" in blob else None))
+        sf.confirm_step(c.token, StepResult())
+
+    assert sf.get_run(run_id)["status"] == "completed"
+    # Each iteration resolved ITS OWN item file, in order.
+    assert seen == ["ALPHA-DETAIL", "BETA-DETAIL"]
+
+
 # ── Tool Nodes ────────────────────────────────────────────────────────
 
 def test_tool_node_auto_execute(sf_with_tools):

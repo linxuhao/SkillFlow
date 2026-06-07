@@ -1,0 +1,52 @@
+# loop_item_file.yaml — loop body resolves a PER-ITEM file via $var substitution.
+# Validates the mechanism the dpe pipeline uses to scope each task_loop body
+# iteration to its own task card (context file: "tasks/$current_task.json").
+
+name: "loop_item_file"
+description: "Loop body reads a per-item file using the loop variable"
+begin: "prepare"
+
+end_conditions:
+  combinator: or
+  conditions:
+    - type: node_reached
+      node: "all_done"
+      result: "completed"
+
+steps:
+  - id: "prepare"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    output:
+      mode: "content"
+      fixed:
+        manifest: { file: "tasks_manifest.json" }
+        card: { file: "items/*.json" }
+    transitions:
+      - to: "task_iterator"
+
+  - id: "task_iterator"
+    step_type: "loop"
+    loop:
+      source:
+        step: "prepare"
+        file: "tasks_manifest.json"
+        field: "execution_order"
+      item_as: "current_task"
+      max_iterations: 100
+    transitions:
+      - to: "process_task"
+        max_loop: 100
+      - to: "all_done"
+
+  - id: "process_task"
+    step_type: "agent"
+    agent_config: "echo_agent"
+    context:
+      - source: { step: "prepare", file: "items/$current_task.json" }
+    transitions:
+      - to: "task_iterator"
+
+  - id: "all_done"
+    step_type: "agent"
+    agent_config: "echo_agent"

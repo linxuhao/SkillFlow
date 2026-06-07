@@ -519,9 +519,17 @@ def test_reject_checkpoint(sf: SkillFlow):
     claimed2 = sf.claim_next_step(run_id)
     assert claimed2 is not None
     assert claimed2.step_id == "a"
+    # The rejection feedback must reach the re-run via the preserved _feedback
+    # channel (regression: previously only _rejection was set, which nothing
+    # read, so the agent re-ran blind).
+    assert claimed2.inputs.get("_feedback") == "Needs more detail"
+    # The framework also surfaces it into _resolved_context so the host renders
+    # it into the prompt in any tool mode without special-casing _feedback.
+    rc = claimed2.inputs.get("_resolved_context") or {}
+    assert any("Needs more detail" == v for v in rc.values())
 
 
-def test_reject_checkpoint_not_paused_raises(sf: SkillFlow):
+def test_reject_checkpoint_running_raises(sf: SkillFlow):
     graph = PipelineGraph(name="test", begin="a", steps=[_agent("a", [])])
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -530,8 +538,40 @@ def test_reject_checkpoint_not_paused_raises(sf: SkillFlow):
     claimed = sf.claim_next_step(run_id)
     sf.confirm_step(claimed.token, StepResult())
 
+    # Run is 'running' (not paused/failed) — not a rejectable state.
     with pytest.raises(SkillFlowError):
         sf.reject_checkpoint(run_id, "a", "feedback")
+
+
+def test_reject_checkpoint_from_failed_run(sf: SkillFlow):
+    """A checkpoint may be rejected after the run failed downstream of it."""
+    graph = PipelineGraph(
+        name="test", begin="a",
+        steps=[
+            _agent("a", [_trans("b")], checkpoint=True),
+            _agent("b", []),
+        ],
+    )
+    sf.register_graph(graph)
+    run_id = sf.create_run("test")
+    sf.start_run(run_id)
+
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+    sf.confirm_step(claimed.token, StepResult(outputs={"plan": "v1"}))
+    sf.advance_run(run_id)  # pauses at checkpoint a
+
+    # Simulate a downstream failure leaving the run in 'failed'.
+    sf._update_run_state(run_id, "failed")
+    assert sf.get_run(run_id)["status"] == "failed"
+
+    # Rejecting the completed checkpoint step from a failed run is allowed and
+    # re-opens that step with the feedback.
+    sf.reject_checkpoint(run_id, "a", "redo with constraints")
+    assert sf.get_run(run_id)["status"] == "running"
+    claimed2 = sf.claim_next_step(run_id)
+    assert claimed2.step_id == "a"
+    assert claimed2.inputs.get("_feedback") == "redo with constraints"
 
 
 # ── Edge counts ──────────────────────────────────────────────────────

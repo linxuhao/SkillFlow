@@ -85,6 +85,17 @@ async def _noop_emit(event_type: str, payload: dict) -> None:
     pass
 
 
+# Labels under which the framework surfaces re-open context (reject/loop-back
+# feedback and validation errors) into a claimed step's _resolved_context, so
+# the host renders them into the prompt in any tool mode.
+_FEEDBACK_CONTEXT_LABEL = (
+    "⚠️ Reviewer / User Feedback — MUST ADDRESS before resubmitting"
+)
+_VALIDATION_ERROR_CONTEXT_LABEL = (
+    "⚠️ Previous attempt failed validation — MUST FIX"
+)
+
+
 @dataclass(frozen=True)
 class StepResult:
     outputs: dict = field(default_factory=dict)
@@ -763,11 +774,23 @@ class SkillFlow:
                         _get_pattern(s, node.output_fixed) for s in node.output_fixed
                     ]
 
-            # Preserve injected context from previous attempts
+            # Preserve injected context from previous attempts.
+            #
+            # Reject / loop-back feedback and validation errors are produced by
+            # the framework when a step is re-opened (reject_checkpoint, feedback
+            # transitions, validation retries). We surface them into the resolved
+            # context so the host renders them into the prompt for free, in BOTH
+            # tool modes (native tool-calling and JSON-prompt tooling), without
+            # any host-side special-casing. The dedicated keys are also kept for
+            # hosts/runners that read them directly.
             if feedback is not None:
                 inputs_with_tools["_feedback"] = feedback
+                rc = inputs_with_tools.setdefault("_resolved_context", {})
+                rc[_FEEDBACK_CONTEXT_LABEL] = feedback
             if validation_error is not None:
                 inputs_with_tools["_validation_error"] = validation_error
+                rc = inputs_with_tools.setdefault("_resolved_context", {})
+                rc[_VALIDATION_ERROR_CONTEXT_LABEL] = validation_error
             if error_context is not None:
                 inputs_with_tools["_error"] = error_context
 
@@ -1841,8 +1864,18 @@ class SkillFlow:
             run = conn.execute(
                 "SELECT * FROM skillflow_runs WHERE id = ?", (run_id,)
             ).fetchone()
-            if not run or run["status"] != "paused":
-                raise SkillFlowError(f"Run '{run_id}' is not paused")
+            # A checkpoint may be rejected while the run is paused (the normal
+            # case) or after it failed downstream of the checkpoint (host wants
+            # to redo the checkpoint step). The true safety invariant is that
+            # the named checkpoint step is in 'completed' status (checked
+            # below) — not the run-level status. Rejecting a 'completed' run
+            # would silently re-open finished work, so that is still refused.
+            if not run or run["status"] not in ("paused", "failed"):
+                raise SkillFlowError(
+                    f"Run '{run_id}' is not in a rejectable state (expected "
+                    f"paused or failed, got "
+                    f"'{run['status'] if run else 'missing'}')"
+                )
 
             step_row = conn.execute(
                 "SELECT id, version FROM skillflow_steps WHERE run_id = ? AND step_id = ? AND status = 'completed'",
@@ -1860,14 +1893,23 @@ class SkillFlow:
                 """,
                 (step_row["id"], step_row["version"]),
             )
+            # Inject the rejection feedback so the re-run sees it. We write the
+            # `_feedback` channel (the same one loop-back transitions use, see
+            # the redirect branch below) because that is the key the claim path
+            # preserves across re-claim and the runner reads into the prompt.
+            # `_rejection` is kept too for host display / back-compat, but it is
+            # `_feedback` that actually reaches the agent. Without this the
+            # rejected step re-runs with no knowledge of why it was rejected.
             conn.execute(
                 """
                 UPDATE skillflow_steps
-                SET inputs_json = json_set(inputs_json, '$._rejection', ?),
+                SET inputs_json = json_set(
+                        json_set(inputs_json, '$._rejection', ?),
+                        '$._feedback', ?),
                     updated_at = datetime('now')
                 WHERE id = ?
                 """,
-                (feedback, step_row["id"]),
+                (feedback, feedback, step_row["id"]),
             )
             conn.execute(
                 "UPDATE skillflow_runs SET current_node = ?, status = 'running', updated_at = datetime('now') WHERE id = ?",
