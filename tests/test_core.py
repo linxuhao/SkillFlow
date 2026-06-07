@@ -1302,3 +1302,26 @@ def test_prune_trace_keep_last_runs(sf: SkillFlow):
     assert sf.get_trace("r1") == []          # oldest dropped
     assert len(sf.get_trace("r2")) == 1
     assert len(sf.get_trace("r3")) == 1
+
+
+def test_delete_project_removes_trace(sf: SkillFlow):
+    """Deleting a project drops its runs' trace records (and seq cache)."""
+    graph = _simple_graph(name="delproj")
+    sf.register_graph(graph)
+    rid = sf.create_run("delproj", {"project_id": "doomed"})
+    sf.start_run(rid)
+    sf.advance_run(rid)
+    claimed = sf.claim_next_step(rid)  # writes a 'claimed' trace
+    claimed.trace("prompt", "user_prompt", {"text": "hi"})
+    assert len(sf.get_trace(rid)) >= 2
+    assert rid in sf._trace_seq
+
+    sf.delete_project("doomed")
+
+    assert sf.get_trace(rid) == []
+    assert rid not in sf._trace_seq
+    # Other projects' trace is untouched
+    other = sf.create_run("delproj", {"project_id": "safe"})
+    sf.trace(other, "event", "x")
+    sf.delete_project("doomed")  # idempotent, no effect on 'safe'
+    assert len(sf.get_trace(other)) == 1

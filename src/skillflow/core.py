@@ -516,8 +516,8 @@ class SkillFlow:
         """Delete all skillflow state for a project.
 
         Removes runs, steps, edge counts, loop state, outbox events,
-        and the project row itself.  Safe to call even if the project
-        has no runs.
+        durable trace, and the project row itself.  Safe to call even if
+        the project has no runs.
         """
         with self._tx() as conn:
             # Collect all run IDs for this project
@@ -533,6 +533,8 @@ class SkillFlow:
                 conn.execute("DELETE FROM skillflow_loop_state WHERE run_id = ?", (run_id,))
                 conn.execute("DELETE FROM skillflow_outbox WHERE payload_json LIKE ?",
                              (f"%{run_id}%",))
+                conn.execute("DELETE FROM skillflow_trace WHERE run_id = ?", (run_id,))
+                self._trace_seq.pop(run_id, None)
             conn.execute("DELETE FROM skillflow_runs WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM skillflow_projects WHERE id = ?", (project_id,))
 
