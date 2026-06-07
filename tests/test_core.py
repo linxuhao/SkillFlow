@@ -1192,11 +1192,14 @@ def test_trace_records_tool_exec(sf: SkillFlow, tmp_path: Path):
     sf.claim_next_step(rid)
 
     sf.execute_tool("write", {"file": "a.py", "content": "x = 1"},
-                    run_id=rid, step_id="s1")
+                    run_id=rid, step_id="s1", step_instance_id=42)
 
     cats = [(r["category"], r["event"]) for r in sf.get_trace(rid)]
     assert ("tool_call", "write") in cats
     assert ("tool_result", "write") in cats
+    # step_instance_id flows through so writes correlate to their instance
+    wcalls = [r for r in sf.get_trace(rid) if r["event"] == "write"]
+    assert all(r["step_instance_id"] == 42 for r in wcalls)
     # The result trace carries the written filename.
     res = [r for r in sf.get_trace(rid, category="tool_result") if r["event"] == "write"][0]
     assert res["payload"].get("written") == "a.py"

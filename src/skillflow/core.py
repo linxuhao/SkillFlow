@@ -2225,6 +2225,7 @@ class SkillFlow:
 
     def execute_tool(self, name: str, params: dict, *,
                      run_id: str = "", step_id: str = "",
+                     step_instance_id: int | None = None,
                      project_root: str = "") -> dict:
         """Execute a tool on behalf of the host's agent loop.
 
@@ -2232,14 +2233,17 @@ class SkillFlow:
         Write tools write to the skillflow-managed draft directory.
         Read/exploration tools receive ``project_root`` as their workspace.
 
-        Every call + result is recorded to the durable run trace.
+        Every call + result is recorded to the durable run trace. Pass
+        ``step_instance_id`` (from the claimed step's token) so each tool call
+        correlates to its exact step instance — essential for loop iterations
+        where the same step_id runs many times.
         """
         # Trace the call (params summarized — content fields can be huge).
         param_summary = {k: (f"<{len(v)} chars>" if isinstance(v, str) and len(v) > 200 else v)
                          for k, v in (params or {}).items()}
         self.trace(run_id, "tool_call", name,
                    {"source": "agent", "params": param_summary},
-                   step_id=step_id)
+                   step_id=step_id, step_instance_id=step_instance_id)
         result = self._execute_tool_impl(name, params, run_id=run_id,
                                          step_id=step_id, project_root=project_root)
         # Trace the result (key fields only).
@@ -2250,7 +2254,8 @@ class SkillFlow:
                     res_summary[k] = result[k]
             if len(res_summary) == 1:
                 res_summary["keys"] = sorted(result.keys())
-        self.trace(run_id, "tool_result", name, res_summary, step_id=step_id)
+        self.trace(run_id, "tool_result", name, res_summary,
+                   step_id=step_id, step_instance_id=step_instance_id)
         return result
 
     def _execute_tool_impl(self, name: str, params: dict, *,
