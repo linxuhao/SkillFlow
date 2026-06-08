@@ -275,6 +275,47 @@ def test_review_fail_then_pass(sf_with_tools):
     assert sf.get_run(run_id)["status"] == "completed"
 
 
+def test_review_max_loop_enforced_by_confirm_step(sf_with_tools):
+    """confirm_step raises CycleLimitExceeded when max_loop is exhausted.
+
+    reviewer→writer transition has max_loop=3. The edge can be traversed
+    3 times (count 0→1→2→3). The 4th traversal is blocked.  We loop
+    3 times to saturate the edge count, then attempt a 4th reviewer
+    execution which should fail via CycleLimitExceeded.
+
+    Regression: _resolve_next_in_tx used to skip both edge counting
+    AND max_loop checking, so the loop could run indefinitely.
+    """
+    sf = sf_with_tools
+    _load_and_register(sf, "review_loop.yaml")
+    run_id = sf.create_run("review_loop")
+    sf.start_run(run_id)
+
+    # Iterate reviewer→writer 3 times (max_loop=3 → allowed).
+    for i in range(3):
+        sf.advance_run(run_id)
+        _execute(sf, run_id, "writer")
+        sf.advance_run(run_id)
+        _execute(sf, run_id, "reviewer", flags={"approved": False})
+        # _resolve_next_in_tx pre-sets current_node=writer after each rejection.
+        # advance_run returns it via the fast path.
+        run = sf.get_run(run_id)
+        current = run["current_node"]
+        assert current == "writer", f"Iteration {i}: expected current_node=writer, got {current}"
+
+    # After 3 traversals the edge count for (reviewer, writer) is 3 == max_loop.
+    # The 4th reviewer execution should trigger CycleLimitExceeded inside
+    # confirm_step, which catches it and fails the run gracefully.
+    sf.advance_run(run_id)      # returns "writer" (pre-set fast path)
+    _execute(sf, run_id, "writer")
+    sf.advance_run(run_id)      # returns "reviewer" (pre-set)
+    _execute(sf, run_id, "reviewer", flags={"approved": False})
+    # The run should now be failed because the cycle limit was exceeded
+    run = sf.get_run(run_id)
+    assert run["status"] == "failed"
+    assert "max_loop=3" in (run.get("error_reason") or "")
+
+
 # ── Error Handling ────────────────────────────────────────────────────
 
 def test_error_transition_routing(sf_with_tools):

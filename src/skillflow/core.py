@@ -13,6 +13,7 @@ import sqlite3
 import threading
 import time
 import uuid
+import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -923,10 +924,33 @@ class SkillFlow:
             # Resolve next transition inline to close the atomicity gap
             # between confirm_step and advance_run. If process dies here,
             # the run already knows its next step.
-            next_node = self._resolve_next_in_tx(
-                conn, token.run_id, token.step_id, result.flags, resolver
-            )
-            if next_node:
+            _cycle_exceeded: str | None = None
+            try:
+                next_node = self._resolve_next_in_tx(
+                    conn, token.run_id, token.step_id, result.flags, resolver
+                )
+            except CycleLimitExceeded as e:
+                self._fail_run_in_tx(conn, token.run_id, f"Cycle limit exceeded: {e}")
+                # Step completed but the run is now failed — still emit the
+                # step_completed event so the host sees the terminal state.
+                conn.execute(
+                    """
+                    INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
+                    VALUES ('step_completed', ?, datetime('now'))
+                    """,
+                    (self._serialize({
+                        "run_id": token.run_id, "step_id": token.step_id,
+                        "step_instance_id": token.step_instance_id,
+                    }),),
+                )
+                _cycle_exceeded = str(e)
+                # Trace is deferred to after the _tx block to avoid a nested
+                # commit on the same connection.
+                next_node = None  # suppress UnboundLocalError below
+
+            if _cycle_exceeded:
+                pass  # run is already failed; fall through to trace below
+            elif next_node:
                 conn.execute(
                     "UPDATE skillflow_runs SET current_node = ?, updated_at = datetime('now') WHERE id = ?",
                     (next_node, token.run_id),
@@ -937,16 +961,22 @@ class SkillFlow:
                     (token.run_id,),
                 )
 
-            conn.execute(
-                """
-                INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-                VALUES ('step_completed', ?, datetime('now'))
-                """,
-                (self._serialize({
-                    "run_id": token.run_id, "step_id": token.step_id,
-                    "step_instance_id": token.step_instance_id,
-                }),),
-            )
+            if not _cycle_exceeded:
+                conn.execute(
+                    """
+                    INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
+                    VALUES ('step_completed', ?, datetime('now'))
+                    """,
+                    (self._serialize({
+                        "run_id": token.run_id, "step_id": token.step_id,
+                        "step_instance_id": token.step_instance_id,
+                    }),),
+                )
+        if _cycle_exceeded:
+            self.trace(token.run_id, "step", "completed",
+                       {"flags": result.flags, "cycle_limit_exceeded": _cycle_exceeded},
+                       step_id=token.step_id, step_instance_id=token.step_instance_id)
+            return
         self.trace(token.run_id, "step", "completed",
                    {"flags": result.flags, "next_node": next_node},
                    step_id=token.step_id, step_instance_id=token.step_instance_id)
@@ -1315,6 +1345,24 @@ class SkillFlow:
                 """,
                 (self._serialize(error_context), token.run_id, error_handler),
             )
+            # If no pending row was found (shouldn't happen since create_run
+            # creates one for every step, but guard anyway), insert one.
+            if conn.execute(
+                "SELECT changes()"
+            ).fetchone()[0] == 0:
+                node = resolver.get_node(error_handler)
+                conn.execute(
+                    """
+                    INSERT INTO skillflow_steps
+                        (run_id, step_id, step_config_json, max_retries, status,
+                         inputs_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, 'pending', ?, datetime('now'), datetime('now'))
+                    """,
+                    (token.run_id, error_handler,
+                     self._serialize(node.config if node else {}),
+                     node.max_retries if node else 3,
+                     self._serialize(error_context)),
+                )
             conn.execute(
                 "UPDATE skillflow_runs SET current_node = ?, updated_at = datetime('now') WHERE id = ?",
                 (error_handler, token.run_id),
@@ -1564,8 +1612,11 @@ class SkillFlow:
             step_dir = self._workspace.get_step_dir(pid, gname, source_step)
             file_path = step_dir / source_file
             if not file_path.exists():
-                # Try legacy Outbox_Final path
-                step_dir = self._workspace.get_final_dir(pid, gname, source_step)
+                # Try legacy Outbox_Final path (backward compat with pre-migration data).
+                # Suppress the DeprecationWarning — it's a known fallback, not a bug.
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", DeprecationWarning)
+                    step_dir = self._workspace.get_final_dir(pid, gname, source_step)
                 file_path = step_dir / source_file
             if not file_path.exists():
                 # Source file missing — emit warning, treat as empty → done
@@ -1654,6 +1705,13 @@ class SkillFlow:
         - No checkpoint steps (need user approval)
         - No gate or loop targets (need edge count / iteration tracking)
         - No checkpoint-guarded transitions
+
+        Increments edge counts atomically and enforces max_loop so that
+        review→parent loop-back counts are tracked correctly even when
+        advance_run later takes the pre-resolved fast path.
+
+        Raises CycleLimitExceeded when all matching transitions are exhausted
+        by max_loop (caller must fail the run).
         """
         node = resolver.get_node(step_id)
         if not node or not node.transitions:
@@ -1670,14 +1728,23 @@ class SkillFlow:
             run["project_id"], run["graph_name"], step_id
         ) if run else None
 
+        # Read current edge counts to enforce max_loop.  We also increment
+        # the count inline for the chosen edge so that subsequent calls
+        # (including the next _resolve_next_in_tx) see the updated count.
+        edge_counts = self._read_edge_counts(conn, run_id)
+
         from skillflow.graph import _flags_match
+        exhausted_reasons: list[str] = []
         for t in node.transitions:
             if t.match is not None:
                 if t.match.get("from") == "checkpoint":
                     continue
                 if not _flags_match(t.match, flags, file_reader=fr):
                     continue
-            # Don't resolve to gates, loops, or native tools — advance_run handles them
+            # Don't resolve to gates, loops, native tools, or terminal
+            # transitions (None) — advance_run handles them.
+            if t.to is None:
+                return None
             skip_tool = False
             if resolver.is_tool(t.to):
                 tool_node = resolver.get_node(t.to)
@@ -1685,7 +1752,34 @@ class SkillFlow:
                     skip_tool = True
             if resolver.is_gate(t.to) or resolver.is_loop(t.to) or skip_tool:
                 return None
+
+            # Check max_loop on this edge
+            if t.max_loop is not None:
+                key = (step_id, t.to)
+                if edge_counts.get(key, 0) >= t.max_loop:
+                    exhausted_reasons.append(
+                        f"'{step_id}' -> '{t.to}' (max_loop={t.max_loop} reached)"
+                    )
+                    continue
+
+            # Atomically increment the edge count so subsequent calls see it.
+            # Same pattern as advance_run lines 1997-2007.
+            conn.execute(
+                """
+                INSERT INTO skillflow_edge_counts (run_id, from_step, to_step, count, max_loop)
+                VALUES (?, ?, ?, 1, ?)
+                ON CONFLICT(run_id, from_step, to_step)
+                DO UPDATE SET count = count + 1
+                """,
+                (run_id, step_id, t.to, t.max_loop),
+            )
             return t.to
+
+        if exhausted_reasons:
+            raise CycleLimitExceeded(
+                f"All transitions from '{step_id}' are exhausted: "
+                + "; ".join(exhausted_reasons)
+            )
         return None
 
     def _make_file_reader(self, project_id: str, graph_name: str,

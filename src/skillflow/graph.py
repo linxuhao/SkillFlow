@@ -595,7 +595,8 @@ class GraphResolver:
             node = self._step_map.get(node_id)
             if node:
                 for t in node.transitions:
-                    _dfs(t.to, visited | {node_id})
+                    if t.to is not None:
+                        _dfs(t.to, visited | {node_id})
 
         _dfs(self._graph.begin, set())
 
