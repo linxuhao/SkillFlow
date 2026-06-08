@@ -65,7 +65,7 @@ class ClaimedStep:
     inputs: dict[str, dict]
     validation_error: str | None = None
     error_context: dict | None = None
-    emit: Callable[[str, dict], Awaitable[None]] = field(
+    emit: Callable[[str, dict], Any] = field(
         default=lambda event_type, payload: _noop_emit(event_type, payload)
     )
     # Durable trace sink — bound by claim_next_step to SkillFlow.trace with the
@@ -86,7 +86,7 @@ class ClaimedStep:
         return result
 
 
-async def _noop_emit(event_type: str, payload: dict) -> None:
+def _noop_emit(event_type: str, payload: dict) -> None:
     pass
 
 
@@ -1357,6 +1357,43 @@ class SkillFlow:
             )
             self._fail_run_in_tx(conn, token.run_id, error)
 
+    def _fail_step_timeout_in_tx(self, conn: sqlite3.Connection, run_id: str,
+                                  step_id: str, claimed_at: str,
+                                  timeout_seconds: int) -> None:
+        """Fail a claimed step that exceeded its timeout_seconds.
+
+        Called from advance_run when a step has been claimed longer than
+        its configured timeout.  Marks the step as failed and emits a
+        'step_timeout' outbox event so the host can notify the user.
+        """
+        error = (
+            f"Step '{step_id}' timed out after {timeout_seconds}s "
+            f"(claimed at {claimed_at})"
+        )
+        conn.execute(
+            """UPDATE skillflow_steps
+               SET status = 'failed', version = version + 1,
+                   last_error = ?, claimed_at = NULL, claimed_by = NULL,
+                   updated_at = datetime('now')
+               WHERE run_id = ? AND step_id = ? AND status = 'claimed'""",
+            (error, run_id, step_id),
+        )
+        conn.execute(
+            "UPDATE skillflow_runs SET current_node = NULL, "
+            "updated_at = datetime('now') WHERE id = ?",
+            (run_id,),
+        )
+        conn.execute(
+            """INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
+               VALUES ('step_timeout', ?, datetime('now'))""",
+            (self._serialize({
+                "run_id": run_id, "step_id": step_id,
+                "error": error,
+                "timeout_seconds": timeout_seconds,
+                "claimed_at": claimed_at,
+            }),),
+        )
+
     # ── Tool node helpers ───────────────────────────────────────────
 
     def _execute_tool_inline(self, tool_node: StepNode, *,
@@ -1683,12 +1720,36 @@ class SkillFlow:
                 return None
 
             if run["current_node"]:
-                claimed = conn.execute(
-                    "SELECT 1 FROM skillflow_steps WHERE run_id = ? AND status = 'claimed' LIMIT 1",
+                claimed_row = conn.execute(
+                    "SELECT step_id, claimed_at FROM skillflow_steps "
+                    "WHERE run_id = ? AND status = 'claimed' LIMIT 1",
                     (run_id,),
                 ).fetchone()
-                if claimed:
-                    return None
+                if claimed_row:
+                    # Fix 1.4: if the claimed step is different from
+                    # current_node, block (alien claim). If it IS
+                    # current_node, check timeout before blocking.
+                    if claimed_row["step_id"] != run["current_node"]:
+                        return None
+                    # Same step — check timeout
+                    node = resolver.get_node(claimed_row["step_id"])
+                    if node and node.timeout_seconds > 0:
+                        threshold = time.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ",
+                            time.gmtime(time.time() - node.timeout_seconds),
+                        )
+                        if claimed_row["claimed_at"] < threshold:
+                            self._fail_step_timeout_in_tx(
+                                conn, run_id, claimed_row["step_id"],
+                                claimed_row["claimed_at"], node.timeout_seconds,
+                            )
+                            # Step timed out and was failed — don't return
+                            # None; continue below to re-resolve current_node
+                            # (it may route through error transition).
+                        else:
+                            return None  # within timeout, wait
+                    else:
+                        return None  # no timeout configured, wait indefinitely
                 # If current_node is a loop step, resolve its iteration
                 current = run["current_node"]
                 if resolver.is_loop(current):
@@ -1789,12 +1850,28 @@ class SkillFlow:
                         return None
                 return run["current_node"]
 
-            claimed = conn.execute(
-                "SELECT 1 FROM skillflow_steps WHERE run_id = ? AND status = 'claimed' LIMIT 1",
+            claimed_row = conn.execute(
+                "SELECT step_id, claimed_at FROM skillflow_steps "
+                "WHERE run_id = ? AND status = 'claimed' LIMIT 1",
                 (run_id,),
             ).fetchone()
-            if claimed:
-                return None
+            if claimed_row:
+                node = resolver.get_node(claimed_row["step_id"])
+                if node and node.timeout_seconds > 0:
+                    threshold = time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ",
+                        time.gmtime(time.time() - node.timeout_seconds),
+                    )
+                    if claimed_row["claimed_at"] < threshold:
+                        self._fail_step_timeout_in_tx(
+                            conn, run_id, claimed_row["step_id"],
+                            claimed_row["claimed_at"], node.timeout_seconds,
+                        )
+                        # Fall through — continue resolving
+                    else:
+                        return None  # within timeout, wait
+                else:
+                    return None  # no timeout, wait indefinitely
 
             last = conn.execute(
                 """

@@ -78,6 +78,10 @@ class StepNode:
                 for agent nodes. skillflow never inspects this.
         max_retries: Maximum execution retries before the step is
                      considered permanently failed.
+        timeout_seconds: Optional max seconds between claim and confirm.
+                         0 = no timeout (default). If a claimed step is
+                         not confirmed within this window, advance_run
+                         fails the step with status 'timeout'.
         output_schema: Optional dotted path to a Pydantic model for
                        output validation (e.g. ``"mypkg.schemas.Result"``).
         output_schema_retries: Max validation retries before treating
@@ -103,6 +107,7 @@ class StepNode:
     checkpoint_reject_to: str = ""
     config: dict = field(default_factory=dict)
     max_retries: int = 3
+    timeout_seconds: int = 0  # 0 = no timeout
     max_tool_turns: int = 0  # 0 = use agent config default
     output_schema: str | None = None
     output_schema_retries: int = 0
@@ -245,6 +250,7 @@ class PipelineGraph:
                     checkpoint_reject_to=s.get("checkpoint_reject_to", ""),
                     config=s.get("config", {}),
                     max_retries=s.get("max_retries", 3),
+                    timeout_seconds=s.get("timeout_seconds", 0),
                     max_tool_turns=s.get("max_tool_turns", 0),
                     output_schema=s.get("output_schema"),
                     output_schema_retries=s.get("output_schema_retries", 0),
@@ -305,6 +311,8 @@ class PipelineGraph:
                     sd["checkpoint_reject_to"] = s.checkpoint_reject_to
             if s.max_retries != 3:
                 sd["max_retries"] = s.max_retries
+            if s.timeout_seconds:
+                sd["timeout_seconds"] = s.timeout_seconds
             if s.max_tool_turns:
                 sd["max_tool_turns"] = s.max_tool_turns
             if s.output_schema:
