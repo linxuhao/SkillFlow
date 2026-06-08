@@ -1132,8 +1132,15 @@ class SkillFlow:
                     filtered = params
                 result = fn(**filtered)
                 if isinstance(result, dict):
-                    passed = result.get("passed", result.get("committed",
-                               not result.get("error")))
+                    # Determine success: explicit "passed" key > no "error" key
+                    # OR error is falsy.  repo_apply returns committed=False to
+                    # signal "nothing to commit" (success, not failure).
+                    if "passed" in result:
+                        passed = result["passed"]
+                    elif "error" in result and result["error"]:
+                        passed = False
+                    else:
+                        passed = True
                     return {"passed": bool(passed), "error": result.get("error", ""),
                             **result}
                 return {"passed": True}
