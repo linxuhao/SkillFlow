@@ -112,9 +112,15 @@ def generate_write_tool_schemas(output_mode: str,
 
             # Shared params
             if is_glob:
+                id_desc = f"Replaces * in {pattern}"
+                # When the format declares an "id" field, the parameter value
+                # should match it — otherwise the LLM fills in a placeholder
+                # like "unknown" and all task cards land in the same file.
+                if format_spec and '"id"' in format_spec:
+                    id_desc += " — must equal the 'id' field value in your file content"
                 params = {
                     "id": {"type": "string", "required": True,
-                           "description": f"Replaces * in {pattern}"},
+                           "description": id_desc},
                     "content": {"type": "string", "required": True},
                 }
             else:

@@ -100,6 +100,22 @@ class TestWriteTools:
             desc = tool["description"]
             assert "Expected format:" in desc
             assert '{"id": str, "description": str}' in desc
+        # id param description links to content's id field when format has "id"
+        write_tool = next(t for t in schemas if t["name"] == "write_task_card")
+        id_desc = write_tool["parameters"]["id"]["description"]
+        assert "Replaces * in tasks/*.json" in id_desc
+        assert "must equal the 'id' field value" in id_desc
+
+    def test_glob_id_param_without_id_in_format(self):
+        """When format lacks 'id', the id param description stays plain."""
+        schemas = generate_write_tool_schemas("content", {
+            "items": {"file": "items/*.json",
+                      "format": '{"name": str, "value": int}'}
+        })
+        write_tool = next(t for t in schemas if t["name"] == "write_items")
+        id_desc = write_tool["parameters"]["id"]["description"]
+        assert "Replaces * in items/*.json" in id_desc
+        assert "must equal" not in id_desc  # no "id" in format → no hint
 
     def test_normalize_passes_format(self):
         from skillflow.write_tools import _normalize_fixed_entry
