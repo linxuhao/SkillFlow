@@ -406,7 +406,9 @@ class TestFileExists:
         result = file_exists(["step1_sota.md"], workspace_root=str(tmp_path))
         assert result["all_passed"] is False
         assert result["results"][0]["passed"] is False
-        assert result["results"][0]["error_message"] == "File not found"
+        # SF-23: error message now includes expected path and directory context
+        assert "File not found" in result["results"][0]["error_message"]
+        assert "step1_sota.md" in result["results"][0]["error_message"]
 
     def test_multiple_files_mixed(self, tmp_path):
         (tmp_path / "existing.txt").write_text("ok")

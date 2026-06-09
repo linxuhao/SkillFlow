@@ -1818,8 +1818,13 @@ class SkillFlow:
                     )
                     continue
 
-            # Atomically increment the edge count so subsequent calls see it.
-            # Same pattern as advance_run lines 1997-2007.
+            # SF-22: Atomically increment the edge count so subsequent calls
+            # see it. This is the ONLY increment for THIS transition — when
+            # we return a target, advance_run takes the fast-path at the
+            # pre-resolved current_node check and does NOT walk edges_taken,
+            # so there is no double-count. When we return None (gates, loops,
+            # checkpoints), the edge is NOT counted here — advance_run will
+            # count it via edges_taken later.
             conn.execute(
                 """
                 INSERT INTO skillflow_edge_counts (run_id, from_step, to_step, count, max_loop)
@@ -2008,7 +2013,11 @@ class SkillFlow:
                     return None
 
                 # Check end conditions when current_node was pre-resolved
-                # (e.g., by confirm_step inline transition resolution)
+                # (e.g., by confirm_step inline transition resolution).
+                # SF-24: _resolve_next_in_tx (called by confirm_step) already
+                # returns None for checkpoint steps, so a pre-resolved step can
+                # never be a checkpoint. If future code lifts that guard, add a
+                # safety check here before accepting the pre-resolved node.
                 ec = resolver.graph.end_conditions
                 if ec and ec.conditions:
                     end_result = self._evaluate_end_conditions(
@@ -2064,15 +2073,38 @@ class SkillFlow:
                 flags = self._deserialize(last["result_flags_json"])
                 edge_counts = self._read_edge_counts(conn, run_id)
                 try:
-                    first_target = resolver.next_node(last["step_id"], flags,
-                                                       edge_counts, file_reader=fr)
+                    matched_t, first_target = resolver.resolve_transition(
+                        last["step_id"], flags, edge_counts, file_reader=fr
+                    )
                 except CycleLimitExceeded:
                     self._fail_run_in_tx(conn, run_id, "Cycle limit exceeded")
                     return None
                 if first_target is None:
+                    last_node = resolver.get_node(last["step_id"])
+                    # SF-23: A transition with to:null (terminal) matched —
+                    # this means the pipeline should end. Check end_conditions
+                    # and complete the run instead of failing.
+                    if matched_t is not None and matched_t.to is None:
+                        ec = resolver.graph.end_conditions
+                        if ec and ec.conditions:
+                            end_result = self._evaluate_end_conditions(
+                                conn, run_id, ec, last["step_id"]
+                            )
+                            if end_result:
+                                if end_result.status == "completed":
+                                    self._complete_run_in_tx(conn, run_id, end_result.reason)
+                                else:
+                                    self._fail_run_in_tx(conn, run_id, end_result.reason)
+                                return None
+                        # Terminal transition with no end_conditions or
+                        # no matching condition — complete as success.
+                        self._complete_run_in_tx(
+                            conn, run_id,
+                            f"Pipeline completed at '{last['step_id']}'"
+                        )
+                        return None
                     # Check if this is a checkpoint step whose transition requires
                     # checkpoint approval. If so, pause instead of failing.
-                    last_node = resolver.get_node(last["step_id"])
                     if last_node and last_node.checkpoint:
                         # Find the first checkpoint-guarded transition as the pending target
                         for t in last_node.transitions:
@@ -2244,6 +2276,7 @@ class SkillFlow:
                 """
                 UPDATE skillflow_steps
                 SET status = 'pending', version = version + 1,
+                    retry_count = 0,
                     updated_at = datetime('now')
                 WHERE id = ? AND version = ?
                 """,
