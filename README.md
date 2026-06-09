@@ -320,6 +320,17 @@ loader.add_tools_dir("my_app/tools")
 sf = SkillFlow(":memory:", tool_loader=loader)
 ```
 
+### Auto-injected: `finish_step`
+
+Every agent step (both `content` mode and `write` mode) automatically gets a `finish_step` tool injected as the **last** tool in the schema. This gives the agent a deterministic way to signal "I'm done writing outputs" instead of relying on the host runner to guess when the agent has stopped calling tools.
+
+**Contract:**
+
+- Skillflow generates the tool schema (always last in the array — the model is shown it last so it calls it last).
+- Skillflow's tool executor returns `{"status": "completed"}` — a no-op.
+- The **host runner** detects `finish_step` in the tool-calling loop and breaks the turn loop, proceeding to output validation and step completion.
+- The runner MUST process **all** tool calls in the current turn before checking for `finish_step`, so multi-tool responses (e.g. `write_sota` + `finish_step`) work correctly — never short-circuit mid-turn.
+
 ## Use Cases
 
 ### 1. Framework mode — embed skillflow in your app

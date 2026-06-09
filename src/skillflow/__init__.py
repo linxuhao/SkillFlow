@@ -58,7 +58,7 @@ from skillflow.core import (
 
 from skillflow.validation import OutputValidator
 from skillflow.outbox import OutboxConsumer
-from skillflow.recovery import recover_stale_claims
+# recover_stale_claims is now a method on SkillFlow (self.recover_stale_claims())
 from skillflow.notifications import NotificationBus, Notification
 from skillflow.agent_registry import AgentRegistry, AgentConfig
 
@@ -82,7 +82,6 @@ __all__ = [
     # Utilities
     "OutputValidator",
     "OutboxConsumer",
-    "recover_stale_claims",
     "NotificationBus",
     "Notification",
     "AgentRegistry",

@@ -99,6 +99,17 @@ def generate_write_tool_schemas(output_mode: str,
                 "file": {"type": "string", "required": True},
                 "content": {"type": "string", "required": True},
             },
+        }, {
+            "name": "finish_step",
+            "description": (
+                "Signal that all required output files have been written and "
+                "the step is complete. Call this ONLY after all write tool calls "
+                "in the current turn have been made — it must be the last call."
+            ),
+            "parameters": {
+                "summary": {"type": "string", "required": False,
+                           "description": "Brief summary of what was created or completed"},
+            },
         }]
 
     if output_mode == "content":
@@ -157,6 +168,20 @@ def generate_write_tool_schemas(output_mode: str,
                 ),
                 "parameters": params,
             })
+        # finish_step — signal completion (always last so the model calls it last)
+        tools.append({
+            "name": "finish_step",
+            "description": (
+                "Signal that all required output files have been written and "
+                "the step is complete. Call this ONLY after all write/create/append"
+                " tool calls in the current turn have been made — it must be the "
+                "last tool call in your response."
+            ),
+            "parameters": {
+                "summary": {"type": "string", "required": False,
+                           "description": "Brief summary of what was created or completed"},
+            },
+        })
         return tools
 
     return []

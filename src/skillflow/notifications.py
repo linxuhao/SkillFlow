@@ -54,6 +54,12 @@ class NotificationBus:
         # GC'd while pending ("Task was destroyed but it is pending!"). Keep a
         # strong ref until each task completes.
         self._bg_tasks: set = set()
+        # Main event loop reference for thread-safe publish from executor threads.
+        self._main_loop: asyncio.AbstractEventLoop | None = None
+
+    def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Store the main event loop for cross-thread publish support."""
+        self._main_loop = loop
 
     # ── Subscriber management ──────────────────────────────────────
 
@@ -92,20 +98,42 @@ class NotificationBus:
                      step_id: str | None = None,
                      run_id: str | None = None,
                      target: str = "ui") -> None:
-        """Synchronous publish for non-async contexts."""
+        """Synchronous publish — safe from any thread.
+
+        From the event loop thread: schedules publish as async task.
+        From a worker thread (e.g. thread-pool executor): bridges to the
+        main event loop via call_soon_threadsafe so subscribers (SSE) fire
+        and the outbox is written.
+        """
         try:
             loop = asyncio.get_running_loop()
+            # On the event loop thread — schedule as async task
+            task = loop.create_task(self.publish(event_type, payload,
+                                                 step_id=step_id, run_id=run_id,
+                                                 target=target))
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
         except RuntimeError:
-            # No running loop — just write outbox
-            notification = Notification(
-                event_type=event_type, payload=payload,
-                step_id=step_id, run_id=run_id, target=target,
-            )
-            self._write_outbox(notification)
-            return
-        task = loop.create_task(self.publish(event_type, payload,
-                                             step_id=step_id, run_id=run_id,
-                                             target=target))
+            # Worker thread (no running loop) — bridge to main loop.
+            # If no main loop is set, fall back to synchronous outbox-only write.
+            if self._main_loop and self._main_loop.is_running():
+                self._main_loop.call_soon_threadsafe(
+                    lambda: self._schedule_publish(event_type, payload,
+                                                   step_id, run_id, target)
+                )
+            else:
+                notification = Notification(
+                    event_type=event_type, payload=payload,
+                    step_id=step_id, run_id=run_id, target=target,
+                )
+                self._write_outbox(notification)
+
+    def _schedule_publish(self, event_type: str, payload: dict,
+                          step_id: str | None, run_id: str | None,
+                          target: str) -> None:
+        """Schedule publish on the event loop (called via call_soon_threadsafe)."""
+        task = asyncio.ensure_future(self.publish(
+            event_type, payload, step_id=step_id, run_id=run_id, target=target))
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
@@ -127,10 +155,10 @@ class NotificationBus:
                 (
                     notification.event_type,
                     json.dumps({
-                        "payload": notification.payload,
-                        "step_id": notification.step_id,
-                        "run_id": notification.run_id,
-                        "timestamp": notification.timestamp,
+                        **notification.payload,
+                        "_step_id": notification.step_id,
+                        "_run_id": notification.run_id,
+                        "_timestamp": notification.timestamp,
                     }),
                     notification.target,
                 ),

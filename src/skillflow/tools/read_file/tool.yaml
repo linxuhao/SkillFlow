@@ -1,6 +1,11 @@
 name: read_file
 description: >
-  Read a file from the project workspace. Returns file content with line numbers.
+  Read a file from the project workspace. Searches in order:
+  1) project root (committed/delivered files),
+  2) step staging dir (files the agent just wrote via write_* tools),
+  3) step output dir (files from previous retries of this step).
+  Returns the file content with line numbers, and indicates which
+  directory the file was found in ("found_in").
 parameters:
   path:
     type: string

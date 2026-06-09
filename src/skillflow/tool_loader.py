@@ -53,7 +53,25 @@ class ToolLoader:
         if not self._tools_dirs:
             return False
         tool_dir = self._find_tool_dir(name)
+        # Dynamic tools (registered via register_dynamic_tool) are also native
+        if tool_dir is None and name in self._cache:
+            return True
         return tool_dir is not None and tool_dir == self._tools_dirs[0]
+
+    def register_dynamic_tool(self, name: str, schema: dict, fn: Callable) -> None:
+        """Register a tool that isn't backed by a tool.yaml on disk.
+
+        Dynamically generated tools (e.g. read_step_1_sota from context specs)
+        are registered here so load_schema/load_fn work without file I/O.
+        """
+        self._cache[name] = (schema, fn)
+
+    def is_dynamic(self, name: str) -> bool:
+        """True if the tool was registered via register_dynamic_tool."""
+        if name not in self._cache:
+            return False
+        # Dynamic tools have no tool_dir on disk — we check by trying to find one
+        return self._find_tool_dir(name) is None
 
     def load_schema(self, name: str) -> dict:
         """Load tool.yaml for a tool. Returns parsed dict."""

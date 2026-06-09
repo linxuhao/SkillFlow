@@ -79,9 +79,9 @@ class StepNode:
         max_retries: Maximum execution retries before the step is
                      considered permanently failed.
         timeout_seconds: Optional max seconds between claim and confirm.
-                         0 = no timeout (default). If a claimed step is
-                         not confirmed within this window, advance_run
-                         fails the step with status 'timeout'.
+                         0 = no timeout. Default 600 (10 min). If a claimed
+                         step is not confirmed within this window,
+                         advance_run times it out.
         output_schema: Optional dotted path to a Pydantic model for
                        output validation (e.g. ``"mypkg.schemas.Result"``).
         output_schema_retries: Max validation retries before treating
@@ -107,7 +107,7 @@ class StepNode:
     checkpoint_reject_to: str = ""
     config: dict = field(default_factory=dict)
     max_retries: int = 3
-    timeout_seconds: int = 0  # 0 = no timeout
+    timeout_seconds: int = 600  # 10 min default; 0 = no timeout
     max_tool_turns: int = 0  # 0 = use agent config default
     output_schema: str | None = None
     output_schema_retries: int = 0
@@ -131,6 +131,10 @@ class StepNode:
             raise ValueError(
                 f"StepNode '{self.id}': step_type='loop' requires a 'loop' config"
             )
+        # Normalize context specs so consumers (claim_next_step, ContextResolver)
+        # always see the normalized form regardless of how the StepNode was created.
+        if self.context:
+            self.context = [_normalize_context_spec(c) for c in self.context]
 
 
 @dataclass
@@ -139,7 +143,7 @@ class EndCondition:
 
     Attributes:
         type: ``"node_reached"``, ``"max_total_steps"``,
-              ``"max_run_duration"``, or ``"flag_match"``.
+              ``"max_run_duration"`` (or ``"max_run_duration_seconds"``), or ``"flag_match"``.
         node: For ``"node_reached"``: which node triggers termination.
         result: For ``"node_reached"``: ``"completed"`` or ``"failed"``.
         require_completed: For ``"node_reached"``: if True, the node's
@@ -250,7 +254,7 @@ class PipelineGraph:
                     checkpoint_reject_to=s.get("checkpoint_reject_to", ""),
                     config=s.get("config", {}),
                     max_retries=s.get("max_retries", 3),
-                    timeout_seconds=s.get("timeout_seconds", 0),
+                    timeout_seconds=s.get("timeout_seconds", 600),
                     max_tool_turns=s.get("max_tool_turns", 0),
                     output_schema=s.get("output_schema"),
                     output_schema_retries=s.get("output_schema_retries", 0),
@@ -714,6 +718,68 @@ class GraphResolver:
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
+
+
+def _normalize_context_spec(spec: dict) -> dict:
+    """Normalize a context spec dict, filling defaults and detecting source_type.
+
+    If the spec has a ``source`` key, its value is unwrapped as the inner spec
+    (existing convention in AItelier configs).
+
+    Supported inner forms::
+
+        {step: "1"}                        → all files from step 1
+        {step: "1", file: "sota.md"}       → specific file (legacy key)
+        {step: "1", files: ["sota.md"]}    → filtered files
+        {step: "1", mode: "tool"}          → tool-only
+        {config: "other", output: "x.md"}             → scan all steps
+        {config: "other", step: "s", output: "x.md"}  → specific step
+        {from: "workspace", path: "project/brief.md"}
+        {from: "repository", path: "src/", mode: "tool"}
+        {tool: "dir_tree"}                 → dynamic tool call (inline only)
+
+    Returns a new dict with defaults filled:
+        source_type, mode, files, path, step_id, config_name
+    """
+    # Unwrap {source: {...}} convention
+    inner = spec.get("source", spec)
+    if isinstance(inner, dict) and inner is not spec:
+        s = dict(inner)
+    else:
+        s = dict(spec)
+
+    if "config" in s:
+        s["source_type"] = "config"
+        s.setdefault("config_name", s["config"])
+        s.setdefault("step_id", s.get("step", ""))
+        if "output" in s and "files" not in s:
+            s["files"] = [s["output"]]
+    elif "step" in s:
+        s["source_type"] = "step"
+        s.setdefault("step_id", s["step"])
+        if "file" in s and "files" not in s:
+            s["files"] = [s["file"]]
+        elif "output" in s and "files" not in s:
+            s["files"] = [s["output"]]
+    elif s.get("from") in ("workspace", "repository"):
+        s["source_type"] = s["from"]
+    elif "tool" in s:
+        s["source_type"] = "tool"
+    else:
+        s.setdefault("source_type", "step")
+
+    # Set mode default based on source type
+    if "mode" not in s:
+        if s["source_type"] == "tool":
+            s["mode"] = "inline"
+        else:
+            s["mode"] = "both"
+
+    s.setdefault("files", [])
+    s.setdefault("path", "")
+    s.setdefault("step_id", "")
+    s.setdefault("config_name", "")
+    return s
 
 
 def _flags_match(match: dict, flags: dict, *,

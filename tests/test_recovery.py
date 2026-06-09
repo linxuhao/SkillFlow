@@ -6,7 +6,6 @@ import pytest
 
 from skillflow.core import SkillFlow
 from skillflow.graph import PipelineGraph, StepNode, Transition
-from skillflow.recovery import recover_stale_claims
 
 
 def _agent(id: str, transitions=None):
@@ -83,9 +82,8 @@ def test_recover_stale_keeps_current_node(sf: SkillFlow):
     assert run["current_node"] == "a"
 
 
-def test_recover_stale_claims_module_function(sf_tmp: SkillFlow):
-    """Test the standalone recover_stale_claims function."""
-    from skillflow.core import SkillFlow
+def test_recover_stale_claims_method_on_instance(sf_tmp: SkillFlow):
+    """Test the SkillFlow.recover_stale_claims() method (replaces standalone function)."""
 
     graph = PipelineGraph(
         name="test", begin="a",
@@ -97,5 +95,5 @@ def test_recover_stale_claims_module_function(sf_tmp: SkillFlow):
     sf_tmp.advance_run(run_id)
     sf_tmp.claim_next_step(run_id)
 
-    recovered = recover_stale_claims(sf_tmp._db_path, stale_threshold_seconds=-1)
+    recovered = sf_tmp.recover_stale_claims(stale_threshold_seconds=-1)
     assert len(recovered) >= 0

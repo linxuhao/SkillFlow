@@ -44,10 +44,15 @@ class ContextResolver:
 
     def _resolve_one(self, source: dict, current_config: str,
                      loop_context: dict[str, str] | None = None) -> tuple[str, str]:
-        if "config" in source:
+        source_type = source.get("source_type", "")
+        if source_type == "config" or "config" in source:
             return self._resolve_cross_config(source, current_config)
-        if "step" in source:
+        if source_type == "step" or "step" in source:
             return self._resolve_step_output(source, current_config, loop_context)
+        if source_type == "workspace":
+            return self._resolve_workspace(source)
+        if source_type == "repository":
+            return self._resolve_repository(source)
         if "tool" in source:
             return self._resolve_tool(source)
         return "", ""
@@ -164,6 +169,70 @@ class ContextResolver:
 
         label = f"Step {step_id} — {output_file}"
         return label, content
+
+    def _resolve_workspace(self, source: dict) -> tuple[str, str]:
+        """Resolve from: workspace source — read from project workspace root."""
+        rel_path = source.get("path", "")
+        abs_path = self._workspace_root / rel_path
+        if abs_path.is_file():
+            try:
+                content = abs_path.read_text(encoding="utf-8", errors="replace")
+                label = f"Workspace — {rel_path}"
+                return label, content
+            except Exception:
+                return "", ""
+        elif abs_path.is_dir():
+            # Directory: concatenate all files (like step dir)
+            parts: list[str] = []
+            for f in sorted(abs_path.rglob("*")):
+                if f.is_file() and f.name != ".gitkeep":
+                    try:
+                        content = f.read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        continue
+                    rel = f.relative_to(abs_path)
+                    parts.append(f"### {rel}\n{content}")
+            if not parts:
+                return "", ""
+            return f"Workspace — {rel_path}", "\n\n".join(parts)
+        return "", ""
+
+    def _resolve_repository(self, source: dict) -> tuple[str, str]:
+        """Resolve from: repository source — read from code repository root.
+
+        For mode=tool, returns empty (repos are large, tool-only).
+        For mode=inline/both, concatenates matching files.
+        """
+        if source.get("mode") == "tool":
+            return "", ""  # tool-only, no inline injection
+
+        rel_path = source.get("path", "")
+        abs_path = self._workspace_root / "project" / rel_path
+        if not abs_path.exists():
+            return "", ""
+        if abs_path.is_file():
+            try:
+                content = abs_path.read_text(encoding="utf-8", errors="replace")
+                return f"Repository — {rel_path}", content
+            except Exception:
+                return "", ""
+        elif abs_path.is_dir():
+            parts: list[str] = []
+            for f in sorted(abs_path.rglob("*")):
+                if f.is_file() and f.name != ".gitkeep":
+                    # Skip binary-looking files
+                    if f.suffix in (".pyc", ".pyo", ".so", ".o", ".bin"):
+                        continue
+                    try:
+                        content = f.read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        continue
+                    rel = f.relative_to(abs_path)
+                    parts.append(f"### {rel}\n{content}")
+            if not parts:
+                return "", ""
+            return f"Repository — {rel_path}", "\n\n".join(parts)
+        return "", ""
 
     def _resolve_tool(self, source: dict) -> tuple[str, str]:
         tool_name = source["tool"]

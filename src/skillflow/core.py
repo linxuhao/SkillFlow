@@ -364,12 +364,10 @@ class SkillFlow:
                             """,
                             (run_id, node.id, trans.to, trans.max_loop),
                         )
-            conn.execute(
-                """
-                INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-                VALUES ('run_created', ?, datetime('now'))
-                """,
-                (self._serialize({"run_id": run_id, "graph_name": graph_name}),),
+            self.notifications.publish_sync(
+                "run_created",
+                {"run_id": run_id, "graph_name": graph_name, "project_id": project_id},
+                run_id=run_id,
             )
         return run_id
 
@@ -385,12 +383,13 @@ class SkillFlow:
             )
             if cur.rowcount == 0:
                 raise SkillFlowError(f"Run '{run_id}' not found or not in 'pending' status")
-            conn.execute(
-                """
-                INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-                VALUES ('run_started', ?, datetime('now'))
-                """,
-                (self._serialize({"run_id": run_id}),),
+            _proj = conn.execute(
+                "SELECT project_id FROM skillflow_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            self.notifications.publish_sync(
+                "run_started",
+                {"run_id": run_id, "project_id": _proj["project_id"] if _proj else None},
+                run_id=run_id,
             )
 
     def pause_run(self, run_id: str) -> None:
@@ -691,15 +690,18 @@ class SkillFlow:
                 if "_feedback" in existing_inputs:
                     feedback = existing_inputs["_feedback"]
 
-            conn.execute(
-                """
-                INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-                VALUES ('step_claimed', ?, datetime('now'))
-                """,
-                (self._serialize({
+            # Emit via notification bus (real-time push + durable outbox).
+            # publish_sync schedules an async task; outbox write happens
+            # after this _tx transaction commits, avoiding premature commit.
+            self.notifications.publish_sync(
+                "step_claimed",
+                {
                     "run_id": run_id, "step_id": run["current_node"],
                     "step_instance_id": step_row["id"] if step_row else None,
-                }),),
+                    "project_id": run["project_id"],
+                },
+                step_id=run["current_node"],
+                run_id=run_id,
             )
 
             token = ClaimToken(
@@ -770,6 +772,41 @@ class SkillFlow:
                 for ws in generate_write_tool_schemas(node.output_mode, node.output_fixed):
                     tool_schemas[ws["name"]] = ws
 
+            # Merge dynamic read tool schemas from graph's context specs
+            if self._workspace and node.context:
+                try:
+                    from skillflow.read_tools import (
+                        generate_read_tool_schemas,
+                        make_read_tool_fns,
+                    )
+                    ws_root = str(self._workspace.get_project_path(
+                        run["project_id"]
+                    ))
+                    code_root = str(self._workspace.get_project_code_path(
+                        run["project_id"]
+                    )) if self._workspace else ""
+                    read_schemas = generate_read_tool_schemas(
+                        node.context,
+                        workspace_root=ws_root,
+                        current_config=run["graph_name"],
+                        code_root=code_root,
+                    )
+                    if read_schemas and self._tool_loader:
+                        read_fns = make_read_tool_fns(
+                            node.context,
+                            workspace_root=ws_root,
+                            current_config=run["graph_name"],
+                            code_root=code_root,
+                        )
+                        for rs in read_schemas:
+                            name = rs["name"]
+                            fn = read_fns.get(name)
+                            if fn:
+                                tool_schemas[name] = rs
+                                self._tool_loader.register_dynamic_tool(name, rs, fn)
+                except Exception:
+                    pass  # Read tool generation is best-effort
+
             inputs_with_tools["_tool_schemas"] = tool_schemas
 
             # Step-level max_tool_turns overrides agent config default (0 = use agent default)
@@ -830,6 +867,16 @@ class SkillFlow:
                 "validation_error": validation_error,
             })
 
+            # Wire emit to notification bus so host-internal events
+            # (agent_message, files_written, etc.) flow through the
+            # same pub/sub channel as framework events.
+            _notifications = self.notifications
+            def _emit(event_type, payload,
+                      _rid=token.run_id, _sid=claimed_step_id,
+                      _n=_notifications):
+                _n.publish_sync(event_type, payload,
+                                step_id=_sid, run_id=_rid)
+
             return ClaimedStep(
                 token=token, step_id=claimed_step_id,
                 step_config=node.config,
@@ -838,6 +885,7 @@ class SkillFlow:
                 validation_error=validation_error,
                 error_context=error_context,
                 trace=_trace,
+                emit=_emit,
             )
 
     def confirm_step(self, token: ClaimToken, result: StepResult) -> None:
@@ -933,15 +981,13 @@ class SkillFlow:
                 self._fail_run_in_tx(conn, token.run_id, f"Cycle limit exceeded: {e}")
                 # Step completed but the run is now failed — still emit the
                 # step_completed event so the host sees the terminal state.
-                conn.execute(
-                    """
-                    INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-                    VALUES ('step_completed', ?, datetime('now'))
-                    """,
-                    (self._serialize({
+                self.notifications.publish_sync(
+                    "step_completed",
+                    {
                         "run_id": token.run_id, "step_id": token.step_id,
                         "step_instance_id": token.step_instance_id,
-                    }),),
+                    },
+                    step_id=token.step_id, run_id=token.run_id,
                 )
                 _cycle_exceeded = str(e)
                 # Trace is deferred to after the _tx block to avoid a nested
@@ -962,15 +1008,18 @@ class SkillFlow:
                 )
 
             if not _cycle_exceeded:
-                conn.execute(
-                    """
-                    INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-                    VALUES ('step_completed', ?, datetime('now'))
-                    """,
-                    (self._serialize({
+                _proj_id = conn.execute(
+                    "SELECT project_id FROM skillflow_runs WHERE id = ?",
+                    (token.run_id,),
+                ).fetchone()
+                self.notifications.publish_sync(
+                    "step_completed",
+                    {
                         "run_id": token.run_id, "step_id": token.step_id,
                         "step_instance_id": token.step_instance_id,
-                    }),),
+                        "project_id": _proj_id["project_id"] if _proj_id else None,
+                    },
+                    step_id=token.step_id, run_id=token.run_id,
                 )
         if _cycle_exceeded:
             self.trace(token.run_id, "step", "completed",
@@ -1008,17 +1057,15 @@ class SkillFlow:
                     """,
                     (error, token.step_instance_id, token.version),
                 )
-                conn.execute(
-                    """
-                    INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-                    VALUES ('step_validation_failed', ?, datetime('now'))
-                    """,
-                    (self._serialize({
+                self.notifications.publish_sync(
+                    "step_validation_failed",
+                    {
                         "run_id": token.run_id, "step_id": token.step_id, "error": error,
                         "retry_count": row["retry_count"],
                         "validation_retry_count": row["validation_retry_count"] + 1,
                         "max_retries": max_allowed,
-                    }),),
+                    },
+                    step_id=token.step_id, run_id=token.run_id,
                 )
             else:
                 # Retry budget exhausted — permanent failure
@@ -1247,23 +1294,31 @@ class SkillFlow:
     def _emit_lifecycle_event(self, token: ClaimToken, hook_name: str,
                                status: str, detail: str = ""):
         """Emit a lifecycle hook event to the outbox."""
+        # SF-6: resolve project_id so downstream consumers don't need to
+        # cross-reference the runs table.
+        project_id = ""
+        try:
+            row = self._conn.execute(
+                "SELECT project_id FROM skillflow_runs WHERE id = ?",
+                (token.run_id,),
+            ).fetchone()
+            if row:
+                project_id = row["project_id"]
+        except Exception:
+            pass
         payload = {
             "run_id": token.run_id,
             "step_id": token.step_id,
+            "project_id": project_id,
             "hook": hook_name,
             "status": status,
         }
         if detail:
             payload["detail"] = detail
-        with self._lock:
-            self._conn.execute(
-                """
-                INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-                VALUES ('lifecycle_hook', ?, datetime('now'))
-                """,
-                (self._serialize(payload),),
-            )
-            self._conn.commit()
+        self.notifications.publish_sync(
+            "lifecycle_hook", payload,
+            step_id=token.step_id, run_id=token.run_id,
+        )
         # Mirror to the durable trace (outbox rows are drained + deleted).
         self.trace(token.run_id, "lifecycle", hook_name,
                    {"status": status, "detail": detail},
@@ -1308,16 +1363,14 @@ class SkillFlow:
                 "UPDATE skillflow_runs SET current_node = NULL, updated_at = datetime('now') WHERE id = ?",
                 (token.run_id,),
             )
-            conn.execute(
-                """
-                INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-                VALUES ('step_failed', ?, datetime('now'))
-                """,
-                (self._serialize({
+            self.notifications.publish_sync(
+                "step_failed",
+                {
                     "run_id": token.run_id, "step_id": token.step_id,
                     "step_instance_id": token.step_instance_id,
                     "error": error, "retryable": True, "retry_count": retry_count + 1,
-                }),),
+                },
+                step_id=token.step_id, run_id=token.run_id,
             )
             return
 
@@ -1374,30 +1427,28 @@ class SkillFlow:
                 "UPDATE skillflow_runs SET current_node = ?, updated_at = datetime('now') WHERE id = ?",
                 (error_handler, token.run_id),
             )
-            conn.execute(
-                """
-                INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-                VALUES ('step_failed', ?, datetime('now'))
-                """,
-                (self._serialize({
+            self.notifications.publish_sync(
+                "step_failed",
+                {
                     "run_id": token.run_id, "step_id": token.step_id,
                     "step_instance_id": token.step_instance_id,
                     "error": error, "retryable": False, "routed_to": error_handler,
-                }),),
+                },
+                step_id=token.step_id, run_id=token.run_id,
             )
             # If the failed step had a checkpoint, emit a checkpoint-skipped event
             node = resolver.get_node(token.step_id)
             if node and node.checkpoint:
-                conn.execute(
-                    "INSERT INTO skillflow_outbox (event_type, payload_json, created_at) "
-                    "VALUES ('checkpoint_skipped', ?, datetime('now'))",
-                    (self._serialize({
+                self.notifications.publish_sync(
+                    "checkpoint_skipped",
+                    {
                         "run_id": token.run_id,
                         "step_id": token.step_id,
                         "step_label": node.checkpoint_label or node.name or token.step_id,
                         "error": error,
                         "routed_to": error_handler,
-                    }),),
+                    },
+                    step_id=token.step_id, run_id=token.run_id,
                 )
         else:
             conn.execute(
@@ -1438,15 +1489,15 @@ class SkillFlow:
             "updated_at = datetime('now') WHERE id = ?",
             (run_id,),
         )
-        conn.execute(
-            """INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-               VALUES ('step_timeout', ?, datetime('now'))""",
-            (self._serialize({
+        self.notifications.publish_sync(
+            "step_timeout",
+            {
                 "run_id": run_id, "step_id": step_id,
                 "error": error,
                 "timeout_seconds": timeout_seconds,
                 "claimed_at": claimed_at,
-            }),),
+            },
+            step_id=step_id, run_id=run_id,
         )
 
     # ── Tool node helpers ───────────────────────────────────────────
@@ -1550,15 +1601,13 @@ class SkillFlow:
                 (self._serialize(result), self._serialize(result),
                  step_row["id"], step_row["version"]),
             )
-        conn.execute(
-            """
-            INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-            VALUES ('step_completed', ?, datetime('now'))
-            """,
-            (self._serialize({
+        self.notifications.publish_sync(
+            "step_completed",
+            {
                 "run_id": run_id, "step_id": step_id,
                 "step_instance_id": step_row["id"] if step_row else None,
-            }),),
+            },
+            step_id=step_id, run_id=run_id,
         )
 
     def _inject_feedback_in_tx(self, conn, run_id: str, target_step_id: str,
@@ -1627,13 +1676,13 @@ class SkillFlow:
                 file_path = step_dir / source_file
             if not file_path.exists():
                 # Source file missing — emit warning, treat as empty → done
-                conn.execute(
-                    "INSERT INTO skillflow_outbox (event_type, payload_json, created_at) "
-                    "VALUES ('loop_source_missing', ?, datetime('now'))",
-                    (self._serialize({
+                self.notifications.publish_sync(
+                    "loop_source_missing",
+                    {
                         "run_id": run["id"], "loop_step_id": loop_step_id,
                         "source_step": source_step, "source_file": source_file,
-                    }),),
+                    },
+                    run_id=run["id"],
                 )
                 items = []
             else:
@@ -1934,6 +1983,28 @@ class SkillFlow:
                             (target, run_id),
                         )
                         return target
+
+                    # No target (no matching transition) — check end_conditions
+                    # against the current node (the one that just completed).
+                    # Fixes SF-12: when the last step has no outgoing transitions,
+                    # end_conditions were previously skipped because target=None.
+                    ec = resolver.graph.end_conditions
+                    if ec and ec.conditions:
+                        end_result = self._evaluate_end_conditions(
+                            conn, run_id, ec, current
+                        )
+                        if end_result:
+                            if end_result.status == "completed":
+                                self._complete_run_in_tx(conn, run_id, end_result.reason)
+                            else:
+                                self._fail_run_in_tx(conn, run_id, end_result.reason)
+                            return None
+
+                    # No target and no matching end condition → fail the run
+                    self._fail_run_in_tx(
+                        conn, run_id,
+                        f"No matching transition from '{current}' with flags {step_flags}"
+                    )
                     return None
 
                 # Check end conditions when current_node was pre-resolved
@@ -2030,6 +2101,25 @@ class SkillFlow:
                         "UPDATE skillflow_runs SET status = 'paused', updated_at = datetime('now') WHERE id = ?",
                         (run_id,),
                     )
+                    # Emit checkpoint_paused via notification bus so
+                    # TUI/SSE consumers see it without polling.
+                    _chk_label = last_node.checkpoint_label or last_node.name or last["step_id"]
+                    self.notifications.publish_sync(
+                        "checkpoint_paused",
+                        {
+                            "step_id": last["step_id"],
+                            "label": _chk_label,
+                            "next_node": next_node,
+                            "project_id": run["project_id"],
+                        },
+                        step_id=last["step_id"], run_id=run_id,
+                    )
+                    # SF-3: record checkpoint pause in durable trace.
+                    self.trace(run_id, "step", "checkpoint_paused", {
+                        "step_id": last["step_id"],
+                        "label": _chk_label,
+                        "next_node": next_node,
+                    }, step_id=last["step_id"])
                     return None
 
             # Auto-advance through gates AND auto-execute tool nodes
@@ -2192,13 +2282,90 @@ class SkillFlow:
                     """,
                     (feedback, run_id, redirect_to),
                 )
-            conn.execute(
-                """
-                INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-                VALUES ('step_checkpoint_rejected', ?, datetime('now'))
-                """,
-                (self._serialize({"run_id": run_id, "step_id": step_id}),),
+            self.notifications.publish_sync(
+                "step_checkpoint_rejected",
+                {"run_id": run_id, "step_id": step_id},
+                step_id=step_id, run_id=run_id,
             )
+
+    def approve_checkpoint(self, run_id: str) -> str:
+        """Approve the current checkpoint and advance the pipeline.
+
+        The run must be in 'paused' status on a checkpoint step.  This method
+        resumes execution and emits a ``checkpoint_approved`` outbox event so
+        downstream consumers (TUI, SSE) can react without polling.
+
+        Returns the next node id (the review step) so the host can surface it
+        in the response without an extra DB round-trip.
+
+        Raises SkillFlowError if the run is not paused, or if the last
+        completed step is not a checkpoint.
+        """
+        with self._tx() as conn:
+            run = conn.execute(
+                "SELECT * FROM skillflow_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            if not run:
+                raise SkillFlowError(f"Run not found: {run_id}")
+            if run["status"] != "paused":
+                raise SkillFlowError(
+                    f"Run '{run_id}' is not paused (status: '{run['status']}')"
+                )
+
+            resolver = self._get_resolver(run["graph_name"])
+
+            # Find the last completed checkpoint step
+            steps = conn.execute(
+                "SELECT step_id FROM skillflow_steps "
+                "WHERE run_id = ? AND status = 'completed' "
+                "ORDER BY completed_at DESC",
+                (run_id,),
+            ).fetchall()
+
+            checkpoint_step_id = ""
+            checkpoint_node = None
+            for s in steps:
+                node = resolver.get_node(s["step_id"])
+                if node and node.checkpoint:
+                    checkpoint_step_id = s["step_id"]
+                    checkpoint_node = node
+                    break
+
+            if not checkpoint_step_id:
+                raise SkillFlowError(
+                    f"No checkpoint step found in completed steps for run '{run_id}'"
+                )
+
+            # The run's current_node was already set to the review step when
+            # advance_run paused the run.  Just resume — advance_run on the
+            # next tick will claim the review step.
+            next_node = run["current_node"] or ""
+            conn.execute(
+                "UPDATE skillflow_runs SET status = 'running', "
+                "updated_at = datetime('now') WHERE id = ?",
+                (run_id,),
+            )
+
+            # Emit via notification bus for real-time TUI/SSE notification
+            self.notifications.publish_sync(
+                "checkpoint_approved",
+                {
+                    "run_id": run_id,
+                    "step_id": checkpoint_step_id,
+                    "project_id": run["project_id"],
+                    "label": checkpoint_node.checkpoint_label if checkpoint_node else "",
+                    "next_node": next_node,
+                },
+                step_id=checkpoint_step_id, run_id=run_id,
+            )
+
+            # Durable trace record
+            self.trace(run_id, "step", "checkpoint_approved", {
+                "step_id": checkpoint_step_id,
+                "next_node": next_node,
+            })
+
+            return next_node
 
     # ── Recovery ──────────────────────────────────────────────────
 
@@ -2210,34 +2377,70 @@ class SkillFlow:
         with self._tx() as conn:
             stale = conn.execute(
                 """
-                SELECT id, run_id, step_id FROM skillflow_steps
+                SELECT id, run_id, step_id, inputs_json FROM skillflow_steps
                 WHERE status = 'claimed' AND claimed_at < ?
                 """,
                 (threshold,),
             ).fetchall()
             run_ids: set[str] = set()
             for row in stale:
+                # SF-20: track stale recovery count to detect crash loops.
+                # If the same step instance has been recovered twice already,
+                # the worker keeps dying on it — fail it permanently.
+                inputs = self._deserialize(row["inputs_json"])
+                stale_count = inputs.get("_stale_recovery_count", 0) + 1
+                if stale_count >= 3:
+                    error_msg = (
+                        f"Step '{row['step_id']}' worker crashed 3 times — "
+                        f"likely a code bug or OOM in this step."
+                    )
+                    conn.execute(
+                        """
+                        UPDATE skillflow_steps
+                        SET status = 'failed', version = version + 1,
+                            last_error = ?, claimed_at = NULL, claimed_by = NULL,
+                            updated_at = datetime('now')
+                        WHERE id = ?
+                        """,
+                        (error_msg, row["id"]),
+                    )
+                    conn.execute(
+                        "UPDATE skillflow_runs SET current_node = NULL, "
+                        "updated_at = datetime('now') WHERE id = ?",
+                        (row["run_id"],),
+                    )
+                    self.notifications.publish_sync(
+                        "step_failed",
+                        {
+                            "run_id": row["run_id"], "step_id": row["step_id"],
+                            "error": error_msg, "retryable": False,
+                        },
+                        step_id=row["step_id"], run_id=row["run_id"],
+                    )
+                    run_ids.add(row["run_id"])
+                    continue
+
+                # Store recovery count in inputs so we can detect repeated crashes
+                inputs["_stale_recovery_count"] = stale_count
                 conn.execute(
                     """
                     UPDATE skillflow_steps
                     SET status = 'pending', version = version + 1,
                         claimed_at = NULL, claimed_by = NULL,
+                        inputs_json = ?,
                         updated_at = datetime('now')
                     WHERE id = ?
                     """,
-                    (row["id"],),
+                    (self._serialize(inputs), row["id"]),
                 )
                 # Keep current_node — the step was claimed but the worker
                 # died before confirm.  advance_run will re-claim the same step.
 
                 run_ids.add(row["run_id"])
             if stale:
-                conn.execute(
-                    """
-                    INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-                    VALUES ('stale_claims_recovered', ?, datetime('now'))
-                    """,
-                    (self._serialize({"count": len(stale), "run_ids": list(run_ids)}),),
+                self.notifications.publish_sync(
+                    "stale_claims_recovered",
+                    {"count": len(stale), "run_ids": list(run_ids)},
                 )
             return list(run_ids)
 
@@ -2450,7 +2653,7 @@ class SkillFlow:
             except Exception:
                 pass
 
-        # Build allowed tool set from agent config + write tool schemas
+        # Build allowed tool set from agent config + write tool schemas + read tools
         allowed: set[str] = set()
         if node:
             if node.agent_config and node.agent_config in self.agent_registry:
@@ -2461,6 +2664,10 @@ class SkillFlow:
                 from skillflow.write_tools import generate_write_tool_schemas
                 for ws in generate_write_tool_schemas(node.output_mode, node.output_fixed):
                     allowed.add(ws["name"])
+            # Add read tool names from context specs (mode ∈ {tool, both})
+            if node.context:
+                from skillflow.read_tools import get_read_tool_names
+                allowed.update(get_read_tool_names(node.context))
 
         if allowed and name not in allowed:
             return {"error": f"Tool '{name}' not allowed. Allowed: {sorted(allowed)}"}
@@ -2492,11 +2699,31 @@ class SkillFlow:
             from skillflow.write_tools import execute_generic_write
             return execute_generic_write(params, str(tmp_dir))
 
+        # finish_step — no-op completion signal; the host runner detects it and
+        # breaks the tool-calling loop after the current turn completes
+        if name == "finish_step":
+            return {"status": "completed", "summary": params.get("summary", "")}
+
         # Read/exploration/validation tools via ToolLoader
         fn = self._tool_loader.load_fn(name)
         kwargs = dict(params)
         kwargs.setdefault("workspace_root", project_root or "")
         kwargs.setdefault("project_root", project_root or "")
+        # SF-10: pass step staging/output dirs so read_file (and similar tools)
+        # can find files the agent just wrote (in .tmp) or files from previous
+        # retries (in the step's final dir). write_* tools write to .tmp; without
+        # these fallback paths the agent can't verify its own output within a step.
+        if name in ("read_file", "list_tree"):
+            try:
+                if run_id and step_id and self._workspace:
+                    pid = self._get_project_id(run_id)
+                    gname = self._get_graph_name(run_id)
+                    kwargs.setdefault("step_tmp_dir",
+                                      str(self._workspace.get_step_tmp_dir(pid, gname, step_id)))
+                    kwargs.setdefault("step_dir",
+                                      str(self._workspace.get_step_dir(pid, gname, step_id)))
+            except Exception:
+                pass
         # Filter kwargs to only what the function accepts
         import inspect as _inspect
         try:
@@ -2540,7 +2767,7 @@ class SkillFlow:
                 ).fetchone()
                 if total and total["cnt"] >= cond.limit:
                     results.append(EndResult(status="failed", reason=f"Max total steps ({cond.limit}) exceeded"))
-            elif cond.type == "max_run_duration_seconds":
+            elif cond.type in ("max_run_duration", "max_run_duration_seconds"):
                 run = conn.execute(
                     "SELECT started_at FROM skillflow_runs WHERE id = ?", (run_id,)
                 ).fetchone()
@@ -2582,12 +2809,10 @@ class SkillFlow:
             """,
             (reason, run_id),
         )
-        conn.execute(
-            """
-            INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-            VALUES ('run_failed', ?, datetime('now'))
-            """,
-            (self._serialize({"run_id": run_id, "reason": reason}),),
+        self.notifications.publish_sync(
+            "run_failed",
+            {"run_id": run_id, "reason": reason},
+            run_id=run_id,
         )
 
     def _complete_run_in_tx(self, conn: sqlite3.Connection, run_id: str, reason: str):
@@ -2599,12 +2824,10 @@ class SkillFlow:
             """,
             (run_id,),
         )
-        conn.execute(
-            """
-            INSERT INTO skillflow_outbox (event_type, payload_json, created_at)
-            VALUES ('run_completed', ?, datetime('now'))
-            """,
-            (self._serialize({"run_id": run_id, "reason": reason}),),
+        self.notifications.publish_sync(
+            "run_completed",
+            {"run_id": run_id, "reason": reason},
+            run_id=run_id,
         )
 
 
