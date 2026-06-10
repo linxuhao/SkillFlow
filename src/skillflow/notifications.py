@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +57,9 @@ class NotificationBus:
         self._bg_tasks: set = set()
         # Main event loop reference for thread-safe publish from executor threads.
         self._main_loop: asyncio.AbstractEventLoop | None = None
+        # Lock protecting _write_outbox access to self._conn, so a worker-thread
+        # fallback (no main loop) doesn't conflict with SkillFlow._tx() blocks.
+        self._conn_lock = threading.RLock()
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Store the main event loop for cross-thread publish support."""
@@ -126,7 +130,10 @@ class NotificationBus:
                     event_type=event_type, payload=payload,
                     step_id=step_id, run_id=run_id, target=target,
                 )
-                self._write_outbox(notification)
+                # Acquire lock to avoid conflicting with SkillFlow._tx()
+                # which also uses self._conn.
+                with self._conn_lock:
+                    self._write_outbox(notification)
 
     def _schedule_publish(self, event_type: str, payload: dict,
                           step_id: str | None, run_id: str | None,
