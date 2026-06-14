@@ -1152,3 +1152,94 @@ def test_claim_twice_from_yaml_second_fails(sf_with_tools):
     # Cannot claim from a completed run
     c3 = sf.claim_next_step(run_id)
     assert c3 is None
+
+
+# ── Dynamic loop: append + goal-loop re-entry ──────────────────────────
+
+def _manifest_path(sf, run_id, project_id="test-loop"):
+    gname = sf._get_graph_name(run_id)
+    return sf._workspace.get_step_dir(project_id, gname, "prepare") / "tasks_manifest.json"
+
+
+def test_loop_reads_manifest_each_iteration_picks_up_appends(sf_with_workspace):
+    """Items appended to the manifest mid-loop are picked up (dynamic re-read)."""
+    import json
+    sf = sf_with_workspace
+    run_id = _loop_prepare(sf, ["a", "b"])
+    manifest = _manifest_path(sf, run_id)
+    seen: list = []
+    appended = False
+    for _ in range(50):
+        sf.advance_run(run_id)
+        if sf.get_run(run_id)["status"] in ("completed", "failed", "paused"):
+            break
+        claimed = sf.claim_next_step(run_id)
+        if claimed is None:
+            continue
+        if claimed.step_id == "process_task":
+            rc = claimed.inputs.get("_resolved_context") or {}
+            seen.append(rc.get("[current_task]"))
+            if not appended:  # append "c" after the first item is dispatched
+                manifest.write_text(json.dumps({"execution_order": ["a", "b", "c"]}))
+                appended = True
+        sf.confirm_step(claimed.token, StepResult())
+    assert sf.get_run(run_id)["status"] == "completed"
+    assert seen == ["a", "b", "c"]  # appended item picked up; none skipped/duplicated
+
+
+def test_loop_reentry_after_exhaustion_runs_only_new_items(sf_with_workspace):
+    """Re-entering an exhausted loop (the goal-loop case) with appended items
+    runs the NEW items, starting at the first one — no off-by-one skip, no
+    re-run of completed items."""
+    import json
+    sf = sf_with_workspace
+    run_id = _loop_prepare(sf, ["a", "b"])
+    _, items1 = _drive_loop(sf, run_id)
+    assert items1 == ["a", "b"]
+    assert sf.get_run(run_id)["status"] == "completed"
+
+    # Simulate an upstream goal-loop: append corrective tasks, then re-enter the
+    # loop node directly (mirrors flow looping back through the loop step).
+    _manifest_path(sf, run_id).write_text(
+        json.dumps({"execution_order": ["a", "b", "c", "d"]})
+    )
+    with sf._tx() as conn:
+        conn.execute(
+            "UPDATE skillflow_runs SET status = 'running', current_node = 'task_iterator' "
+            "WHERE id = ?",
+            (run_id,),
+        )
+
+    _, items2 = _drive_loop(sf, run_id)
+    assert items2 == ["c", "d"]  # first new item is "c" (not skipped to "d"), a/b not redone
+    assert sf.get_run(run_id)["status"] == "completed"
+
+
+def test_loop_body_edge_counts_reset_per_iteration(sf_with_workspace):
+    """Each iteration clears the loop body's edge counts, so inner review/verify
+    loops get a per-task retry budget instead of a shared per-run one."""
+    sf = sf_with_workspace
+    run_id = _loop_prepare(sf, ["a", "b", "c"])
+
+    def body_edge_count():
+        row = sf._conn.execute(
+            "SELECT COALESCE(SUM(count), 0) AS c FROM skillflow_edge_counts "
+            "WHERE run_id = ? AND from_step = 'process_task'",
+            (run_id,),
+        ).fetchone()
+        return row["c"]
+
+    max_seen = 0
+    for _ in range(50):
+        sf.advance_run(run_id)
+        if sf.get_run(run_id)["status"] in ("completed", "failed", "paused"):
+            break
+        claimed = sf.claim_next_step(run_id)
+        if claimed is None:
+            continue
+        if claimed.step_id == "process_task":
+            max_seen = max(max_seen, body_edge_count())
+        sf.confirm_step(claimed.token, StepResult())
+    # Without per-iteration reset, process_task→task_iterator would accumulate
+    # across all 3 items. With the reset it never exceeds a single iteration.
+    assert max_seen <= 1
