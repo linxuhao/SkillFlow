@@ -40,12 +40,26 @@ class StepValidator:
                 pass
 
     def validate(self, specs: list[dict]) -> dict:
-        """Run all validation specs. Returns {passed: True} or {passed: False, errors: [...]}."""
+        """Run all validation specs.
+
+        Each spec may include ``on_failure: "warn"`` — failures from that
+        spec are collected as warnings (non-fatal) rather than errors.
+
+        Returns::
+
+            {
+                "passed": bool,       # fatal errors only
+                "errors": [...],      # fatal failures
+                "warnings": [...]     # warn-level failures (on_failure="warn")
+            }
+        """
         errors: list[dict] = []
+        warnings: list[dict] = []
 
         for spec in specs:
             file_patterns = spec.get("files", [])
             tool_name = spec.get("tool", "")
+            on_failure = spec.get("on_failure", "fail")
             if not tool_name:
                 continue
 
@@ -62,7 +76,7 @@ class StepValidator:
             takes_plural = "files" in sig.parameters
 
             base_kwargs = {k: v for k, v in spec.items()
-                          if k not in ("files", "file", "tool")}
+                          if k not in ("files", "file", "tool", "on_failure")}
 
             if takes_plural:
                 # Batch tool (e.g. json_schema): pass all file patterns
@@ -70,10 +84,11 @@ class StepValidator:
                 base_kwargs.setdefault("workspace_root", str(self._workspace_root))
                 try:
                     result = fn(**base_kwargs)
-                    self._add_errors(result, tool_name, errors)
+                    self._add_issues(result, tool_name, on_failure, errors, warnings)
                 except Exception as e:
-                    errors.append({"tool": tool_name, "files": file_patterns,
-                                   "error": str(e)})
+                    (warnings if on_failure == "warn" else errors).append(
+                        {"tool": tool_name, "files": file_patterns,
+                         "error": str(e)})
 
             elif takes_singular:
                 # Per-file tool (e.g. syntax_lint): call once per match
@@ -90,38 +105,40 @@ class StepValidator:
                         kwargs.setdefault("workspace_root", str(self._workspace_root))
                         try:
                             result = fn(**kwargs)
-                            self._add_errors(result, tool_name, errors)
+                            self._add_issues(result, tool_name, on_failure, errors, warnings)
                         except Exception as e:
-                            errors.append({"tool": tool_name, "file": rel,
-                                           "error": str(e)})
+                            (warnings if on_failure == "warn" else errors).append(
+                                {"tool": tool_name, "file": rel,
+                                 "error": str(e)})
 
             else:
                 base_kwargs["files"] = file_patterns
                 base_kwargs.setdefault("workspace_root", str(self._workspace_root))
                 try:
                     result = fn(**base_kwargs)
-                    self._add_errors(result, tool_name, errors)
+                    self._add_issues(result, tool_name, on_failure, errors, warnings)
                 except Exception as e:
-                    errors.append({"tool": tool_name, "error": str(e)})
+                    (warnings if on_failure == "warn" else errors).append(
+                        {"tool": tool_name, "error": str(e)})
 
-        if not errors:
-            return {"passed": True}
-        return {"passed": False, "errors": errors}
+        return {"passed": len(errors) == 0, "errors": errors, "warnings": warnings}
 
     @staticmethod
-    def _add_errors(result, tool_name: str, errors: list):
-        """Extract error entries from a tool result."""
+    def _add_issues(result, tool_name: str, on_failure: str,
+                    errors: list, warnings: list):
+        """Extract issues from a tool result, routing to errors or warnings."""
         if not isinstance(result, dict):
             return
         passed = result.get("all_passed", result.get("passed",
                     result.get("verdict") == "passed"))
         if passed:
             return
+        target = warnings if on_failure == "warn" else errors
         for r in result.get("results", []):
             if not r.get("passed", False):
-                errors.append(r)
+                target.append(r)
         if not result.get("results"):
-            errors.append({
+            target.append({
                 "tool": tool_name,
                 "error": result.get("feedback", result.get("error", str(result)))
             })

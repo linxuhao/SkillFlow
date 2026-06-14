@@ -1,0 +1,19 @@
+name: lint
+description: >
+  Run linters on code files based on an extension→linter manifest.
+  Auto-installs missing linters via pip. Returns {all_passed, results}.
+parameters:
+  files:
+    type: array
+    items:
+      type: string
+    description: "File glob patterns to lint (e.g. ['*.py', '*.html'])"
+    required: true
+  workspace_root:
+    type: string
+    description: "Root directory to resolve file patterns and manifest_path from"
+    required: false
+  manifest_path:
+    type: string
+    description: "Optional path to linter_manifest.json relative to workspace_root. Uses built-in defaults if omitted."
+    required: false

@@ -924,6 +924,15 @@ class SkillFlow:
                 hook_result = self._execute_lifecycle_hook(
                     token, node, hook_name, hook_spec
                 )
+                # Emit warnings (non-fatal) from per-check on_failure: "warn"
+                warnings = hook_result.get("warnings", [])
+                if warnings:
+                    warn_msg = "; ".join(
+                        w.get("error", str(w)) if isinstance(w, dict) else str(w)
+                        for w in warnings
+                    )
+                    self._emit_lifecycle_event(token, hook_name, "warned", warn_msg)
+
                 if not hook_result.get("passed", False):
                     error = hook_result.get("error", f"Lifecycle hook '{hook_name}' failed")
                     on_failure = hook_spec.get("on_failure", "fail") if isinstance(hook_spec, dict) else "fail"
@@ -933,6 +942,9 @@ class SkillFlow:
                         return
                     elif on_failure == "skip":
                         self._emit_lifecycle_event(token, hook_name, "skipped", error)
+                        continue
+                    elif on_failure == "warn":
+                        self._emit_lifecycle_event(token, hook_name, "warned", error)
                         continue
                     else:
                         self._emit_lifecycle_event(token, hook_name, "failed", error)
@@ -1226,6 +1238,7 @@ class SkillFlow:
                     else:
                         parts.append(str(e))
                 result["error"] = "; ".join(parts)
+        # Preserve warnings for callers that handle on_failure: "warn"
         return result
 
     def _step_commit(self, token: ClaimToken) -> dict:

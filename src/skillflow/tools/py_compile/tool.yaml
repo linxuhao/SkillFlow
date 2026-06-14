@@ -1,9 +1,0 @@
-name: py_compile
-description: >
-  Compile Python file(s) to check for syntax errors.
-  Returns {verdict: "passed"|"failed", feedback: "..."}
-parameters:
-  file:
-    type: string
-    description: "File path relative to workspace root"
-    required: true

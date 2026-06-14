@@ -13,8 +13,7 @@ from skillflow.tools.list_tree.impl import list_tree
 from skillflow.tools.dir_tree.impl import dir_tree
 from skillflow.tools.json_schema.impl import json_schema
 from skillflow.tools.repo_apply.impl import repo_apply
-from skillflow.tools.syntax_lint.impl import syntax_lint
-from skillflow.tools.py_compile.impl import py_compile
+from skillflow.tools.lint.impl import lint
 from skillflow.tools.pytest.impl import pytest as pytest_tool
 from skillflow.tools.file_exists.impl import file_exists
 
@@ -148,33 +147,84 @@ class TestRepoApply:
         assert result["applied"] is False
 
 
-class TestSyntaxLint:
+class TestLint:
+    """Tests for generic lint tool (replaces syntax_lint + py_compile)."""
+
+    def _lint(self, tmp_path, pattern, **kw):
+        """Helper: run lint with files=[pattern] and return first result."""
+        r = lint([pattern], workspace_root=str(tmp_path), **kw)
+        return r["all_passed"], r["results"]
+
     def test_valid_python_passes(self, tmp_path):
         (tmp_path / "ok.py").write_text("x = 1\ny = 2\nprint(x + y)\n")
-        result = syntax_lint("ok.py", workspace_root=str(tmp_path))
-        assert result["verdict"] == "passed"
+        all_ok, results = self._lint(tmp_path, "ok.py")
+        assert all_ok is True
+        assert results[0]["passed"] is True
 
     def test_broken_python_fails(self, tmp_path):
         (tmp_path / "bad.py").write_text("def broken(\n")
-        result = syntax_lint("bad.py", workspace_root=str(tmp_path))
-        # Should fail — either ruff or compile check will catch it
-        assert "verdict" in result
+        all_ok, results = self._lint(tmp_path, "bad.py")
+        assert all_ok is False
 
-    def test_missing_file(self, tmp_path):
-        result = syntax_lint("nonexistent.py", workspace_root=str(tmp_path))
-        assert result["verdict"] == "failed"
+    def test_missing_file_skipped(self, tmp_path):
+        all_ok, results = self._lint(tmp_path, "nonexistent.py")
+        assert all_ok is True  # glob matches nothing → all passed
 
+    def test_compile_check_fails(self, tmp_path):
+        (tmp_path / "bad_syntax.py").write_text("def broken(\n")
+        all_ok, results = self._lint(tmp_path, "bad_syntax.py")
+        assert all_ok is False
 
-class TestPyCompile:
-    def test_valid_python_passes(self, tmp_path):
-        (tmp_path / "ok.py").write_text("x = 42\n")
-        result = py_compile("ok.py", workspace_root=str(tmp_path))
-        assert result["verdict"] == "passed"
+    # ── HTML / Jinja2 ──
 
-    def test_invalid_syntax_fails(self, tmp_path):
-        (tmp_path / "bad.py").write_text("def broken(\n")
-        result = py_compile("bad.py", workspace_root=str(tmp_path))
-        assert result["verdict"] == "failed"
+    def test_html_with_tag_passes(self, tmp_path):
+        (tmp_path / "page.html").write_text(
+            '<!DOCTYPE html>\n<html lang="en">\n<head><title>T</title></head>\n<body><p>hi</p></body>\n</html>')
+        all_ok, _ = self._lint(tmp_path, "page.html")
+        assert all_ok is True
+
+    def test_jinja2_child_template_passes(self, tmp_path):
+        """Jinja2 child templates with {% extends %} lack <html> tag — must pass."""
+        (tmp_path / "child.html").write_text(
+            '{% extends "base.html" %}\n{% block content %}<h1>hi</h1>{% endblock %}')
+        all_ok, _ = self._lint(tmp_path, "child.html")
+        assert all_ok is True
+
+    def test_js_passes_with_content(self, tmp_path):
+        (tmp_path / "app.js").write_text("function main() { console.log('hello'); }")
+        all_ok, _ = self._lint(tmp_path, "app.js")
+        assert all_ok is True
+
+    def test_js_too_short_fails(self, tmp_path):
+        (tmp_path / "tiny.js").write_text("x")
+        all_ok, _ = self._lint(tmp_path, "tiny.js")
+        assert all_ok is False
+
+    def test_unknown_extension_skips(self, tmp_path):
+        (tmp_path / "data.xyz").write_text("some content here")
+        all_ok, results = self._lint(tmp_path, "data.xyz")
+        assert all_ok is True
+        assert "No linter configured" in results[0].get("error_message", "")
+
+    def test_non_python_passes_py_compile(self, tmp_path):
+        """Non-.py files should pass lint (only .py is checked by ruff)."""
+        (tmp_path / "README.md").write_text("# README")
+        all_ok, _ = self._lint(tmp_path, "README.md")
+        assert all_ok is True
+
+    def test_custom_manifest(self, tmp_path):
+        """When manifest_path is given, it overrides defaults."""
+        (tmp_path / "manifest.json").write_text('{".py": "basic"}')
+        (tmp_path / "ok.py").write_text("print('hi')")
+        all_ok, _ = self._lint(tmp_path, "ok.py", manifest_path="manifest.json")
+        assert all_ok is True  # basic backend passes valid file
+
+    def test_multiple_files_aggregate(self, tmp_path):
+        (tmp_path / "a.py").write_text("print('ok')")
+        (tmp_path / "b.py").write_text("def broken(\n")
+        all_ok, results = self._lint(tmp_path, "*.py")
+        assert all_ok is False
+        assert len(results) == 2
 
 
 class TestPytestTool:
@@ -193,28 +243,6 @@ class TestPytestTool:
         assert result["verdict"] == "failed"
 
 # ── Edge case tests ──
-
-class TestSyntaxLintEdgeCases:
-    def test_html_file_passes_with_html_tag(self, tmp_path):
-        (tmp_path / "page.html").write_text("<!DOCTYPE html>\n<html lang=\"en\">\n<body>hello</body>\n</html>")
-        result = syntax_lint("page.html", workspace_root=str(tmp_path))
-        assert result["verdict"] == "passed"
-
-    def test_html_file_fails_without_html_tag(self, tmp_path):
-        (tmp_path / "bad.html").write_text("<body>no html tag</body>")
-        result = syntax_lint("bad.html", workspace_root=str(tmp_path))
-        assert result["verdict"] == "failed"
-
-    def test_js_file_passes_with_content(self, tmp_path):
-        (tmp_path / "app.js").write_text("function main() { console.log('hello'); }")
-        result = syntax_lint("app.js", workspace_root=str(tmp_path))
-        assert result["verdict"] == "passed"
-
-    def test_js_file_too_short_fails(self, tmp_path):
-        (tmp_path / "tiny.js").write_text("x")
-        result = syntax_lint("tiny.js", workspace_root=str(tmp_path))
-        assert result["verdict"] == "failed"
-
 
 class TestJsonSchemaEdgeCases:
     def test_jsonschema_module_not_installed_fallback(self, tmp_path):
@@ -276,17 +304,6 @@ class TestRepoApplyEdgeCases:
         result = repo_apply(source_dir="draft", workspace_root=str(tmp_path),
                             project_root=str(proj))
         assert result["applied"] is True
-
-
-class TestPyCompileEdgeCases:
-    def test_non_python_file_skips(self, tmp_path):
-        (tmp_path / "README.md").write_text("# README")
-        result = py_compile("README.md", workspace_root=str(tmp_path))
-        assert result["verdict"] == "passed"
-
-    def test_missing_file(self, tmp_path):
-        result = py_compile("nonexistent.py", workspace_root=str(tmp_path))
-        assert result["verdict"] == "failed"
 
 
 class TestDirTreeEdgeCases:
