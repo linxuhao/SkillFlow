@@ -1625,6 +1625,87 @@ class SkillFlow:
 
     # ── Graph traversal ─────────────────────────────────────────────
 
+    def _read_loop_items(self, loop_cfg, pid, gname, run, loop_step_id):
+        """Read + flatten a loop's source manifest from disk.
+
+        Returns (items, missing): ``missing`` is True when the source file is
+        unavailable (caller falls back to the cached item list), so an empty
+        manifest (→ done) is distinguishable from a transiently missing file.
+        """
+        source = loop_cfg.source
+        source_step = source.get("step", "")
+        source_file = source.get("file", "")
+        source_field = source.get("field", "")
+        if not self._workspace:
+            return [], True
+        step_dir = self._workspace.get_step_dir(pid, gname, source_step)
+        file_path = step_dir / source_file
+        if not file_path.exists():
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                step_dir = self._workspace.get_final_dir(pid, gname, source_step)
+            file_path = step_dir / source_file
+        if not file_path.exists():
+            self.notifications.publish_sync(
+                "loop_source_missing",
+                {
+                    "run_id": run["id"], "loop_step_id": loop_step_id,
+                    "source_step": source_step, "source_file": source_file,
+                },
+                run_id=run["id"],
+            )
+            return [], True
+        try:
+            import json
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            items = data.get(source_field, [])
+            if not isinstance(items, list):
+                items = []
+        except Exception:
+            items = []
+        # Flatten if items are lists (e.g. execution_order is list of lists)
+        if items and isinstance(items[0], list):
+            flat: list = []
+            for group in items:
+                if isinstance(group, list):
+                    flat.extend(group)
+                else:
+                    flat.append(group)
+            items = flat
+        return items, False
+
+    def _reset_loop_body_edge_counts(self, conn, run_id, resolver,
+                                     loop_step_id, body_target):
+        """Clear edge counts for the loop body so each iteration gets a fresh
+        retry budget.
+
+        Inner review/verify loops (e.g. t_impl_review→t_impl, max_loop=3) are
+        counted per (run, from, to) — i.e. shared across every iteration. That
+        starves later tasks of retries. Resetting the body's edge counts when a
+        new item is dispatched scopes the budget to the current iteration.
+        """
+        body_nodes: set[str] = set()
+        stack = [body_target]
+        while stack:
+            nid = stack.pop()
+            if not nid or nid in body_nodes or nid == loop_step_id:
+                continue
+            body_nodes.add(nid)
+            node = resolver.get_node(nid)
+            if not node:
+                continue
+            for t in node.transitions:
+                if t.to and t.to != loop_step_id:
+                    stack.append(t.to)
+        if not body_nodes:
+            return
+        placeholders = ",".join("?" for _ in body_nodes)
+        conn.execute(
+            f"DELETE FROM skillflow_edge_counts "
+            f"WHERE run_id = ? AND from_step IN ({placeholders})",
+            (run_id, *sorted(body_nodes)),
+        )
+
     def _resolve_loop(self, conn, run: dict, resolver, loop_step_id: str) -> str | None:
         """Resolve a loop step to either its body or done transition.
 
@@ -1649,93 +1730,27 @@ class SkillFlow:
                 body_target = t.to
                 break
 
-        # Read or update loop state
+        # ── Read the source manifest on EVERY resolve (dynamic) ──────────
+        # Re-reading each time lets the loop pick up items appended AFTER it
+        # first ran — e.g. a goal-loop where an upstream step adds corrective
+        # tasks to the manifest. `missing` distinguishes "file gone" (reuse the
+        # cached list) from "empty list" (→ done).
+        items, missing = self._read_loop_items(
+            loop_cfg, pid, gname, run, loop_step_id
+        )
+        if not self._workspace:
+            return None
+
         row = conn.execute(
             "SELECT current_index, items_json FROM skillflow_loop_state "
             "WHERE run_id = ? AND loop_step_id = ?",
             (run["id"], loop_step_id),
         ).fetchone()
 
-        if row is None:
-            # First time: read source file and init state
-            source = loop_cfg.source
-            source_step = source.get("step", "")
-            source_file = source.get("file", "")
-            source_field = source.get("field", "")
+        if missing:
+            items = self._deserialize(row["items_json"]) if row else []
 
-            if not self._workspace:
-                return None
-            step_dir = self._workspace.get_step_dir(pid, gname, source_step)
-            file_path = step_dir / source_file
-            if not file_path.exists():
-                # Try legacy Outbox_Final path (backward compat with pre-migration data).
-                # Suppress the DeprecationWarning — it's a known fallback, not a bug.
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", DeprecationWarning)
-                    step_dir = self._workspace.get_final_dir(pid, gname, source_step)
-                file_path = step_dir / source_file
-            if not file_path.exists():
-                # Source file missing — emit warning, treat as empty → done
-                self.notifications.publish_sync(
-                    "loop_source_missing",
-                    {
-                        "run_id": run["id"], "loop_step_id": loop_step_id,
-                        "source_step": source_step, "source_file": source_file,
-                    },
-                    run_id=run["id"],
-                )
-                items = []
-            else:
-                try:
-                    import json
-                    data = json.loads(file_path.read_text(encoding="utf-8"))
-                    items = data.get(source_field, [])
-                    if not isinstance(items, list):
-                        items = []
-                except Exception:
-                    items = []
-
-            # Flatten if items are lists (execution_order is list of lists)
-            if items and isinstance(items[0], list):
-                flat: list = []
-                for group in items:
-                    if isinstance(group, list):
-                        flat.extend(group)
-                    else:
-                        flat.append(group)
-                items = flat
-
-            if not items:
-                # Empty list → mark loop step completed, route to done transition
-                conn.execute(
-                    "UPDATE skillflow_steps SET status = 'completed', "
-                    "completed_at = datetime('now'), updated_at = datetime('now') "
-                    "WHERE run_id = ? AND step_id = ? AND status = 'pending'",
-                    (run["id"], loop_step_id),
-                )
-                for t in node.transitions:
-                    if t.to and t.to != body_target:
-                        return t.to
-                return None
-
-            conn.execute(
-                "INSERT INTO skillflow_loop_state (run_id, loop_step_id, current_index, "
-                "items_json, item_context_key) VALUES (?, ?, 0, ?, ?)",
-                (run["id"], loop_step_id, self._serialize(items),
-                 loop_cfg.item_as or "loop_item"),
-            )
-            current_idx = 0
-        else:
-            current_idx = row["current_index"] + 1
-            items = self._deserialize(row["items_json"])
-            conn.execute(
-                "UPDATE skillflow_loop_state SET current_index = ?, "
-                "updated_at = datetime('now') WHERE run_id = ? AND loop_step_id = ?",
-                (current_idx, run["id"], loop_step_id),
-            )
-
-        if current_idx >= len(items):
-            # All items done → mark loop step completed, route to done transition
+        def _route_done():
             conn.execute(
                 "UPDATE skillflow_steps SET status = 'completed', "
                 "completed_at = datetime('now'), updated_at = datetime('now') "
@@ -1747,7 +1762,37 @@ class SkillFlow:
                     return t.to
             return None
 
-        # Route to body
+        if row is None:
+            if not items:
+                return _route_done()
+            conn.execute(
+                "INSERT INTO skillflow_loop_state (run_id, loop_step_id, current_index, "
+                "items_json, item_context_key) VALUES (?, ?, 0, ?, ?)",
+                (run["id"], loop_step_id, self._serialize(items),
+                 loop_cfg.item_as or "loop_item"),
+            )
+            current_idx = 0
+        else:
+            current_idx = row["current_index"] + 1
+
+        if current_idx >= len(items):
+            # Exhausted for now → done. IMPORTANT: do NOT advance current_index
+            # here. If items are appended later and the loop is re-entered,
+            # `current_index + 1` then lands on the first NEW item instead of
+            # skipping it.
+            return _route_done()
+
+        # Dispatch item[current_idx]: persist the cursor + the freshly-read item
+        # list, and give THIS iteration its own retry budget by clearing the
+        # loop body's edge counts (per-task review/verify loops).
+        conn.execute(
+            "UPDATE skillflow_loop_state SET current_index = ?, items_json = ?, "
+            "updated_at = datetime('now') WHERE run_id = ? AND loop_step_id = ?",
+            (current_idx, self._serialize(items), run["id"], loop_step_id),
+        )
+        self._reset_loop_body_edge_counts(
+            conn, run["id"], resolver, loop_step_id, body_target
+        )
         return body_target
 
     def _resolve_next_in_tx(self, conn, run_id: str, step_id: str,
@@ -2707,19 +2752,26 @@ class SkillFlow:
 
         fixed = node.output_fixed if node else {}
 
-        # Write/create/append tools — write to step tmp directory (atomic staging)
-        if name.startswith("write_") or name.startswith("create_") or name.startswith("append_"):
+        # Write/create/append/edit tools — write to step tmp directory (atomic staging)
+        if (name.startswith("write_") or name.startswith("create_")
+                or name.startswith("append_") or name.startswith("edit_")):
             if not self._workspace:
                 return {"error": "No workspace configured for write tool"}
             pid = self._get_project_id(run_id)
             gname = self._get_graph_name(run_id)
             tmp_dir = self._workspace.get_step_tmp_dir(pid, gname, step_id)
-            from skillflow.write_tools import execute_write, execute_create, execute_append
+            from skillflow.write_tools import (execute_write, execute_create,
+                                               execute_append, execute_edit)
             slot = name[name.index("_") + 1:]  # everything after first _
             if name.startswith("create_"):
                 return execute_create(slot, fixed, params, str(tmp_dir))
             elif name.startswith("append_"):
                 return execute_append(slot, fixed, params, str(tmp_dir))
+            elif name.startswith("edit_"):
+                # Edit the EXISTING file from the consolidated repo (project_root),
+                # writing the result into staging for promotion + repo_apply.
+                return execute_edit(slot, fixed, params, str(tmp_dir),
+                                    source_dir=project_root or "")
             else:
                 return execute_write(slot, fixed, params, str(tmp_dir))
 

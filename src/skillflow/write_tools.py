@@ -168,6 +168,26 @@ def generate_write_tool_schemas(output_mode: str,
                 ),
                 "parameters": params,
             })
+
+            # edit_{slot} — surgical in-place edit of the EXISTING file
+            edit_params = {
+                "old_str": {"type": "string", "required": True,
+                            "description": "Exact text to find (must appear exactly once)."},
+                "new_str": {"type": "string", "required": True,
+                            "description": "Replacement text."},
+            }
+            if is_glob:
+                edit_params = {"id": dict(params["id"]), **edit_params}
+            tools.append({
+                "name": f"edit_{slot}",
+                "description": (
+                    f"Surgically edit the EXISTING {pattern} by replacing an exact "
+                    f"unique snippet — use this to fix or update part of a file "
+                    f"without rewriting the whole thing (preserves the rest). "
+                    f"Fails if the file is absent or old_str isn't found exactly once.{fmt_hint}"
+                ),
+                "parameters": edit_params,
+            })
         # finish_step — signal completion (always last so the model calls it last)
         tools.append({
             "name": "finish_step",
@@ -256,6 +276,47 @@ def execute_append(slot: str, fixed: dict, params: dict,
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     path.write_text(existing + content, encoding="utf-8")
     return {"written": base_name}
+
+
+def execute_edit(slot: str, fixed: dict, params: dict,
+                 output_dir: str, source_dir: str = "") -> dict:
+    """Execute an edit_{slot} call: surgical str-replace on the EXISTING file.
+
+    Reads the current file from ``source_dir`` (the consolidated repo, so the
+    edit applies to accumulated cross-task state), applies a single exact
+    replacement, and writes the result into ``output_dir`` (the step's staging
+    dir) — from where normal promotion + repo_apply overwrites the repo copy.
+    Falls back to ``output_dir`` as the source when no repo dir is given.
+    """
+    base_name = resolve_write_target(slot, fixed, params)
+    old_str = _ensure_str(params.get("old_str", ""))
+    new_str = _ensure_str(params.get("new_str", ""))
+    if not old_str:
+        return {"error": f"edit_{slot}: 'old_str' is required and must be non-empty"}
+
+    src_base = Path(source_dir) if source_dir else Path(output_dir)
+    src = src_base / base_name
+    if not src.exists():
+        # fall back to staging copy (a file written earlier this same step)
+        staged = Path(output_dir) / base_name
+        if staged.exists():
+            src = staged
+        else:
+            return {"error": f"edit_{slot}: cannot edit '{base_name}' — file does not exist"}
+
+    content = src.read_text(encoding="utf-8")
+    occurrences = content.count(old_str)
+    if occurrences == 0:
+        return {"error": f"edit_{slot}: 'old_str' not found in '{base_name}'"}
+    if occurrences > 1:
+        return {"error": (f"edit_{slot}: 'old_str' matches {occurrences} times in "
+                          f"'{base_name}' — include more surrounding context to make it unique")}
+
+    updated = content.replace(old_str, new_str, 1)
+    out = Path(output_dir) / base_name
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(updated, encoding="utf-8")
+    return {"edited": base_name}
 
 
 def normalize_repo_path(raw: str) -> list[str]:

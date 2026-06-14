@@ -1,6 +1,7 @@
 """Tests for skillflow.write_tools."""
 
-from skillflow.write_tools import generate_write_tool_schemas, resolve_write_target
+from skillflow.write_tools import (generate_write_tool_schemas, resolve_write_target,
+                                   execute_edit)
 
 
 class TestWriteTools:
@@ -8,10 +9,10 @@ class TestWriteTools:
         schemas = generate_write_tool_schemas(
             "content", {"sota": "step1_5_sota.md"}
         )
-        # 3 tools per slot + finish_step
-        assert len(schemas) == 4
+        # 4 tools per slot (write/create/append/edit) + finish_step
+        assert len(schemas) == 5
         names = {s["name"] for s in schemas}
-        assert names == {"write_sota", "create_sota", "append_sota", "finish_step"}
+        assert names == {"write_sota", "create_sota", "append_sota", "edit_sota", "finish_step"}
         # write_sota has "content" param
         write = next(s for s in schemas if s["name"] == "write_sota")
         assert "content" in write["parameters"]
@@ -23,10 +24,11 @@ class TestWriteTools:
         schemas = generate_write_tool_schemas(
             "content", {"task_card": "tasks/*.json"}
         )
-        # 3 per-slot tools + finish_step
-        assert len(schemas) == 4
+        # 4 per-slot tools + finish_step
+        assert len(schemas) == 5
         names = {s["name"] for s in schemas}
-        assert names == {"write_task_card", "create_task_card", "append_task_card", "finish_step"}
+        assert names == {"write_task_card", "create_task_card", "append_task_card",
+                         "edit_task_card", "finish_step"}
         # glob tools have "id" param (skip finish_step which has summary instead)
         for tool in schemas:
             if tool["name"] == "finish_step":
@@ -38,12 +40,12 @@ class TestWriteTools:
             "plan": "task_plan.md",
             "manifest": "subtasks_manifest.json",
         })
-        # 3 tools × 2 slots + finish_step = 7
-        assert len(schemas) == 7
+        # 4 tools × 2 slots + finish_step = 9
+        assert len(schemas) == 9
         names = {s["name"] for s in schemas}
         assert names == {
-            "write_plan", "create_plan", "append_plan",
-            "write_manifest", "create_manifest", "append_manifest",
+            "write_plan", "create_plan", "append_plan", "edit_plan",
+            "write_manifest", "create_manifest", "append_manifest", "edit_manifest",
             "finish_step",
         }
 
@@ -73,6 +75,35 @@ class TestWriteTools:
         target = resolve_write_target("unknown", {}, {"file": "fallback.txt"})
         assert target == "fallback.txt"
 
+    # ── edit_{slot} executor ─────────────────────────────────────
+
+    def test_execute_edit_replaces_in_existing_repo_file(self, tmp_path):
+        """edit reads the existing repo file, str-replaces once, writes to staging."""
+        repo = tmp_path / "repo"; repo.mkdir()
+        staging = tmp_path / "stage"; staging.mkdir()
+        (repo / "app.py").write_text("x = 1\ny = OLD\nz = 3\n")
+        res = execute_edit("app", {"app": "app.py"},
+                           {"old_str": "y = OLD", "new_str": "y = NEW"},
+                           str(staging), source_dir=str(repo))
+        assert res == {"edited": "app.py"}
+        # Result lands in staging (for promotion); repo copy untouched until repo_apply
+        assert (staging / "app.py").read_text() == "x = 1\ny = NEW\nz = 3\n"
+        assert (repo / "app.py").read_text() == "x = 1\ny = OLD\nz = 3\n"
+
+    def test_execute_edit_errors_when_not_unique(self, tmp_path):
+        repo = tmp_path / "repo"; repo.mkdir()
+        (repo / "app.py").write_text("dup\ndup\n")
+        res = execute_edit("app", {"app": "app.py"},
+                           {"old_str": "dup", "new_str": "x"},
+                           str(tmp_path / "stage"), source_dir=str(repo))
+        assert "error" in res and "2 times" in res["error"]
+
+    def test_execute_edit_errors_when_missing_file(self, tmp_path):
+        res = execute_edit("app", {"app": "app.py"},
+                           {"old_str": "a", "new_str": "b"},
+                           str(tmp_path / "stage"), source_dir=str(tmp_path / "repo"))
+        assert "error" in res and "does not exist" in res["error"]
+
     # ── format field tests ───────────────────────────────────────
 
     def test_format_in_description(self):
@@ -80,8 +111,8 @@ class TestWriteTools:
             "verdict": {"file": "review_verdict.json", "on_exists": "new",
                         "format": '{"passed": bool, "feedback": str}'}
         })
-        assert len(schemas) == 4
-        # All three per-slot variants include format; finish_step does not
+        assert len(schemas) == 5
+        # All four per-slot variants include format; finish_step does not
         for tool in schemas:
             if tool["name"] == "finish_step":
                 continue
