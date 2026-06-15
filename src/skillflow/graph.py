@@ -782,6 +782,44 @@ def _normalize_context_spec(spec: dict) -> dict:
     return s
 
 
+def _parse_json_extract_last(content: str) -> dict | None:
+    """Parse JSON content, handling concatenated objects from create+append.
+
+    When an agent calls create_verdict then append_verdict, the file contains
+    ``{...}{...}`` — invalid JSON. Extract the LAST complete JSON object.
+    """
+    import json as _json
+    if not content or not content.strip():
+        return None
+    content = content.strip()
+    try:
+        return _json.loads(content)
+    except _json.JSONDecodeError:
+        pass
+    # Try to find and parse the last JSON object in concatenated content
+    # Walk backwards finding balanced braces
+    depth = 0
+    end = len(content) - 1
+    # find the last '}'
+    while end >= 0 and content[end] != '}':
+        end -= 1
+    if end < 0:
+        return None
+    start = end
+    while start >= 0:
+        if content[start] == '}':
+            depth += 1
+        elif content[start] == '{':
+            depth -= 1
+            if depth == 0:
+                try:
+                    return _json.loads(content[start:end + 1])
+                except _json.JSONDecodeError:
+                    return None
+        start -= 1
+    return None
+
+
 def _flags_match(match: dict, flags: dict, *,
                  file_reader: callable = None) -> bool:
     """Return True if all conditions in ``match`` are satisfied.
@@ -802,10 +840,12 @@ def _flags_match(match: dict, flags: dict, *,
             return False
         try:
             content = file_reader(match["from_file"])
-            data = json.loads(content)
-            return data.get(match["field"]) == match["value"]
         except Exception:
             return False
+        data = _parse_json_extract_last(content)
+        if data is None:
+            return False
+        return data.get(match["field"]) == match["value"]
 
     # field/value indirect pattern
     if "field" in match and "value" in match:

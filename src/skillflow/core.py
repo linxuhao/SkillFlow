@@ -401,17 +401,15 @@ class SkillFlow:
     def reactivate_run(self, run_id: str) -> None:
         """Reactivate a failed run back to running state.
 
-        Used when a host app detects new work and needs to restart
-        a previously failed pipeline run. Clears error_reason and
-        current_node so advance_run re-resolves from the last
-        completed step.
-
-        Raises ValueError if the run is already completed. Use
-        re_run() to explicitly restart a completed run.
+        Resets the step that caused the failure to pending so it gets
+        re-executed, and points current_node at it. If the failure
+        reason can't be mapped to a specific step, falls back to
+        re-resolving from the graph start.
         """
         with self._tx() as conn:
             run = conn.execute(
-                "SELECT status FROM skillflow_runs WHERE id = ?", (run_id,)
+                "SELECT status, error_reason FROM skillflow_runs WHERE id = ?",
+                (run_id,),
             ).fetchone()
             if not run:
                 raise ValueError(f"Run not found: {run_id}")
@@ -420,12 +418,53 @@ class SkillFlow:
                     f"Run {run_id} is already completed. "
                     f"Use re_run() to explicitly re-run a completed pipeline."
                 )
+
+            # Try to find which step caused the failure
+            error_reason = run["error_reason"] or ""
+            retry_step_id = self._extract_step_from_error(error_reason)
+            if not retry_step_id:
+                # Fallback: use the last completed step
+                last = conn.execute(
+                    "SELECT step_id FROM skillflow_steps WHERE run_id = ? "
+                    "AND status = 'completed' ORDER BY id DESC LIMIT 1",
+                    (run_id,),
+                ).fetchone()
+                if last:
+                    retry_step_id = last["step_id"]
+
+            if retry_step_id:
+                # Reset the latest instance of the failed step to pending
+                conn.execute(
+                    """UPDATE skillflow_steps SET status = 'pending',
+                       version = version + 1,
+                       outputs_json = '{}', result_flags_json = '{}',
+                       updated_at = datetime('now')
+                    WHERE id = (
+                        SELECT id FROM skillflow_steps
+                        WHERE run_id = ? AND step_id = ? AND status = 'completed'
+                        ORDER BY id DESC LIMIT 1
+                    )""",
+                    (run_id, retry_step_id),
+                )
+
             conn.execute(
                 """UPDATE skillflow_runs SET status = 'running',
-                   error_reason = NULL, current_node = NULL,
+                   error_reason = NULL,
+                   current_node = ?,
                    updated_at = datetime('now') WHERE id = ?""",
-                (run_id,),
+                (retry_step_id, run_id),
             )
+
+    @staticmethod
+    def _extract_step_from_error(error: str) -> str | None:
+        """Extract a step_id from a transition error message like
+        \"No matching transition from 't_impl_review' with flags {}\"."""
+        import re
+        m = re.search(r"from '(\w+)'", error)
+        if m:
+            return m.group(1)
+        # Also try: "Lifecycle hook failed: ..." — can't extract step, return None
+        return None
 
     def re_run(self, run_id: str) -> str:
         """Explicitly restart a completed/failed run as a fresh run.
@@ -726,16 +765,14 @@ class SkillFlow:
             # Extract loop item context FIRST so context resolution can reference it
             loop_context: dict[str, str] = {}
             loop_row = conn.execute(
-                "SELECT current_index, items_json, item_context_key "
+                "SELECT current_item, item_context_key "
                 "FROM skillflow_loop_state WHERE run_id = ?",
                 (run_id,),
             ).fetchone()
             if loop_row:
-                items = self._deserialize(loop_row["items_json"])
-                idx = loop_row["current_index"]
+                item = loop_row["current_item"]
                 key = loop_row["item_context_key"] or "loop_item"
-                if 0 <= idx < len(items):
-                    item = items[idx]
+                if item:
                     val = self._serialize(item) if not isinstance(item, str) else item
                     loop_context[f"[{key}]"] = val
                     loop_context[key] = val
@@ -1722,9 +1759,17 @@ class SkillFlow:
     def _resolve_loop(self, conn, run: dict, resolver, loop_step_id: str) -> str | None:
         """Resolve a loop step to either its body or done transition.
 
-        On first encounter: reads the source file, extracts the list,
-        initializes loop state, routes to body (or done if empty).
-        On subsequent encounters: increments index, routes to body or done.
+        Tracks completed items as a SET (not a numeric index), so PM can
+        add, remove, reorder, or replace items in the manifest between
+        goal-loop retries and the loop picks up whatever isn't done yet.
+
+        State columns:
+          - completed_items (JSON array of strings): task names already dispatched
+          - items_json (JSON array): cached manifest, always kept in sync with the
+            live manifest so context resolution finds the right item.
+
+        First-uncompleted-item order follows the manifest's list-of-lists
+        structure (groups sequential, items within groups parallel).
         """
         node = resolver.get_node(loop_step_id)
         if not node or not node.loop:
@@ -1735,8 +1780,6 @@ class SkillFlow:
         gname = run["graph_name"]
 
         # Identify body vs done transitions.
-        # Convention: first transition with a target is the body;
-        # any other transition is an exit/done path.
         body_target: str | None = None
         for t in node.transitions:
             if t.to:
@@ -1744,10 +1787,6 @@ class SkillFlow:
                 break
 
         # ── Read the source manifest on EVERY resolve (dynamic) ──────────
-        # Re-reading each time lets the loop pick up items appended AFTER it
-        # first ran — e.g. a goal-loop where an upstream step adds corrective
-        # tasks to the manifest. `missing` distinguishes "file gone" (reuse the
-        # cached list) from "empty list" (→ done).
         items, missing = self._read_loop_items(
             loop_cfg, pid, gname, run, loop_step_id
         )
@@ -1755,13 +1794,13 @@ class SkillFlow:
             return None
 
         row = conn.execute(
-            "SELECT current_index, items_json FROM skillflow_loop_state "
+            "SELECT items_json, completed_items, current_item FROM skillflow_loop_state "
             "WHERE run_id = ? AND loop_step_id = ?",
             (run["id"], loop_step_id),
         ).fetchone()
 
-        if missing:
-            items = self._deserialize(row["items_json"]) if row else []
+        if missing and row:
+            items = self._deserialize(row["items_json"]) if row["items_json"] else []
 
         def _route_done():
             conn.execute(
@@ -1775,33 +1814,80 @@ class SkillFlow:
                     return t.to
             return None
 
+        # ── Completed set ────────────────────────────────────────────────
+        completed: set[str] = set()
+        prev_item: str | None = None
+        if row:
+            if row["completed_items"]:
+                try:
+                    completed = set(self._deserialize(row["completed_items"]))
+                except Exception:
+                    pass
+            prev_item = row["current_item"] or None
+        # Backward compat: old rows with current_index (no completed_items).
+        # current_index points to the LAST DISPATCHED item.
+        # Items BEFORE current_index are completed; items[current_index] is
+        # the currently-executing item.  Only reconstruct prev_item when at
+        # least one item has finished (so we have a "previously dispatched"
+        # item to mark completed).
+        if not completed and row and row["current_item"] is None:
+            try:
+                old_items = self._deserialize(row["items_json"]) if row["items_json"] else []
+                old_idx = row["current_index"]
+                if isinstance(old_idx, int) and old_idx > 0:
+                    completed = set(old_items[:old_idx])
+                    if old_idx < len(old_items):
+                        prev_item = old_items[old_idx]
+                elif isinstance(old_idx, int) and old_idx == 0:
+                    pass  # first dispatch — nothing completed, nothing to mark
+            except Exception:
+                pass
+
+        # Mark the previously-dispatched item as completed.
+        # prev_item is None on the very first dispatch (row is None),
+        # so nothing is marked. On every subsequent entry, prev_item
+        # was set by the previous dispatch and has now finished.
+        if prev_item and prev_item not in completed:
+            completed.add(prev_item)
+            prev_item = None
+
         if row is None:
             if not items:
                 return _route_done()
             conn.execute(
-                "INSERT INTO skillflow_loop_state (run_id, loop_step_id, current_index, "
-                "items_json, item_context_key) VALUES (?, ?, 0, ?, ?)",
+                "INSERT INTO skillflow_loop_state (run_id, loop_step_id, "
+                "items_json, completed_items, current_item, item_context_key, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, ?, '[]', NULL, ?, datetime('now'), datetime('now'))",
                 (run["id"], loop_step_id, self._serialize(items),
                  loop_cfg.item_as or "loop_item"),
             )
-            current_idx = 0
         else:
-            current_idx = row["current_index"] + 1
+            # Always persist the live manifest so context resolution sees it
+            conn.execute(
+                "UPDATE skillflow_loop_state SET items_json = ?, "
+                "updated_at = datetime('now') WHERE run_id = ? AND loop_step_id = ?",
+                (self._serialize(items), run["id"], loop_step_id),
+            )
 
-        if current_idx >= len(items):
-            # Exhausted for now → done. IMPORTANT: do NOT advance current_index
-            # here. If items are appended later and the loop is re-entered,
-            # `current_index + 1` then lands on the first NEW item instead of
-            # skipping it.
+        # ── Find first uncompleted item (manifest order) ────────────────
+        if not items:
+            return _route_done()
+        next_item: str | None = None
+        for item in items:
+            if item not in completed:
+                next_item = item
+                break
+        if next_item is None:
             return _route_done()
 
-        # Dispatch item[current_idx]: persist the cursor + the freshly-read item
-        # list, and give THIS iteration its own retry budget by clearing the
-        # loop body's edge counts (per-task review/verify loops).
+        # ── Dispatch ─────────────────────────────────────────────────────
         conn.execute(
-            "UPDATE skillflow_loop_state SET current_index = ?, items_json = ?, "
-            "updated_at = datetime('now') WHERE run_id = ? AND loop_step_id = ?",
-            (current_idx, self._serialize(items), run["id"], loop_step_id),
+            "UPDATE skillflow_loop_state SET completed_items = ?, "
+            "current_item = ?, updated_at = datetime('now') "
+            "WHERE run_id = ? AND loop_step_id = ?",
+            (self._serialize(sorted(completed)), next_item,
+             run["id"], loop_step_id),
         )
         self._reset_loop_body_edge_counts(
             conn, run["id"], resolver, loop_step_id, body_target

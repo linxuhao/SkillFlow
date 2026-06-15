@@ -259,7 +259,7 @@ def execute_create(slot: str, fixed: dict, params: dict,
     archived = _archive_old_file(directory, base_name)
     path = directory / base_name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_ensure_str(params.get("initialContent", "")), encoding="utf-8")
+    path.write_text(_ensure_str(params.get("content") or params.get("initialContent", "")), encoding="utf-8")
     result = {"written": base_name}
     if archived:
         result["archived"] = archived

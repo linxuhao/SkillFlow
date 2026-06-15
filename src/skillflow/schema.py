@@ -92,6 +92,8 @@ CREATE TABLE IF NOT EXISTS skillflow_loop_state (
     loop_step_id    TEXT NOT NULL,
     current_index   INTEGER NOT NULL DEFAULT 0,
     items_json      TEXT NOT NULL DEFAULT '[]',
+    completed_items TEXT,
+    current_item    TEXT,
     item_context_key TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
@@ -99,6 +101,13 @@ CREATE TABLE IF NOT EXISTS skillflow_loop_state (
     PRIMARY KEY (run_id, loop_step_id)
 );
 """
+
+# SF-24: migration from index-based to set-based loop tracking
+SKILLFLOW_LOOP_STATE_MIGRATION = [
+    # Add set-based columns if missing (older skillflow DBs)
+    "ALTER TABLE skillflow_loop_state ADD COLUMN completed_items TEXT",
+    "ALTER TABLE skillflow_loop_state ADD COLUMN current_item TEXT",
+]
 
 SKILLFLOW_OUTBOX = """
 CREATE TABLE IF NOT EXISTS skillflow_outbox (
@@ -158,4 +167,7 @@ ALL_DDL: list[str] = [
 
 SKILLFLOW_MIGRATIONS: list[str] = [
     "ALTER TABLE skillflow_runs ADD COLUMN graph_path TEXT;",
+    # SF-24: set-based loop tracking
+    "ALTER TABLE skillflow_loop_state ADD COLUMN completed_items TEXT",
+    "ALTER TABLE skillflow_loop_state ADD COLUMN current_item TEXT",
 ]
