@@ -14,6 +14,7 @@ skillflow-run --graph pipeline.yaml --action start
 skillflow-run --action submit --run-id <id> --result '{"key":"val"}'
 skillflow-run --action approve --run-id <id>
 skillflow-run --action reject --run-id <id> --feedback "reason"
+skillflow-run --action reject --run-id <id> --feedback "reason" --redirect-to <step>  # loop back to a different step
 skillflow-run --action abort --run-id <id>
 ```
 
@@ -69,7 +70,7 @@ If `validation_error` is non-empty, the previous `submit` was rejected. Fix the 
   "instruction": "Pipeline paused. Call approve or reject."
 }
 ```
-Call `--action approve` to continue, or `--action reject` with feedback to redo the step.
+Call `--action approve` to continue, or `--action reject` with `--feedback` to redo the step. Add `--redirect-to <step>` to loop the run back to a *different* earlier step instead of redoing this one — the feedback is carried to that target (e.g. reject a final review back to the planning step).
 
 ### Completed
 ```json

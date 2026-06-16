@@ -189,11 +189,18 @@ context:
 
 ## Checkpoints
 
-Agent steps can pause for human approval (`tests/fixtures/checkpoint_cycle.yaml`):
+Agent steps can pause for human approval (`tests/fixtures/checkpoint_cycle.yaml`). On reject, the feedback is injected (via the `_feedback` channel) so the re-run knows *why* it was rejected:
 
 ```python
+# Redo the rejected step itself
 sf.reject_checkpoint(run_id, "draft", "Add more detail to the analysis")
+
+# Or loop back to a DIFFERENT step — reopen the run earlier and carry the
+# feedback to that target (e.g. reject the final review back to planning)
+sf.reject_checkpoint(run_id, "final_review", "Goals not met", redirect_to="plan")
 ```
+
+`redirect_to` makes rejection a human-driven loopback: it sets the run's current node to the target step and injects the feedback there. Over the CLI this is `--redirect-to <step>`. A checkpoint can also be rejected *after* a downstream failure (the only invariant is that the checkpoint step is `completed`), so you can reopen earlier work to recover.
 
 ## Output Validation
 
