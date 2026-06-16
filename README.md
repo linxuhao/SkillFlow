@@ -25,7 +25,7 @@ pip install skillflow-py      # PyPI
 pip install -e ~/skillflow    # from repo (editable)
 ```
 
-`pip install` gives you the **library** (framework mode — `from skillflow import SkillFlow`). The **`skillflow-*` CLI commands are not pip entry points**; register them with the install script (it writes wrappers into `~/.local/bin/`):
+`pip install` (≥ 1.1.2) gives you both the **library** (`from skillflow import SkillFlow`) and the **`skillflow-*` CLI commands** as console entry points. The clone + install-script flow is an alternative that registers the same commands into `~/.local/bin/`:
 
 ```bash
 git clone https://github.com/linxuhao/SkillFlow.git
