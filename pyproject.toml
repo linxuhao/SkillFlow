@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "skillflow-py"
-version = "1.1.1"
+version = "1.1.2"
 description = "Config-agnostic LLM pipeline graph executor — turn skills into flows"
 readme = "README.md"
 license = "MIT"
@@ -30,6 +30,11 @@ dev = [
     "pytest-asyncio>=0.24",
     "pytest-mock>=3.15",
 ]
+
+[project.scripts]
+skillflow-lint = "skillflow.plugins.linter.cli:main"
+skillflow-run = "skillflow.run_cli:main"
+skillflow-convert = "skillflow.convert_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/linxuhao/SkillFlow"
