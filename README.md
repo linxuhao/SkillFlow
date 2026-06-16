@@ -1,8 +1,22 @@
 # Skillflow
 
+[![PyPI](https://img.shields.io/pypi/v/skillflow-py)](https://pypi.org/project/skillflow-py/)
+![Python](https://img.shields.io/badge/python-3.12%2B-3776AB)
+![License](https://img.shields.io/badge/license-MIT-blue)
+
 Config-agnostic LLM pipeline graph executor with **human-in-the-loop by design**. Define multi-agent pipelines as YAML DAGs — skillflow handles deterministic traversal, tool execution, approval/reject checkpoints, loops, recovery, a full durable audit trace, and event streaming on SQLite. Provider-agnostic, custom tools, clean per-agent context.
 
 Two ways agents plug in: **embed** skillflow in a host app so it *drives* real agents step-by-step (forced execution order — see [Framework Mode](#framework-mode)), or have an **external agent** (e.g. Goose) drive pipelines over a stateless CLI ([Runner Mode](#runner-mode)). An agent can even *generate* a pipeline from a natural-language description (`skillflow-convert`) and then execute it.
+
+## Why Skillflow
+
+Most agent frameworks let the LLM improvise control flow, tool use, and file access — which is exactly why their runs can't be reproduced, audited, or trusted. Skillflow inverts that: **the LLM is a constrained, contract-bound function; the engine is the runtime.**
+
+- **Deterministic traversal** — the pipeline is a YAML DAG walked by the engine. Loops, gates, retries, and recovery are the engine's job, not the model's. Same config, same path.
+- **Capability-gated I/O (least privilege)** — a step sees only the context it declares, and for each declared output the engine *generates a dedicated write tool* (`write_<slot>` / `create_<slot>` / `append_<slot>`). An agent literally **cannot read or write a file outside its contract** — the tool to do so doesn't exist in its schema. *Brain to brain, tools to tools.* (It's also why cheap models suffice: small, focused, role-scoped context.)
+- **Human-in-the-loop by design** — approve / reject-with-feedback checkpoints are first-class nodes, not bolted on.
+- **Immutable audit trace** — every step, prompt, response, tool call, and verdict is appended to a trace that is *never deleted*, keyed by `step_instance_id`. "Why did this run do X?" is one query.
+- **Config- and provider-agnostic** — a pipeline can be anything; nothing is hardcoded to a use case or a model.
 
 ## Install
 
