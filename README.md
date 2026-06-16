@@ -126,31 +126,7 @@ $ skillflow-run --action reject --run-id abc123 \
 {"status": "completed", "steps_completed": 3, "outputs": {...}}
 ```
 
-**The agent loop in pseudocode:**
-
-```
-resp = run("--graph", graph, "--action", "start")
-while resp.status == "in_progress":
-    # Steps with output.fixed require files written to output_dir before submit
-    if resp.expected_files:
-        for fname in resp.expected_files:
-            write_file(resp.output_dir / fname, generate_content(resp))
-    work = do_the_work(resp.instruction, resp.tools)
-    resp = run("--action", "submit", "--run-id", resp.run_id,
-               "--result", json(work))
-    # If validation failed, resp.validation_error is set and resp.step repeats
-    if resp.validation_error:
-        fix_the_error(resp.validation_error)
-        continue
-    if resp.status == "paused":
-        show_checkpoint_to_human(resp.checkpoint_label)
-        if human_approves:
-            resp = run("--action", "approve", "--run-id", resp.run_id)
-        else:
-            resp = run("--action", "reject", "--run-id", resp.run_id,
-                       "--feedback", human_feedback)
-# resp.status == "completed" — pipeline done
-```
+**The agent drives this inline — there is no driver code.** The agent itself calls `skillflow-run` as a command inside its own turn loop: call → read the JSON → do the work (stage the expected output files, or run a delegated tool) → call again, reacting to `status` each turn (`in_progress` → submit, `paused` → ask the human to approve/reject, `completed`/`failed` → done). *The agent is the loop* — it never writes a program to drive skillflow. The full, injectable manual is [`AGENT.md`](src/skillflow/plugins/skill_runner/AGENT.md); load it via `load_agent_guide()` from `skillflow.plugins.skill_runner` and put it in the agent's system prompt.
 
 **Response fields beyond status:**
 
