@@ -160,6 +160,23 @@ match: { _error: true }                                          # error handler
 # (no match key)                                                 # always match
 ```
 
+## Loopback (review & goal loops)
+
+Any transition's `to` can point **backward** to an earlier step — that's how review and goal loops are built. `max_loop` caps how many times an edge may fire per run (tracked in `skillflow_edge_counts`); once the cap is hit the edge stops matching, so the run takes another branch instead of looping forever. Set `feedback: true` to inject the step's outputs as `_feedback` into the target on the way back, making the redo corrective.
+
+```yaml
+# A Red-checker that sends work back to the maker until it passes (max 3×)
+transitions:
+  - to: "implement"          # backward edge → redo the step
+    match: { passed: false }
+    max_loop: 3
+    feedback: true           # pass review notes back into 'implement'
+  - to: "next_step"          # forward once the checker passes
+    match: { passed: true }
+```
+
+This powers both **inner review loops** (e.g. `review → implement`, `max_loop: 3`) and **goal loops** (a final verifier routing back to planning until goals are met). See `tests/fixtures/review_loop.yaml` and `tests/fixtures/dpe_full.yaml`.
+
 ## Context Injection
 
 ```yaml
@@ -230,11 +247,13 @@ end_conditions:
 
 ## Stale Claim Recovery
 
-Built into `advance_run`. Claims older than `stale_threshold_seconds` (default 300) are auto-reset:
+Built into `advance_run`. A claim whose worker died before calling `confirm`, and that is older than `stale_threshold_seconds` (default 300), is auto-reset to `pending` and re-claimed:
 
 ```python
 sf = SkillFlow("pipeline.db", stale_threshold_seconds=300)
 ```
+
+**Crash-loop guard:** if the *same* step instance is recovered 3 times, skillflow stops retrying and marks it `failed` (`"worker crashed 3 times — likely a code bug or OOM"`), emitting a non-retryable `step_failed` event — so a buggy or OOM-prone step can't loop forever.
 
 ## Event Streaming
 
