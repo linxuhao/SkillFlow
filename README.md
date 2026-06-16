@@ -25,7 +25,7 @@ pip install skillflow-py      # PyPI
 pip install -e ~/skillflow    # from repo (editable)
 ```
 
-Or clone and use the install script, which also registers CLI commands:
+`pip install` gives you the **library** (framework mode — `from skillflow import SkillFlow`). The **`skillflow-*` CLI commands are not pip entry points**; register them with the install script (it writes wrappers into `~/.local/bin/`):
 
 ```bash
 git clone https://github.com/linxuhao/SkillFlow.git
@@ -433,6 +433,6 @@ src/skillflow/
 ## Tests
 
 ```bash
-pytest tests/ -v                    # 316 tests
+pytest tests/ -v                    # 330+ tests
 pytest src/skillflow/plugins -v     # 27 plugin tests
 ```
