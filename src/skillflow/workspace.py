@@ -7,6 +7,7 @@ config-specific subdirectories. Host applications configure the base path.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -33,12 +34,18 @@ class WorkspaceManager:
     """
 
     def __init__(self, base_path: str = "~/.skillflow/workspaces",
-                 projects_base: str = "", code_dir: str = ""):
+                 projects_base: str = "", code_dir: str = "",
+                 code_path_resolver: Callable[[str], str | None] | None = None):
         self.base_path = Path(base_path).expanduser().resolve()
         self.base_path.mkdir(parents=True, exist_ok=True)
         self.projects_base = Path(projects_base).expanduser().resolve() if projects_base else self.base_path / "projects"
         self.projects_base.mkdir(parents=True, exist_ok=True)
         self._code_dir = Path(code_dir).expanduser().resolve() if code_dir else None
+        # Optional host-provided callback mapping a project_id to its code
+        # repository root — lets a host point individual projects at arbitrary
+        # paths (e.g. an existing repo) that the default project_id-keyed
+        # layout cannot express. Returning None falls back to the default.
+        self._code_path_resolver = code_path_resolver
 
     # ── Project-level paths ──────────────────────────────────────────
 
@@ -68,11 +75,17 @@ class WorkspaceManager:
     def get_project_code_path(self, project_id: str) -> Path:
         """Return the project's code repository root path.
 
-        Default: _code_dir / project_id if code_dir was set,
-        otherwise projects_base / project_id.
-        Hosts with custom repo paths (e.g. 'existing' repos) should
-        pass code_dir to __init__.
+        Resolution order:
+        1. ``code_path_resolver(project_id)`` if it was provided and returns a
+           non-empty path — lets a host map a project to an arbitrary repo
+           (e.g. an 'existing' repo the project was created against).
+        2. ``_code_dir / project_id`` if ``code_dir`` was set.
+        3. ``projects_base / project_id`` (default).
         """
+        if self._code_path_resolver is not None:
+            resolved = self._code_path_resolver(project_id)
+            if resolved:
+                return Path(resolved).expanduser().resolve()
         if self._code_dir:
             return (self._code_dir / project_id).resolve()
         return (self.projects_base / project_id).resolve()

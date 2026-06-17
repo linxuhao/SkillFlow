@@ -130,6 +130,7 @@ class SkillFlow:
                  workspace_base: str = "",
                  projects_base: str = "",
                  code_dir: str = "",
+                 code_path_resolver: "Callable[[str], str | None] | None" = None,
                  delegate_tools_to_agent: bool = False,
                  trace_enabled: bool = True):
         self._db_path = db_path
@@ -150,7 +151,8 @@ class SkillFlow:
         if workspace_base:
             from skillflow.workspace import WorkspaceManager
             self._workspace = WorkspaceManager(workspace_base, projects_base=projects_base,
-                                                 code_dir=code_dir)
+                                                 code_dir=code_dir,
+                                                 code_path_resolver=code_path_resolver)
 
         from skillflow.agent_registry import AgentRegistry
         self.agent_registry = AgentRegistry()
