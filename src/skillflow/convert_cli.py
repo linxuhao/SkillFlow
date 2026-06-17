@@ -34,6 +34,9 @@ def main():
                     "Wraps skillflow-run with the built-in skill_converter pipeline. "
                     "Parse the JSON response, act, call again.",
         epilog=(
+            "Full agent manual (inject into your system prompt):\n"
+            "  from skillflow.plugins.skill_converter import load_agent_guide\n"
+            "\n"
             "Examples:\n"
             "  # Start a conversion\n"
             "  skillflow-convert --desc \"Code review skill...\" --action start\n"

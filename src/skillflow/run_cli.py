@@ -104,6 +104,9 @@ def main():
                     "Use --action start --graph once; all subsequent calls use "
                     "--run-id (the graph path is stored in the DB).",
         epilog=(
+            "Full agent manual (inject into your system prompt):\n"
+            "  from skillflow.plugins.skill_runner import load_agent_guide\n"
+            "\n"
             "Examples:\n"
             "  # Start a new run (--graph only on start)\n"
             "  skillflow-run --graph pipeline.yaml --action start\n"
