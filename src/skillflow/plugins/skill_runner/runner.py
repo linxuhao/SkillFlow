@@ -246,6 +246,16 @@ class SkillTool:
             if node and node.step_type == "tool":
                 tool_name = node.tool_name
                 tool_params = dict(node.tool_params)
+                # Resolve path variables ($CONFIG_DIR, $STEP_DIR, $STEP_TMP_DIR,
+                # $TASK_DIR, $PROJECT_ROOT) so the driving agent receives real
+                # paths, not literal placeholders.  AGENT.md promises these are
+                # resolved; without this, delegated tool nodes (e.g. a lint step
+                # pointed at "$CONFIG_DIR/.../foo.yaml") get an unexpanded path.
+                if self.sf._workspace is not None and self.run_id:
+                    pid = self.sf._get_project_id(self.run_id)
+                    gname = self.sf._get_graph_name(self.run_id) or self.graph_name
+                    tool_params = self.sf._workspace.resolve_variables(
+                        pid, gname, claimed.step_id, tool_params)
         except Exception:
             pass
 
