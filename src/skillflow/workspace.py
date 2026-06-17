@@ -107,19 +107,6 @@ class WorkspaceManager:
         p = self.get_config_path(project_id, config_name) / step_id
         return p  # created by _step_commit, not here
 
-    # ── Deprecated: kept for backward compat ────────────────────────────
-
-    def get_inbox_dir(self, project_id: str, config_name: str,
-                      step_id: str) -> Path:
-        import warnings
-        warnings.warn(
-            "get_inbox_dir() is deprecated; use get_step_dir() instead. "
-            "The legacy Inbox_* paths are no longer used by skillflow internally.",
-            DeprecationWarning, stacklevel=2
-        )
-        p = self.get_config_path(project_id, config_name) / f"Inbox_{step_id}"
-        p.mkdir(parents=True, exist_ok=True)
-        return p
 
     def get_draft_dir(self, project_id: str, config_name: str,
                       step_id: str) -> Path:

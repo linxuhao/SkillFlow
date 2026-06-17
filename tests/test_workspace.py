@@ -28,11 +28,6 @@ class TestWorkspaceManager:
         assert p.name == "dpe_default"
         assert p.exists()
 
-    def test_get_inbox_dir(self, ws):
-        p = ws.get_inbox_dir("proj-1", "dpe_default", "1")
-        assert p.name == "Inbox_1"
-        assert p.exists()
-
     def test_get_step_tmp_dir(self, ws):
         p = ws.get_step_tmp_dir("proj-1", "dpe_default", "t_impl")
         assert p.name == "t_impl.tmp"
