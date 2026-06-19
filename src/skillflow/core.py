@@ -2078,11 +2078,36 @@ class SkillFlow:
                         flags.update(self._deserialize(row["result_flags_json"]))
                     while resolver.is_gate(current) and gate_depth < 1000:
                         gate_depth += 1
-                        matched = resolver.resolve_gate_transitions(current, flags, edge_counts)
-                        if matched is None:
-                            self._fail_run_in_tx(conn, run_id, f"Gate '{current}': no matching transition")
+                        # SF-23 (gate pre-resolved): Use resolve_transition so
+                        # we can distinguish "no match" from "terminal (to: null)".
+                        try:
+                            gt, gtarget = resolver.resolve_transition(
+                                current, flags, edge_counts)
+                        except CycleLimitExceeded:
+                            self._fail_run_in_tx(conn, run_id,
+                                                 f"Gate '{current}': cycle limit exceeded")
                             return None
-                        current = matched
+                        if gt is None:
+                            self._fail_run_in_tx(conn, run_id,
+                                                 f"Gate '{current}': no matching transition")
+                            return None
+                        if gtarget is None:
+                            # Terminal transition (to: null) — pipeline ends
+                            ec_gate = resolver.graph.end_conditions
+                            if ec_gate and ec_gate.conditions:
+                                end_result = self._evaluate_end_conditions(
+                                    conn, run_id, ec_gate, current)
+                                if end_result:
+                                    if end_result.status == "completed":
+                                        self._complete_run_in_tx(conn, run_id, end_result.reason)
+                                    else:
+                                        self._fail_run_in_tx(conn, run_id, end_result.reason)
+                                    return None
+                            self._complete_run_in_tx(
+                                conn, run_id,
+                                f"Pipeline completed at gate '{current}'")
+                            return None
+                        current = gtarget
                     if gate_depth >= 1000:
                         self._fail_run_in_tx(conn, run_id, "Gate resolution exceeded 1000 iterations")
                         return None
@@ -2289,6 +2314,7 @@ class SkillFlow:
                             "label": _chk_label,
                             "next_node": next_node,
                             "project_id": run["project_id"],
+                            "graph_name": run["graph_name"],
                         },
                         step_id=last["step_id"], run_id=run_id,
                     )
@@ -2318,13 +2344,40 @@ class SkillFlow:
                 if resolver.is_gate(next_node):
                     gate_depth += 1
                     edge_counts = self._read_edge_counts(conn, run_id)
-                    matched = resolver.resolve_gate_transitions(
-                        next_node, last_flags_for_gate, edge_counts, file_reader=fr)
-                    if matched is None:
-                        self._fail_run_in_tx(conn, run_id, f"Gate '{next_node}': no matching transition")
+                    # SF-23 (gate): Use resolve_transition directly so we can
+                    # distinguish "no match" from "matched to terminal (to: null)".
+                    # resolve_gate_transitions → next_node returns the target or
+                    # None — but None is also the valid terminal sentinel.
+                    try:
+                        gt, gtarget = resolver.resolve_transition(
+                            next_node, last_flags_for_gate, edge_counts,
+                            file_reader=fr)
+                    except CycleLimitExceeded:
+                        self._fail_run_in_tx(conn, run_id,
+                                             f"Gate '{next_node}': cycle limit exceeded")
                         return None
-                    edges_taken.append((next_node, matched))
-                    next_node = matched
+                    if gt is None:
+                        self._fail_run_in_tx(conn, run_id,
+                                             f"Gate '{next_node}': no matching transition")
+                        return None
+                    if gtarget is None:
+                        # Terminal transition (to: null) — gate matched, pipeline ends
+                        ec_gate = resolver.graph.end_conditions
+                        if ec_gate and ec_gate.conditions:
+                            end_result = self._evaluate_end_conditions(
+                                conn, run_id, ec_gate, next_node)
+                            if end_result:
+                                if end_result.status == "completed":
+                                    self._complete_run_in_tx(conn, run_id, end_result.reason)
+                                else:
+                                    self._fail_run_in_tx(conn, run_id, end_result.reason)
+                                return None
+                        self._complete_run_in_tx(
+                            conn, run_id,
+                            f"Pipeline completed at gate '{next_node}'")
+                        return None
+                    edges_taken.append((next_node, gtarget))
+                    next_node = gtarget
                 elif resolver.is_tool(next_node):
                     tool_node = resolver.get_node(next_node)
                     if tool_node and self._should_delegate_tool(tool_node.tool_name):
