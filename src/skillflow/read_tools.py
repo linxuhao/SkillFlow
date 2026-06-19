@@ -51,9 +51,17 @@ def resolve_context_paths(
             # Single file: return the specific file paths
             result = []
             for f in files:
+                # Try literal path first, then glob for $var patterns
                 fp = step_dir / f
                 if fp.is_file():
                     result.append(str(fp))
+                elif "$" in f:
+                    # Unresolved $var — try glob match (e.g. tasks/$current_task.json)
+                    import glob as _glob
+                    pattern = str(step_dir / f.replace("$", "*"))
+                    matches = sorted(_glob.glob(pattern))
+                    if matches:
+                        result.append(str(Path(matches[0])))
             return result
         else:
             return [str(step_dir)]
@@ -76,6 +84,12 @@ def resolve_context_paths(
                     fp = step_dir / f
                     if fp.is_file():
                         result.append(str(fp))
+                    elif "$" in f:
+                        import glob as _glob
+                        pattern = str(step_dir / f.replace("$", "*"))
+                        matches = sorted(_glob.glob(pattern))
+                        if matches:
+                            result.append(str(Path(matches[0])))
                 return result
             return [str(step_dir)]
         else:
@@ -89,6 +103,12 @@ def resolve_context_paths(
                         fp = d / f
                         if fp.is_file():
                             result.append(str(fp))
+                        elif "$" in f:
+                            import glob as _glob
+                            pattern = str(d / f.replace("$", "*"))
+                            matches = sorted(_glob.glob(pattern))
+                            if matches:
+                                result.append(str(Path(matches[0])))
                 return result
             return [str(cfg_dir)]
 
@@ -117,13 +137,29 @@ def resolve_context_paths(
 
 # ── Label derivation ─────────────────────────────────────────────────
 
-def _derive_label(spec: dict) -> str:
-    """Derive a stable tool-name label from a context spec."""
+def _derive_label(spec: dict, loop_context: dict | None = None) -> str:
+    """Derive a stable tool-name label from a context spec.
+
+    If *loop_context* is provided, ``$variable`` references in file
+    paths are resolved before deriving the label (so ``tasks/$current_task.json``
+    becomes ``tasks/frontend_product.json`` instead of the literal
+    ``$current_task``)."""
+    import re
+
     source_type = spec.get("source_type", "step")
+
+    # Resolve $variable references in file paths
+    def _resolve(path: str) -> str:
+        if "$" not in path or not loop_context:
+            return path
+        def _sub(m):
+            var = m.group(1)
+            return str(loop_context.get(var, loop_context.get(f"[{var}]", m.group(0))))
+        return re.sub(r'\$(\w+)', _sub, path)
 
     if source_type == "step":
         step_id = spec.get("step_id", "").replace("-", "_")
-        files = spec.get("files", [])
+        files = [_resolve(f) for f in spec.get("files", [])]
         if len(files) == 1:
             name = Path(files[0]).stem.replace(".", "_").replace("-", "_")
             return f"step_{step_id}_{name}"
@@ -132,7 +168,7 @@ def _derive_label(spec: dict) -> str:
     elif source_type == "config":
         cfg = spec.get("config_name", "").replace("-", "_")
         step_id = spec.get("step_id", "").replace("-", "_")
-        files = spec.get("files", [])
+        files = [_resolve(f) for f in spec.get("files", [])]
         if step_id and len(files) == 1:
             name = Path(files[0]).stem.replace(".", "_").replace("-", "_")
             return f"config_{cfg}_{step_id}_{name}"
@@ -141,12 +177,12 @@ def _derive_label(spec: dict) -> str:
         return f"config_{cfg}"
 
     elif source_type == "workspace":
-        path = spec.get("path", "")
+        path = _resolve(spec.get("path", ""))
         name = Path(path).stem.replace(".", "_").replace("-", "_")
         return f"workspace_{name}" if name else "workspace"
 
     elif source_type == "repository":
-        path = spec.get("path", "")
+        path = _resolve(spec.get("path", ""))
         name = Path(path).stem.replace(".", "_").replace("-", "_") if path else "root"
         return f"repo_{name}"
 
@@ -167,6 +203,7 @@ def generate_read_tool_schemas(
     workspace_root: str,
     current_config: str = "",
     code_root: str = "",
+    loop_context: dict | None = None,
 ) -> list[dict]:
     """Generate read tool schema dicts from normalized context specs.
 
@@ -182,7 +219,7 @@ def generate_read_tool_schemas(
         if mode == "inline":
             continue
 
-        label = _derive_label(spec)
+        label = _derive_label(spec, loop_context)
         paths = resolve_context_paths(spec, workspace_root, current_config, code_root)
         if not paths:
             continue
@@ -252,6 +289,7 @@ def _source_description(spec: dict) -> str:
 
 def make_read_tool_fns(specs: list[dict], workspace_root: str,
                        current_config: str = "", code_root: str = "",
+                       loop_context: dict | None = None,
                        ) -> dict[str, callable]:
     """Create execution functions for all read tools from context specs.
 
@@ -268,7 +306,7 @@ def make_read_tool_fns(specs: list[dict], workspace_root: str,
         if mode == "inline":
             continue
 
-        label = _derive_label(spec)
+        label = _derive_label(spec, loop_context)
         paths = resolve_context_paths(spec, workspace_root, current_config, code_root)
         if not paths:
             continue
@@ -373,7 +411,7 @@ def make_read_tool_fns(specs: list[dict], workspace_root: str,
     return fns
 
 
-def get_read_tool_names(specs: list[dict]) -> set[str]:
+def get_read_tool_names(specs: list[dict], loop_context: dict | None = None) -> set[str]:
     """Return the set of tool names that would be generated from these specs.
     Doesn't resolve paths — just derives names from spec labels.
     Used for allowlist building in _execute_tool_impl.
@@ -383,7 +421,7 @@ def get_read_tool_names(specs: list[dict]) -> set[str]:
         mode = spec.get("mode", "both")
         if mode == "inline":
             continue
-        label = _derive_label(spec)
+        label = _derive_label(spec, loop_context)
         # We don't know if it's single-file or directory without paths,
         # so add all possible names. Execution will resolve correctly.
         names.add(f"read_{label}")

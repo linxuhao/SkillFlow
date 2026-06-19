@@ -829,14 +829,28 @@ class SkillFlow:
                         workspace_root=ws_root,
                         current_config=run["graph_name"],
                         code_root=code_root,
+                        loop_context=loop_context if loop_context else None,
                     )
                     if read_schemas and self._tool_loader:
+                        # Clear stale dynamic read tools from previous task
+                        # iterations (e.g. list_step_3_$current_task from an
+                        # earlier claim before the $var was resolved).
                         read_fns = make_read_tool_fns(
                             node.context,
                             workspace_root=ws_root,
                             current_config=run["graph_name"],
                             code_root=code_root,
+                            loop_context=loop_context if loop_context else None,
                         )
+                        stale = [n for n in self._tool_loader._cache
+                                 if any(n.startswith(p) for p in
+                                        ("list_step_", "read_step_", "search_step_",
+                                         "list_repo_", "read_repo_", "search_repo_",
+                                         "list_config_", "read_config_", "search_config_",
+                                         "list_workspace_", "read_workspace_", "search_workspace_"))
+                                 and self._tool_loader.is_dynamic(n)]
+                        for n in stale:
+                            del self._tool_loader._cache[n]
                         for rs in read_schemas:
                             name = rs["name"]
                             fn = read_fns.get(name)
