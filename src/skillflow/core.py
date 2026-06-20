@@ -278,6 +278,27 @@ class SkillFlow:
                 (graph.name, json.dumps(graph.to_dict()), graph.name),
             )
 
+    def list_graphs(self) -> list[dict]:
+        """Return all registered graphs as ``{name, version, description}``.
+
+        ``description`` is parsed out of the stored ``yaml_text`` JSON (there is
+        no dedicated column for it). Used by hosts to enumerate available
+        configs for a picker / dashboard without knowing them ahead of time.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT name, yaml_text, version FROM skillflow_graphs ORDER BY name ASC"
+            ).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            description = None
+            try:
+                description = json.loads(r["yaml_text"]).get("description")
+            except (ValueError, TypeError):
+                pass
+            out.append({"name": r["name"], "version": r["version"], "description": description})
+        return out
+
     def register_agent_config(self, name: str, **kwargs) -> None:
         """Register an agent config so graph validation can check references."""
         self.agent_registry.register(name, **kwargs)
@@ -607,19 +628,39 @@ class SkillFlow:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def get_run_by_project(self, project_id: str) -> dict | None:
+    def get_run_by_project(self, project_id: str,
+                           graph_name: str | None = None) -> dict | None:
+        """Latest non-completed run for ``project_id``.
+
+        When ``graph_name`` is given, the lookup is scoped to that config so a
+        single ``project_id`` can carry one live run per config without them
+        colliding. ``graph_name=None`` preserves the original behaviour (any
+        non-completed run, newest first).
+        """
         with self._lock:
-            row = self._conn.execute(
-                """SELECT * FROM skillflow_runs
-                   WHERE project_id = ? AND status NOT IN ('completed')
-                   ORDER BY created_at DESC LIMIT 1""",
-                (project_id,),
-            ).fetchone()
+            if graph_name is not None:
+                row = self._conn.execute(
+                    """SELECT * FROM skillflow_runs
+                       WHERE project_id = ? AND graph_name = ?
+                         AND status NOT IN ('completed')
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (project_id, graph_name),
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    """SELECT * FROM skillflow_runs
+                       WHERE project_id = ? AND status NOT IN ('completed')
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (project_id,),
+                ).fetchone()
             return dict(row) if row else None
 
     def get_or_create_run(self, graph_name: str, project_id: str,
                           context: dict | None = None) -> str:
-        existing = self.get_run_by_project(project_id)
+        # Scope the reuse lookup to this graph so a project that runs more than
+        # one config (e.g. a meta_conversation run and its DPE run) gets a
+        # distinct run per config instead of accidentally reusing another.
+        existing = self.get_run_by_project(project_id, graph_name=graph_name)
         if existing:
             return existing["id"]
         return self.create_run(graph_name, context, project_id=project_id)
