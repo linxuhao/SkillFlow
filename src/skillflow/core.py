@@ -2072,11 +2072,98 @@ class SkillFlow:
             return f.read_text(encoding="utf-8")
         return read
 
+    def _complete_tool_step(self, run_id: str, step_id: str,
+                            tool_result: dict, run_row: dict,
+                            resolver) -> str | None:
+        """Confirm an inline tool execution and resolve its transition.
+
+        Called AFTER _execute_tool_inline returns, inside a fresh _tx()
+        so the write lock is only held during the fast DB update, not
+        during the (potentially slow) tool itself.
+        """
+        with self._tx() as conn:
+            self._confirm_tool_in_tx(conn, run_id, step_id, tool_result)
+            step_flags = tool_result
+            fr = self._make_file_reader(
+                run_row["project_id"], run_row["graph_name"], step_id)
+            edge_counts = self._read_edge_counts(conn, run_id)
+            try:
+                _t, target = resolver.resolve_transition(
+                    step_id, step_flags, edge_counts, file_reader=fr)
+            except CycleLimitExceeded:
+                self._fail_run_in_tx(conn, run_id, "Cycle limit exceeded")
+                return None
+            if _t and _t.feedback and _t.to:
+                error_str = tool_result.get("error", "Tool failed")
+                self._inject_feedback_in_tx(conn, run_id, _t.to, error_str)
+            if target:
+                ec = resolver.graph.end_conditions
+                if ec and ec.conditions:
+                    end_result = self._evaluate_end_conditions(
+                        conn, run_id, ec, target)
+                    if end_result:
+                        if end_result.status == "completed":
+                            self._complete_run_in_tx(
+                                conn, run_id, end_result.reason)
+                        else:
+                            self._fail_run_in_tx(
+                                conn, run_id, end_result.reason)
+                        return None
+                conn.execute(
+                    "UPDATE skillflow_runs SET current_node = ?,"
+                    " updated_at = datetime('now') WHERE id = ?",
+                    (target, run_id),
+                )
+                return target
+            # No target — check end_conditions against the current node
+            ec = resolver.graph.end_conditions
+            if ec and ec.conditions:
+                end_result = self._evaluate_end_conditions(
+                    conn, run_id, ec, step_id)
+                if end_result:
+                    if end_result.status == "completed":
+                        self._complete_run_in_tx(
+                            conn, run_id, end_result.reason)
+                    else:
+                        self._fail_run_in_tx(
+                            conn, run_id, end_result.reason)
+                    return None
+            self._fail_run_in_tx(
+                conn, run_id,
+                f"No matching transition from '{step_id}'"
+                f" with flags {step_flags}"
+            )
+            return None
+
     def advance_run(self, run_id: str) -> str | None:
         # Recover stale claims before any traversal
         self.recover_stale_claims(self._stale_threshold)
 
         resolver = self._get_resolver_for_run(run_id)
+
+        # ── Tool fast-path: execute OUTSIDE any write transaction ──
+        # Long-running tools (e.g. run_tests at 10-15 s) must not hold
+        # the SQLite write lock — that blocks agent trace writes and
+        # other scheduler ticks, causing SQLITE_BUSY → crashed agents →
+        # stale claims → infinite loops.
+        run_row = self._conn.execute(
+            "SELECT * FROM skillflow_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if (run_row and run_row["status"] == "running"
+                and run_row["current_node"]):
+            current = run_row["current_node"]
+            if resolver.is_tool(current):
+                tool_node = resolver.get_node(current)
+                if tool_node and not self._should_delegate_tool(
+                        tool_node.tool_name):
+                    # Execute tool WITHOUT holding any lock/transaction
+                    tool_result = self._execute_tool_inline(
+                        tool_node, run_id=run_id,
+                        graph_name=run_row["graph_name"])
+                    return self._complete_tool_step(
+                        run_id, current, tool_result, run_row, resolver)
+
+        # ── Full resolution (gate, loop, agent, or current_node=None) ──
         with self._tx() as conn:
             run = conn.execute(
                 "SELECT * FROM skillflow_runs WHERE id = ?", (run_id,)
