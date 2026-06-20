@@ -1599,6 +1599,17 @@ class SkillFlow:
                 ).fetchone()
                 if row and row["project_id"]:
                     pid = row["project_id"]
+                    kwargs.setdefault("project_id", pid)
+                    # Look up current task name from loop state (for commit messages)
+                    try:
+                        lr = self._conn.execute(
+                            "SELECT current_item FROM skillflow_loop_state WHERE run_id = ? LIMIT 1",
+                            (run_id,),
+                        ).fetchone()
+                        if lr and lr["current_item"]:
+                            kwargs.setdefault("task_name", lr["current_item"])
+                    except Exception:
+                        pass
                     kwargs = self._workspace.resolve_variables(
                         pid, graph_name, tool_node.id, kwargs
                     )

@@ -6,7 +6,9 @@ from pathlib import Path
 
 
 def repo_apply(source_dir: str, *, workspace_root: str = "",
-               project_root: str = "") -> dict:
+               project_root: str = "",
+               step_id: str = "", project_id: str = "",
+               task_name: str = "") -> dict:
     src = Path(source_dir)
     if not src.is_absolute():
         src = Path(workspace_root) / source_dir
@@ -42,8 +44,17 @@ def repo_apply(source_dir: str, *, workspace_root: str = "",
         return {"applied": False, "files": applied_files,
                 "error": f"git add failed: {r.stderr.strip()}"}
 
+    # Build descriptive commit message
+    parts = [f"step: {step_id}"] if step_id else ["step: apply"]
+    if project_id:
+        parts.append(f"[{project_id}]")
+    if task_name:
+        parts.append(f"{task_name}")
+    parts.append(f"{len(applied_files)} file(s)")
+    msg = " ".join(parts)
+
     r = subprocess.run(
-        ["git", "commit", "-m", f"step: apply {len(applied_files)} file(s)"],
+        ["git", "commit", "-m", msg],
         cwd=dst, capture_output=True, text=True
     )
     if r.returncode != 0:

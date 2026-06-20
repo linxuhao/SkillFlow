@@ -6,7 +6,8 @@ from pathlib import Path
 
 
 def draft_commit(source_dir: str = "", *, workspace_root: str = "",
-                 step_id: str = "", run_id: str = "") -> dict:
+                 step_id: str = "", run_id: str = "",
+                 project_id: str = "", task_name: str = "") -> dict:
     """Move Draw→Final and git commit in the workspace.
 
     If source_dir is empty/unset, expects $STEP_TMP_DIR to have been
@@ -53,7 +54,14 @@ def draft_commit(source_dir: str = "", *, workspace_root: str = "",
         return {"committed": False, "files": moved_files,
                 "error": f"git add failed: {r.stderr.strip()}"}
 
-    msg = f"step: commit {len(moved_files)} file(s) — {', '.join(moved_files[:5])}"
+    # Build descriptive commit message
+    parts = [f"step: {step_id}"] if step_id else ["step: commit"]
+    if project_id:
+        parts.append(f"[{project_id}]")
+    if task_name:
+        parts.append(f"{task_name}")
+    parts.append(f"{len(moved_files)} file(s) — {', '.join(moved_files[:5])}")
+    msg = " ".join(parts)
     r = subprocess.run(["git", "commit", "-m", msg], cwd=repo_root,
                        capture_output=True, text=True)
     if r.returncode != 0:
