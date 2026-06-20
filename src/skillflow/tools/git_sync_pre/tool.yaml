@@ -1,0 +1,10 @@
+name: git_sync_pre
+description: >
+  Pre-pipeline git sync: fetch origin and pull if safe.
+  Skips silently for non-git or local-only repos.
+  Fails explicitly when remote has diverged (merge conflict).
+parameters:
+  project_root:
+    type: string
+    description: "Path to the project repository"
+    required: true
