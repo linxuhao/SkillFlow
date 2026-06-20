@@ -24,11 +24,22 @@ from pathlib import Path
 
 # ── Path resolution ──────────────────────────────────────────────────
 
+def _resolve_var_path(path: str, loop_context: dict | None = None) -> str:
+    """Resolve ``$variable`` references in a file path against loop_context."""
+    if "$" not in path or not loop_context:
+        return path
+    def _sub(m):
+        var = m.group(1)
+        return str(loop_context.get(var, loop_context.get(f"[{var}]", m.group(0))))
+    return re.sub(r'\$(\w+)', _sub, path)
+
+
 def resolve_context_paths(
     spec: dict,
     workspace_root: str,
     current_config: str = "",
     code_root: str = "",
+    loop_context: dict | None = None,
 ) -> list[str]:
     """Resolve a normalized context spec to a list of absolute paths.
 
@@ -51,14 +62,15 @@ def resolve_context_paths(
             # Single file: return the specific file paths
             result = []
             for f in files:
-                # Try literal path first, then glob for $var patterns
-                fp = step_dir / f
+                # Resolve $var references first (e.g. $current_task → backend_sessions_api)
+                resolved_f = _resolve_var_path(f, loop_context)
+                fp = step_dir / resolved_f
                 if fp.is_file():
                     result.append(str(fp))
                 elif "$" in f:
                     # Unresolved $var — try glob match (e.g. tasks/$current_task.json)
                     import glob as _glob
-                    pattern = str(step_dir / f.replace("$", "*"))
+                    pattern = str(step_dir / re.sub(r'\$\w+', '*', f))
                     matches = sorted(_glob.glob(pattern))
                     if matches:
                         result.append(str(Path(matches[0])))
@@ -81,12 +93,13 @@ def resolve_context_paths(
             if files:
                 result = []
                 for f in files:
-                    fp = step_dir / f
+                    resolved_f = _resolve_var_path(f, loop_context)
+                    fp = step_dir / resolved_f
                     if fp.is_file():
                         result.append(str(fp))
                     elif "$" in f:
                         import glob as _glob
-                        pattern = str(step_dir / f.replace("$", "*"))
+                        pattern = str(step_dir / re.sub(r'\$\w+', '*', f))
                         matches = sorted(_glob.glob(pattern))
                         if matches:
                             result.append(str(Path(matches[0])))
@@ -100,12 +113,13 @@ def resolve_context_paths(
                     if not d.is_dir() or d.name.endswith(".tmp"):
                         continue
                     for f in files:
-                        fp = d / f
+                        resolved_f = _resolve_var_path(f, loop_context)
+                        fp = d / resolved_f
                         if fp.is_file():
                             result.append(str(fp))
                         elif "$" in f:
                             import glob as _glob
-                            pattern = str(d / f.replace("$", "*"))
+                            pattern = str(d / re.sub(r'\$\w+', '*', f))
                             matches = sorted(_glob.glob(pattern))
                             if matches:
                                 result.append(str(Path(matches[0])))
@@ -144,22 +158,12 @@ def _derive_label(spec: dict, loop_context: dict | None = None) -> str:
     paths are resolved before deriving the label (so ``tasks/$current_task.json``
     becomes ``tasks/frontend_product.json`` instead of the literal
     ``$current_task``)."""
-    import re
 
     source_type = spec.get("source_type", "step")
 
-    # Resolve $variable references in file paths
-    def _resolve(path: str) -> str:
-        if "$" not in path or not loop_context:
-            return path
-        def _sub(m):
-            var = m.group(1)
-            return str(loop_context.get(var, loop_context.get(f"[{var}]", m.group(0))))
-        return re.sub(r'\$(\w+)', _sub, path)
-
     if source_type == "step":
         step_id = spec.get("step_id", "").replace("-", "_")
-        files = [_resolve(f) for f in spec.get("files", [])]
+        files = [_resolve_var_path(f, loop_context) for f in spec.get("files", [])]
         if len(files) == 1:
             name = Path(files[0]).stem.replace(".", "_").replace("-", "_")
             return f"step_{step_id}_{name}"
@@ -168,7 +172,7 @@ def _derive_label(spec: dict, loop_context: dict | None = None) -> str:
     elif source_type == "config":
         cfg = spec.get("config_name", "").replace("-", "_")
         step_id = spec.get("step_id", "").replace("-", "_")
-        files = [_resolve(f) for f in spec.get("files", [])]
+        files = [_resolve_var_path(f, loop_context) for f in spec.get("files", [])]
         if step_id and len(files) == 1:
             name = Path(files[0]).stem.replace(".", "_").replace("-", "_")
             return f"config_{cfg}_{step_id}_{name}"
@@ -177,12 +181,12 @@ def _derive_label(spec: dict, loop_context: dict | None = None) -> str:
         return f"config_{cfg}"
 
     elif source_type == "workspace":
-        path = _resolve(spec.get("path", ""))
+        path = _resolve_var_path(spec.get("path", ""), loop_context)
         name = Path(path).stem.replace(".", "_").replace("-", "_")
         return f"workspace_{name}" if name else "workspace"
 
     elif source_type == "repository":
-        path = _resolve(spec.get("path", ""))
+        path = _resolve_var_path(spec.get("path", ""), loop_context)
         name = Path(path).stem.replace(".", "_").replace("-", "_") if path else "root"
         return f"repo_{name}"
 
@@ -220,7 +224,7 @@ def generate_read_tool_schemas(
             continue
 
         label = _derive_label(spec, loop_context)
-        paths = resolve_context_paths(spec, workspace_root, current_config, code_root)
+        paths = resolve_context_paths(spec, workspace_root, current_config, code_root, loop_context)
         if not paths:
             continue
 
@@ -307,7 +311,7 @@ def make_read_tool_fns(specs: list[dict], workspace_root: str,
             continue
 
         label = _derive_label(spec, loop_context)
-        paths = resolve_context_paths(spec, workspace_root, current_config, code_root)
+        paths = resolve_context_paths(spec, workspace_root, current_config, code_root, loop_context)
         if not paths:
             continue
 

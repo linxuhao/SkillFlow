@@ -76,7 +76,7 @@ class StepValidator:
             takes_plural = "files" in sig.parameters
 
             base_kwargs = {k: v for k, v in spec.items()
-                          if k not in ("files", "file", "tool", "on_failure")}
+                          if k not in ("files", "file", "tool", "on_failure", "max_retries")}
 
             if takes_plural:
                 # Batch tool (e.g. json_schema): pass all file patterns

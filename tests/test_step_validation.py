@@ -178,3 +178,49 @@ class TestStepValidatorFileExists:
             {"files": ["missing.md"], "tool": "file_exists"},
         ])
         assert result["passed"] is False
+
+
+class TestMaxRetriesFiltering:
+    """max_retries in a validation/lifecycle spec is a lifecycle control param,
+    NOT a tool parameter — it must not leak into the tool function call."""
+
+    def test_max_retries_not_passed_to_lint(self, tmp_path):
+        from skillflow.step_validation import StepValidator
+        from skillflow.tool_loader import ToolLoader
+
+        (tmp_path / "test.py").write_text("x = 1\n")
+
+        tools_dir = Path(__file__).parent.parent / "src" / "skillflow" / "tools"
+        loader = ToolLoader(tools_dir)
+        validator = StepValidator(loader, tmp_path)
+
+        spec = {
+            "tool": "lint",
+            "files": ["test.py"],
+            "workspace_root": str(tmp_path),
+            "on_failure": "retry",
+            "max_retries": 3,  # lifecycle control, NOT a lint param
+        }
+        # Must not raise TypeError: unexpected keyword argument 'max_retries'
+        result = validator.validate([spec])
+        assert "passed" in result
+
+    def test_max_retries_not_passed_to_file_exists(self, tmp_path):
+        from skillflow.step_validation import StepValidator
+        from skillflow.tool_loader import ToolLoader
+
+        (tmp_path / "output.json").write_text("{}")
+
+        tools_dir = Path(__file__).parent.parent / "src" / "skillflow" / "tools"
+        loader = ToolLoader(tools_dir)
+        validator = StepValidator(loader, tmp_path)
+
+        spec = {
+            "tool": "file_exists",
+            "files": ["output.json"],
+            "on_failure": "warn",
+            "max_retries": 5,
+        }
+        result = validator.validate([spec])
+        assert "passed" in result
+        assert result["passed"] is True
