@@ -2146,6 +2146,19 @@ class SkillFlow:
         # the SQLite write lock — that blocks agent trace writes and
         # other scheduler ticks, causing SQLITE_BUSY → crashed agents →
         # stale claims → infinite loops.
+        #
+        # IDEMPOTENCY NOTE: this inline tool execution is NOT claim-guarded —
+        # two overlapping advance_run() calls would both run the tool. That is
+        # currently safe ONLY because advance_run is synchronous and the host
+        # scheduler drives it on a single event loop in a single process (the
+        # P0-1 advisory lock), so calls for one run can never overlap. The tool
+        # runs synchronously here and blocks that loop for its whole duration.
+        # If a host ever makes tool execution non-blocking (await to_thread /
+        # run_in_executor) so the loop stays responsive during a slow tool,
+        # advance_run gains a yield point mid-tool and concurrent ticks CAN then
+        # overlap → this path must become claim-guarded (CAS pending→claimed
+        # before executing; only the winner runs the tool). Land the two
+        # changes together, never one without the other.
         run_row = self._conn.execute(
             "SELECT * FROM skillflow_runs WHERE id = ?", (run_id,)
         ).fetchone()
@@ -2270,70 +2283,18 @@ class SkillFlow:
                     )
                     return current
 
-                # If current_node is a tool, auto-execute it inline
-                # (unless runner mode + non-native — then delegate to agent)
+                # If current_node is a tool, hand it to the top fast-path,
+                # which executes it OUTSIDE _tx() on the next advance_run pass.
+                # Executing it inline here would hold self._lock for the tool's
+                # whole duration, blocking concurrent ticks (→ SQLITE_BUSY /
+                # stale-claim re-spawn loop, the step-5 run_tests bug).
+                # current_node is already this tool, so no DB update is needed;
+                # returning None lets the caller re-enter and the top fast-path
+                # run it lock-free.
                 if resolver.is_tool(current):
                     tool_node = resolver.get_node(current)
                     if tool_node and self._should_delegate_tool(tool_node.tool_name):
                         return current  # agent claims and executes the tool
-                    tool_result = self._execute_tool_inline(
-                        tool_node, run_id=run_id,
-                        graph_name=run["graph_name"])
-                    self._confirm_tool_in_tx(conn, run_id, current, tool_result)
-                    step_flags = tool_result
-                    fr = self._make_file_reader(
-                        run["project_id"], run["graph_name"], current)
-                    edge_counts = self._read_edge_counts(conn, run_id)
-                    try:
-                        t, target = resolver.resolve_transition(
-                            current, step_flags, edge_counts, file_reader=fr)
-                    except CycleLimitExceeded:
-                        self._fail_run_in_tx(conn, run_id, "Cycle limit exceeded")
-                        return None
-                    if t and t.feedback and t.to:
-                        error_str = tool_result.get("error", "Tool failed")
-                        self._inject_feedback_in_tx(
-                            conn, run_id, t.to, error_str)
-                    if target:
-                        # Check end conditions before returning the target
-                        ec = resolver.graph.end_conditions
-                        if ec and ec.conditions:
-                            end_result = self._evaluate_end_conditions(
-                                conn, run_id, ec, target
-                            )
-                            if end_result:
-                                if end_result.status == "completed":
-                                    self._complete_run_in_tx(conn, run_id, end_result.reason)
-                                else:
-                                    self._fail_run_in_tx(conn, run_id, end_result.reason)
-                                return None
-                        conn.execute(
-                            "UPDATE skillflow_runs SET current_node = ?, updated_at = datetime('now') WHERE id = ?",
-                            (target, run_id),
-                        )
-                        return target
-
-                    # No target (no matching transition) — check end_conditions
-                    # against the current node (the one that just completed).
-                    # Fixes SF-12: when the last step has no outgoing transitions,
-                    # end_conditions were previously skipped because target=None.
-                    ec = resolver.graph.end_conditions
-                    if ec and ec.conditions:
-                        end_result = self._evaluate_end_conditions(
-                            conn, run_id, ec, current
-                        )
-                        if end_result:
-                            if end_result.status == "completed":
-                                self._complete_run_in_tx(conn, run_id, end_result.reason)
-                            else:
-                                self._fail_run_in_tx(conn, run_id, end_result.reason)
-                            return None
-
-                    # No target and no matching end condition → fail the run
-                    self._fail_run_in_tx(
-                        conn, run_id,
-                        f"No matching transition from '{current}' with flags {step_flags}"
-                    )
                     return None
 
                 # Check end conditions when current_node was pre-resolved
@@ -2493,6 +2454,8 @@ class SkillFlow:
                 last_flags_for_gate.update(
                     self._deserialize(cs["result_flags_json"]))
             gate_depth = 0
+            defer_tool = False  # set when we stop at a native tool to run it
+                                # lock-free via the top fast-path next pass
             while gate_depth < 1000:
                 if resolver.is_gate(next_node):
                     gate_depth += 1
@@ -2535,26 +2498,14 @@ class SkillFlow:
                     tool_node = resolver.get_node(next_node)
                     if tool_node and self._should_delegate_tool(tool_node.tool_name):
                         break  # return the tool node for the agent
-                    tool_result = self._execute_tool_inline(
-                        tool_node, run_id=run_id,
-                        graph_name=run["graph_name"])
-                    self._confirm_tool_in_tx(conn, run_id, next_node, tool_result)
-                    step_flags = tool_result
-                    try:
-                        t, target = resolver.resolve_transition(
-                            next_node, step_flags, edge_counts, file_reader=fr)
-                    except CycleLimitExceeded:
-                        self._fail_run_in_tx(conn, run_id, "Cycle limit exceeded")
-                        return None
-                    if t and t.feedback and t.to:
-                        # Inject tool error output into target step for retry context
-                        self._inject_feedback_in_tx(conn, run_id, t.to, tool_result)
-                    if target is None:
-                        self._fail_run_in_tx(conn, run_id, f"Tool '{next_node}': no matching transition")
-                        return None
-                    edges_taken.append((next_node, target))
-                    next_node = target
-                    last_flags_for_gate.update(step_flags)
+                    # Native tool: do NOT execute inline. _execute_tool_inline
+                    # holds self._lock for the tool's whole duration, blocking
+                    # concurrent ticks (→ SQLITE_BUSY / stale-claim re-spawn
+                    # loop, the step-5 run_tests bug). Stop here, commit
+                    # current_node = this tool below, and let the top fast-path
+                    # run it OUTSIDE _tx() on the next advance_run pass.
+                    defer_tool = True
+                    break
                 elif resolver.is_loop(next_node):
                     resolved = self._resolve_loop(conn, run, resolver, next_node)
                     if resolved is None:
@@ -2596,6 +2547,12 @@ class SkillFlow:
                 "UPDATE skillflow_runs SET current_node = ?, updated_at = datetime('now') WHERE id = ?",
                 (next_node, run_id),
             )
+            # When we stopped at a native tool, current_node now points at it;
+            # return None so the caller re-enters and the top fast-path executes
+            # it OUTSIDE _tx() (lock-free). Returning the tool node would make
+            # the host try to claim it as an agent step.
+            if defer_tool:
+                return None
             return next_node
 
     def reject_checkpoint(self, run_id: str, step_id: str, feedback: str,

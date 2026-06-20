@@ -721,6 +721,10 @@ class TestToolNodeExecution:
         token = sf.claim_next_step(rid)
         from skillflow.core import StepResult
         sf.confirm_step(token.token, StepResult(outputs={}, flags={}))
+        # Tool nodes run lock-free on a subsequent advance pass (never while
+        # advance_run holds self._lock): first pass resolves to the tool and
+        # commits current_node; second pass executes it via the top fast-path.
+        assert sf.advance_run(rid) is None
         next_node = sf.advance_run(rid)
         assert next_node == "a2"
 
@@ -748,6 +752,8 @@ class TestToolNodeExecution:
         rid = sf.create_run("test_fb"); sf.start_run(rid)
         token = sf.claim_next_step(rid)
         sf.confirm_step(token.token, StepResult(outputs={}, flags={}))
+        # Tool runs lock-free on the second advance pass (see note above).
+        assert sf.advance_run(rid) is None
         next_node = sf.advance_run(rid)
         assert next_node == "impl"
 
@@ -853,6 +859,8 @@ class TestToolNodeContextInjection:
         sf.start_run(rid)
         token = sf.claim_next_step(rid)
         sf.confirm_step(token.token, StepResult(outputs={}, flags={}))
+        # Tool runs lock-free on the second advance pass.
+        sf.advance_run(rid)
         sf.advance_run(rid)
 
         assert captured.get("run_id") == rid
@@ -889,6 +897,8 @@ class TestToolNodeContextInjection:
         sf.start_run(rid)
         token = sf.claim_next_step(rid)
         sf.confirm_step(token.token, StepResult(outputs={}, flags={}))
+        # Tool runs lock-free on the second advance pass.
+        sf.advance_run(rid)
         sf.advance_run(rid)
 
         assert captured.get("step_name") == "capture"  # tool_name takes priority
@@ -938,6 +948,8 @@ class TestNotificationBusIntegration:
         sf.start_run(rid)
         token = sf.claim_next_step(rid)
         sf.confirm_step(token.token, StepResult(outputs={}, flags={}))
+        # Tool runs lock-free on the second advance pass.
+        sf.advance_run(rid)
         sf.advance_run(rid)
 
         # Check outbox has step_completed for tool node
