@@ -7,13 +7,14 @@ Given a step's output config:
       sota: "step1_sota.md"
       verdict: { file: "review_verdict.json", on_exists: "new" }
 
-Generates three tool variants per slot:
+Generates write, create, and edit tool variants per slot:
 
 - write_{slot}(content) — replace file entirely
 - create_{slot}(initialContent) — write to canonical filename; if file exists,
   archive old file with numeric suffix, so the canonical name always holds the
-  latest content (append_{slot} targets the canonical name)
-- append_{slot}(content) — append content to existing file
+  latest version
+- edit_{slot}(old_str, new_str) — surgical in-place replace of an exact unique
+  snippet in the existing file
 
 For output_mode="write" with no fixed outputs: write(file, content).
 
@@ -157,16 +158,6 @@ def generate_write_tool_schemas(output_mode: str,
                     f"so {pattern} always holds the latest version.{fmt_hint}"
                 ),
                 "parameters": create_params,
-            })
-
-            # append_{slot} — append
-            tools.append({
-                "name": f"append_{slot}",
-                "description": (
-                    f"Append content to {pattern}. "
-                    f"Use after create_{slot} to add more content incrementally.{fmt_hint}"
-                ),
-                "parameters": params,
             })
 
             # edit_{slot} — surgical in-place edit of the EXISTING file

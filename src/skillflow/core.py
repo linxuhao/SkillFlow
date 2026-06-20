@@ -2972,21 +2972,19 @@ class SkillFlow:
 
         fixed = node.output_fixed if node else {}
 
-        # Write/create/append/edit tools — write to step tmp directory (atomic staging)
+        # Write/create/edit tools — write to step tmp directory (atomic staging)
         if (name.startswith("write_") or name.startswith("create_")
-                or name.startswith("append_") or name.startswith("edit_")):
+                or name.startswith("edit_")):
             if not self._workspace:
                 return {"error": "No workspace configured for write tool"}
             pid = self._get_project_id(run_id)
             gname = self._get_graph_name(run_id)
             tmp_dir = self._workspace.get_step_tmp_dir(pid, gname, step_id)
             from skillflow.write_tools import (execute_write, execute_create,
-                                               execute_append, execute_edit)
+                                               execute_edit)
             slot = name[name.index("_") + 1:]  # everything after first _
             if name.startswith("create_"):
                 return execute_create(slot, fixed, params, str(tmp_dir))
-            elif name.startswith("append_"):
-                return execute_append(slot, fixed, params, str(tmp_dir))
             elif name.startswith("edit_"):
                 # Edit the EXISTING file from the consolidated repo (project_root),
                 # writing the result into staging for promotion + repo_apply.
