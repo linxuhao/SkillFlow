@@ -122,3 +122,30 @@ class TestContextResolverEdgeCases:
         resolver = ContextResolver(Path("/nonexistent"))
         result = resolver.resolve([{}], current_config="")
         assert result == {}
+
+
+class TestVolatilityOrdering:
+    """Cache-stability tiering: static reads emitted before volatile sources."""
+
+    def test_tier_classification(self):
+        t = ContextResolver._volatility_tier
+        assert t({"config": "meta", "output": "b.md"}) == 0
+        assert t({"source_type": "repository"}) == 0
+        assert t({"step": "1"}) == 1
+        assert t({"source_type": "step"}) == 1
+        assert t({"tool": "dir_tree"}) == 2
+        assert t({"source_type": "workspace"}) == 2
+
+    def test_resolve_emits_static_before_step(self, workspace):
+        resolver = ContextResolver(workspace)
+        # Declared volatile-first; resolve() must reorder to static → step.
+        specs = [
+            {"source": {"step": "1"}},                                         # tier 1
+            {"source": {"config": "meta_conversation", "output": "brief.md"}},  # tier 0
+        ]
+        result = resolver.resolve(specs, current_config="dpe_default")
+        text = "\n".join(result.values())
+        assert "Test project brief content" in text
+        assert "SOTA Report" in text
+        # static config read appears before the step output
+        assert text.index("Test project brief content") < text.index("SOTA Report")

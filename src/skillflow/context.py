@@ -33,14 +33,42 @@ class ContextResolver:
 
         If *loop_context* is provided, ``$variable`` references in ``file:``
         fields are substituted with the corresponding loop variable values.
+
+        Ordering: entries are emitted by **volatility tier** — static reads
+        (config/repository) first, then step outputs, then volatile sources
+        (workspace/tool, e.g. dir_tree) last — preserving declaration order
+        within each tier. This keeps the slow-changing context at the front so
+        a host can place it in the prompt's cacheable prefix; volatile tool
+        outputs that change every run never poison that prefix. (Reviewer /
+        user feedback and validation errors are appended by the framework
+        *after* this dict, so they remain strictly last.)
         """
+        # Stable tier-sort: (tier, original_index) keeps within-tier order.
+        ordered = sorted(
+            enumerate(specs),
+            key=lambda iv: (self._volatility_tier(iv[1].get("source", iv[1])), iv[0]),
+        )
         result: dict[str, str] = {}
-        for spec in specs:
+        for _, spec in ordered:
             source = spec.get("source", spec)
             label, content = self._resolve_one(source, current_config, loop_context)
             if content:
                 result[label] = content
         return result
+
+    @staticmethod
+    def _volatility_tier(source: dict) -> int:
+        """Cache-stability tier of a context source (lower = more stable).
+
+        0 = static reads (config/repository), 1 = step outputs,
+        2 = volatile (workspace/tool, e.g. dir_tree).
+        """
+        source_type = source.get("source_type", "")
+        if source_type in ("config", "repository") or "config" in source:
+            return 0
+        if source_type == "step" or "step" in source:
+            return 1
+        return 2  # workspace, tool, or unknown — treat as volatile
 
     def _resolve_one(self, source: dict, current_config: str,
                      loop_context: dict[str, str] | None = None) -> tuple[str, str]:
