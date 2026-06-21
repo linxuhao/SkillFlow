@@ -2909,8 +2909,15 @@ class SkillFlow:
         return deleted
 
     def get_trace(self, run_id: str, *, step_instance_id: int | None = None,
-                  category: str | None = None) -> list[dict]:
-        """Return trace records for a run in chronological (seq) order."""
+                  category: str | None = None, after_seq: int | None = None,
+                  limit: int | None = None) -> list[dict]:
+        """Return trace records for a run in chronological (seq) order.
+
+        Keyset pagination: pass ``after_seq`` (the last ``seq`` seen) to fetch
+        the next page and ``limit`` to bound it. ``seq`` is monotonic and unique
+        per run, so this is stateless — no server-side cursor/cache needed. With
+        neither argument the full ordered trace is returned (original behavior).
+        """
         q = "SELECT seq, step_id, step_instance_id, category, event, payload_json, created_at " \
             "FROM skillflow_trace WHERE run_id = ?"
         args: list = [run_id]
@@ -2920,7 +2927,13 @@ class SkillFlow:
         if category is not None:
             q += " AND category = ?"
             args.append(category)
+        if after_seq is not None:
+            q += " AND seq > ?"
+            args.append(after_seq)
         q += " ORDER BY seq ASC"
+        if limit is not None:
+            q += " LIMIT ?"
+            args.append(limit)
         out = []
         for r in self._conn.execute(q, args).fetchall():
             out.append({
