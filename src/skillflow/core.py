@@ -3121,7 +3121,15 @@ class SkillFlow:
                 if run and run["started_at"]:
                     try:
                         import datetime as dt
-                        started_dt = dt.datetime.strptime(run["started_at"], "%Y-%m-%dT%H:%M:%S")
+                        # started_at is written via SQLite datetime('now'), which
+                        # is space-separated ('2026-06-20 18:40:51'). Tolerate a
+                        # 'T' separator too. The old parser only accepted 'T', so
+                        # every parse raised ValueError and this universal
+                        # runaway cap was silently dead (a 1h cap let a 3h loop
+                        # run).
+                        started_dt = dt.datetime.strptime(
+                            run["started_at"].replace("T", " "),
+                            "%Y-%m-%d %H:%M:%S")
                         elapsed = (dt.datetime.utcnow() - started_dt).total_seconds()
                         if elapsed >= cond.limit:
                             results.append(EndResult(status="failed", reason=f"Max run duration ({cond.limit}s) exceeded"))

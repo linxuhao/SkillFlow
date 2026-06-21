@@ -228,3 +228,44 @@ def _exec(sf: SkillFlow, run_id: str, step_id: str, outputs=None, flags=None):
     assert claimed is not None, f"Failed to claim {step_id}"
     assert claimed.step_id == step_id, f"Expected {step_id}, got {claimed.step_id}"
     sf.confirm_step(claimed.token, StepResult(outputs=outputs or {}, flags=flags or {}))
+
+
+def test_max_run_duration_end_condition_actually_fires(sf):
+    """The max_run_duration_seconds cap is the mechanism-agnostic backstop
+    against ANY runaway (in-place loops, tool rampage, slow non-convergence).
+
+    It was silently dead: started_at is written via SQLite datetime('now')
+    (space-separated, '2026-06-20 18:40:51') but parsed with a 'T'-separated
+    format, so every parse raised ValueError and the check was skipped — a 1h
+    cap let a 3h+ loop run. This guards the fix.
+    """
+    g = PipelineGraph(
+        name="test_dur", begin="a1",
+        steps=[
+            StepNode(id="a1", step_type="agent",
+                     transitions=[Transition(to="a2")]),
+            StepNode(id="a2", step_type="agent"),
+        ],
+        end_conditions=EndConditions(
+            combinator="or",
+            conditions=[EndCondition(type="max_run_duration_seconds", limit=1)],
+        ),
+    )
+    sf.register_graph(g)
+    rid = sf.create_run("test_dur")
+    sf.start_run(rid)
+    # Simulate a run started well over the limit ago, in the SAME space-
+    # separated format datetime('now') writes.
+    sf._conn.execute(
+        "UPDATE skillflow_runs SET started_at = '2020-01-01 00:00:00' WHERE id = ?",
+        (rid,))
+    sf._conn.commit()
+
+    # First advance evaluates end conditions → duration exceeded → run fails.
+    # (Before the fix the parse raised ValueError, the check was skipped, and
+    # the run kept running.)
+    sf.advance_run(rid)
+
+    run = sf.get_run(rid)
+    assert run["status"] == "failed"
+    assert "duration" in (run["error_reason"] or "").lower()
