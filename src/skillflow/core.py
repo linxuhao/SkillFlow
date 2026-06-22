@@ -431,7 +431,7 @@ class SkillFlow:
         """
         with self._tx() as conn:
             run = conn.execute(
-                "SELECT status, error_reason FROM skillflow_runs WHERE id = ?",
+                "SELECT status, error_reason, graph_name FROM skillflow_runs WHERE id = ?",
                 (run_id,),
             ).fetchone()
             if not run:
@@ -454,6 +454,21 @@ class SkillFlow:
                 ).fetchone()
                 if last:
                     retry_step_id = last["step_id"]
+
+            # Guard: the resume step must still exist in the (possibly changed)
+            # graph. If the graph was edited since this run started — e.g. a node
+            # was removed — pointing current_node at a now-missing step makes
+            # advance_run() return None forever (a silent deadlock). Fail loudly
+            # so the caller can tell the user to start a fresh run. Raising here
+            # rolls back the surrounding transaction, so no partial state lands.
+            if retry_step_id and self._get_resolver(
+                    run["graph_name"]).get_node(retry_step_id) is None:
+                raise ValueError(
+                    f"Cannot reactivate run {run_id}: its resume step "
+                    f"'{retry_step_id}' no longer exists in graph "
+                    f"'{run['graph_name']}' (the graph changed since this run "
+                    f"started). Start a new run instead."
+                )
 
             if retry_step_id:
                 # Reset the latest instance of the failed step to pending

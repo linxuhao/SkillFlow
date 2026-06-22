@@ -133,6 +133,47 @@ def test_c8_completed_run_cannot_be_reactivated(sf: SkillFlow):
     assert sf.get_run(run_id)["status"] == "completed"
 
 
+def test_reactivate_rejects_resume_step_removed_from_graph(sf: SkillFlow):
+    """Reactivating a failed run whose resume step was removed from the graph
+    must fail loudly, not silently wedge.
+
+    If a node is deleted from the graph after a run started, pointing
+    current_node at it makes advance_run() return None forever (a silent
+    deadlock). reactivate_run must raise instead so the caller can tell the
+    user to start a fresh run.
+    """
+    graph = PipelineGraph(
+        name="t", begin="a",
+        steps=[_agent("a", [_trans("b")]), _agent("b", [])],
+    )
+    sf.register_graph(graph)
+    run_id = sf.create_run("t")
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    ca = sf.claim_next_step(run_id)
+    sf.confirm_step(ca.token, StepResult())   # 'a' completed → current_node 'b'
+
+    # Drive 'b' to failure (exhaust retries) so the run ends up 'failed'.
+    for i in range(5):
+        sf.advance_run(run_id)
+        cb = sf.claim_next_step(run_id)
+        if cb is None:
+            break
+        sf.fail_step(cb.token, f"Error {i + 1}", retryable=True)
+    assert sf.get_run(run_id)["status"] == "failed"
+
+    # Graph changes underneath the run: the resume step (last-completed 'a') is
+    # gone. Re-registering overwrites the cached resolver, exactly as a process
+    # restart would after the YAML changed.
+    sf.register_graph(
+        PipelineGraph(name="t", begin="x", steps=[_agent("x", [])]))
+
+    with pytest.raises(ValueError, match="no longer exists in graph"):
+        sf.reactivate_run(run_id)
+    # Transaction rolled back — the run is left cleanly failed, not wedged.
+    assert sf.get_run(run_id)["status"] == "failed"
+
+
 # ── Hardcoded step sequences → YAML graph ───────────────────────────
 
 def test_pipeline_in_yaml_not_code(sf: SkillFlow):
