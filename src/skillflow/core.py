@@ -1669,9 +1669,19 @@ class SkillFlow:
                     kwargs = self._workspace.resolve_variables(
                         pid, graph_name, tool_node.id, kwargs
                     )
-                    # Auto-resolve project_root from workspace
-                    kwargs.setdefault("project_root",
-                                      str(self._workspace.projects_base / pid))
+                    # Fill workspace_root / project_root with the project's real
+                    # paths. The setdefault("") placeholders above would defeat a
+                    # plain setdefault here, so assign when still empty. Mirrors the
+                    # agent-tool path (execute_tool) and uses get_project_code_path
+                    # so a tool step (run_tests / unity_compile / …) operates on the
+                    # delivered repo (projects_base/<id>, or the linked repo for
+                    # existing-repo projects) — NOT the staging workspace.
+                    if not kwargs.get("workspace_root"):
+                        kwargs["workspace_root"] = str(
+                            self._workspace.get_project_path(pid))
+                    if not kwargs.get("project_root"):
+                        kwargs["project_root"] = str(
+                            self._workspace.get_project_code_path(pid))
             except Exception:
                 pass  # variable resolution is best-effort
         # Trace tool-type STEP nodes (e.g. repo_apply/repo_validate/notify as
