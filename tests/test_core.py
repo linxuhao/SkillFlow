@@ -1160,6 +1160,25 @@ def test_trace_append_and_get(sf: SkillFlow):
     assert recs[1]["payload"]["params"]["file"] == "x.py"
 
 
+def test_trace_keyset_pagination_both_orders(sf: SkillFlow):
+    """get_trace pages chronologically (after_seq) and reverse (order=desc/before_seq)."""
+    rid = "run-trace-order"
+    for i in range(5):
+        sf.trace(rid, "event", f"e{i}")  # seqs 1..5
+
+    # Ascending keyset: oldest first, page via after_seq.
+    a1 = sf.get_trace(rid, order="asc", limit=2)
+    assert [r["seq"] for r in a1] == [1, 2]
+    a2 = sf.get_trace(rid, order="asc", after_seq=a1[-1]["seq"], limit=2)
+    assert [r["seq"] for r in a2] == [3, 4]
+
+    # Descending keyset: newest first, page via before_seq.
+    d1 = sf.get_trace(rid, order="desc", limit=2)
+    assert [r["seq"] for r in d1] == [5, 4]
+    d2 = sf.get_trace(rid, order="desc", before_seq=d1[-1]["seq"], limit=2)
+    assert [r["seq"] for r in d2] == [3, 2]
+
+
 def test_trace_filters(sf: SkillFlow):
     rid = "run-trace-2"
     sf.trace(rid, "tool_call", "write", step_id="s1", step_instance_id=1)

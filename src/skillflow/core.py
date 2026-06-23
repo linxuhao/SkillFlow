@@ -2925,14 +2925,21 @@ class SkillFlow:
 
     def get_trace(self, run_id: str, *, step_instance_id: int | None = None,
                   category: str | None = None, after_seq: int | None = None,
+                  before_seq: int | None = None, order: str = "asc",
                   limit: int | None = None) -> list[dict]:
-        """Return trace records for a run in chronological (seq) order.
+        """Return trace records for a run ordered by ``seq``.
 
-        Keyset pagination: pass ``after_seq`` (the last ``seq`` seen) to fetch
-        the next page and ``limit`` to bound it. ``seq`` is monotonic and unique
-        per run, so this is stateless — no server-side cursor/cache needed. With
-        neither argument the full ordered trace is returned (original behavior).
+        Keyset pagination, stateless (``seq`` is monotonic and unique per run):
+
+        * ``order="asc"`` (default, oldest first): pass ``after_seq`` (the last
+          ``seq`` seen) to fetch the next page; rows have ``seq > after_seq``.
+        * ``order="desc"`` (newest first): pass ``before_seq`` (the last ``seq``
+          seen) to fetch the next page; rows have ``seq < before_seq``.
+
+        ``limit`` bounds the page. With no cursor/limit the full ordered trace is
+        returned (original behavior).
         """
+        descending = str(order).lower() == "desc"
         q = "SELECT seq, step_id, step_instance_id, category, event, payload_json, created_at " \
             "FROM skillflow_trace WHERE run_id = ?"
         args: list = [run_id]
@@ -2945,7 +2952,10 @@ class SkillFlow:
         if after_seq is not None:
             q += " AND seq > ?"
             args.append(after_seq)
-        q += " ORDER BY seq ASC"
+        if before_seq is not None:
+            q += " AND seq < ?"
+            args.append(before_seq)
+        q += " ORDER BY seq DESC" if descending else " ORDER BY seq ASC"
         if limit is not None:
             q += " LIMIT ?"
             args.append(limit)
