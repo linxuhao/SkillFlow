@@ -3004,7 +3004,14 @@ class SkillFlow:
                 if k in result:
                     res_summary[k] = result[k]
             if len(res_summary) == 1:
-                res_summary["keys"] = sorted(result.keys())
+                # Read/search tools (web_search, web_fetch, read_file,
+                # list_files) carry their payload in non-write keys. Keep a
+                # bounded, readable preview instead of just listing key names.
+                blob = json.dumps(result, ensure_ascii=False, default=str)
+                res_summary["preview"] = (
+                    blob if len(blob) <= 2000
+                    else blob[:2000] + f"… <+{len(blob) - 2000} chars>"
+                )
         self.trace(run_id, "tool_result", name, res_summary,
                    step_id=step_id, step_instance_id=step_instance_id)
         return result
