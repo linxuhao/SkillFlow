@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "skillflow-py"
-version = "1.1.8.post1"
+version = "1.1.9"
 description = "Config-agnostic LLM pipeline graph executor — turn skills into flows"
 readme = "README.md"
 license = "MIT"
