@@ -22,6 +22,40 @@ import re
 from pathlib import Path
 
 
+# Default line window for generated readers when no range is given. Replaces the
+# old whole-file dump so agents are never silently blind to a large file's tail;
+# the ``truncated`` flag signals when there is more to page through.
+_MAX_READ_LINES = 2000
+
+
+def _page_lines(text: str, start_line: int = 0, end_line: int | None = None) -> dict:
+    """Slice file text into a line-numbered window with paging metadata.
+
+    ``start_line`` is 0-based (matching the ``read_file`` native tool); when
+    ``end_line`` is None the window is capped at ``_MAX_READ_LINES`` lines.
+    Returns content plus ``total_lines``/``returned_lines``/``truncated`` so the
+    caller can page rather than be cut off without warning.
+    """
+    lines = text.splitlines()
+    total = len(lines)
+    start = start_line if isinstance(start_line, int) and start_line > 0 else 0
+    start = min(start, total)
+    if isinstance(end_line, int) and end_line > 0:
+        end = min(end_line, total)
+    else:
+        end = min(start + _MAX_READ_LINES, total)
+    selected = lines[start:end]
+    return {
+        "content": "\n".join(
+            f"{start + i + 1}\t{ln}" for i, ln in enumerate(selected)
+        ),
+        "start_line": start,
+        "returned_lines": len(selected),
+        "total_lines": total,
+        "truncated": end < total,
+    }
+
+
 # ── Path resolution ──────────────────────────────────────────────────
 
 def _resolve_var_path(path: str, loop_context: dict | None = None) -> str:
@@ -236,8 +270,19 @@ def generate_read_tool_schemas(
             fname = Path(paths[0]).name
             tools.append({
                 "name": f"read_{label}",
-                "description": f"Read {fname} from {source_desc}.",
-                "parameters": {},
+                "description": f"Read {fname} from {source_desc}. Large files are "
+                               f"paged: pass start_line/end_line (0-based start) "
+                               f"and check the returned 'truncated'/'total_lines'.",
+                "parameters": {
+                    "start_line": {
+                        "type": "integer",
+                        "description": "0-based first line to read (optional)",
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Exclusive end line (optional)",
+                    },
+                },
             })
         else:
             # Directory → list + read + search
@@ -249,23 +294,51 @@ def generate_read_tool_schemas(
             })
             tools.append({
                 "name": f"read_{label}_file",
-                "description": f"Read a file from {source_desc}.",
+                "description": f"Read a file from {source_desc}. Large files are "
+                               f"paged: pass start_line/end_line (0-based start) "
+                               f"and check the returned 'truncated'/'total_lines'.",
                 "parameters": {
                     "name": {
                         "type": "string",
                         "required": True,
                         "description": f"Filename within {source_desc} (e.g. 'example.md')",
                     },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "0-based first line to read (optional)",
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Exclusive end line (optional)",
+                    },
                 },
             })
             tools.append({
                 "name": f"search_{label}",
-                "description": f"Search within all files in {source_desc}.",
+                "description": f"Search (grep) file contents in {source_desc}. "
+                               f"Returns matching {{file, line, text}}; pass "
+                               f"files_with_matches=true for just the file list.",
                 "parameters": {
                     "pattern": {
                         "type": "string",
                         "required": True,
-                        "description": "Search term or regex pattern to find",
+                        "description": "Regex (case-insensitive) or literal substring to find",
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": "Optional filename glob filter (e.g. '*.py')",
+                    },
+                    "context_lines": {
+                        "type": "integer",
+                        "description": "Lines of surrounding context to include per match (default 0)",
+                    },
+                    "files_with_matches": {
+                        "type": "boolean",
+                        "description": "Return only the list of matching file paths",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Max matches to return (default 50)",
                     },
                 },
             })
@@ -318,13 +391,15 @@ def make_read_tool_fns(specs: list[dict], workspace_root: str,
         if _is_single_file(spec, paths):
             file_path = paths[0]
 
-            def _read_single(_path=file_path) -> str:
+            def _read_single(start_line: int = 0, end_line: int | None = None,
+                             _path=file_path) -> dict:
                 try:
-                    return Path(_path).read_text(encoding="utf-8", errors="replace")
+                    text = Path(_path).read_text(encoding="utf-8", errors="replace")
                 except FileNotFoundError:
-                    return json.dumps({"error": f"File not found: {_path}"})
+                    return {"error": f"File not found: {_path}"}
                 except Exception as e:
-                    return json.dumps({"error": str(e)})
+                    return {"error": str(e)}
+                return _page_lines(text, start_line, end_line)
 
             fns[f"read_{label}"] = _read_single
         else:
@@ -346,7 +421,8 @@ def make_read_tool_fns(specs: list[dict], workspace_root: str,
                             })
                 return json.dumps(entries, ensure_ascii=False)
 
-            def _read_dir_file(name: str, _paths=dir_paths) -> str:
+            def _read_dir_file(name: str, start_line: int = 0,
+                               end_line: int | None = None, _paths=dir_paths) -> dict:
                 for dp in _paths:
                     d = Path(dp)
                     if not d.is_dir():
@@ -355,58 +431,79 @@ def make_read_tool_fns(specs: list[dict], workspace_root: str,
                     candidate = d / name
                     if candidate.is_file():
                         try:
-                            return candidate.read_text(encoding="utf-8", errors="replace")
+                            text = candidate.read_text(encoding="utf-8", errors="replace")
                         except Exception as e:
-                            return json.dumps({"error": str(e)})
+                            return {"error": str(e)}
+                        return _page_lines(text, start_line, end_line)
                     # Recursive search
                     for f in d.rglob(name):
                         if f.is_file():
                             try:
-                                return f.read_text(encoding="utf-8", errors="replace")
+                                text = f.read_text(encoding="utf-8", errors="replace")
                             except Exception as e:
-                                return json.dumps({"error": str(e)})
-                return json.dumps({"error": f"File not found: {name}"})
+                                return {"error": str(e)}
+                            return _page_lines(text, start_line, end_line)
+                return {"error": f"File not found: {name}"}
 
-            def _search_dir(pattern: str, _paths=dir_paths) -> str:
-                matches = []
+            def _search_dir(pattern: str, glob: str = None, context_lines: int = 0,
+                            files_with_matches: bool = False, max_results: int = 50,
+                            _paths=dir_paths) -> dict:
                 try:
                     regex = re.compile(pattern, re.IGNORECASE)
                 except re.error:
-                    # Treat as literal substring
-                    regex = None
+                    regex = None  # invalid regex → literal substring match
+
+                cap = max_results if isinstance(max_results, int) and max_results > 0 else 50
+                matches = []
+                files_hit = []
+                truncated = False
 
                 for dp in _paths:
                     d = Path(dp)
                     if not d.is_dir():
                         continue
-                    for f in sorted(d.rglob("*")):
+                    for f in sorted(d.rglob(glob) if glob else d.rglob("*")):
                         if not f.is_file() or f.name == ".gitkeep":
                             continue
                         # Skip binary-looking files
                         if f.suffix in (".pyc", ".pyo", ".so", ".o", ".bin"):
                             continue
                         try:
-                            content = f.read_text(encoding="utf-8", errors="replace")
+                            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
                         except Exception:
                             continue
-                        for li, line in enumerate(content.splitlines(), 1):
-                            hit = False
-                            if regex:
-                                if regex.search(line):
-                                    hit = True
-                            elif pattern.lower() in line.lower():
-                                hit = True
-                            if hit:
-                                matches.append({
-                                    "file": str(f.relative_to(d)),
-                                    "line": li,
-                                    "text": line.strip()[:200],
-                                })
-                # Limit to avoid huge responses
-                if len(matches) > 50:
-                    matches = matches[:50]
-                    matches.append({"truncated": True, "note": "Results capped at 50 matches"})
-                return json.dumps(matches, ensure_ascii=False)
+                        rel = str(f.relative_to(d))
+                        file_matched = False
+                        for li, line in enumerate(lines, 1):
+                            hit = regex.search(line) if regex else (pattern.lower() in line.lower())
+                            if not hit:
+                                continue
+                            file_matched = True
+                            if files_with_matches:
+                                break  # one hit is enough to list the file
+                            entry = {"file": rel, "line": li, "text": line.strip()[:200]}
+                            if context_lines and context_lines > 0:
+                                lo = max(0, li - 1 - context_lines)
+                                hi = min(len(lines), li + context_lines)
+                                entry["context"] = "\n".join(
+                                    f"{lo + j + 1}\t{lines[lo + j]}" for j in range(hi - lo)
+                                )
+                            matches.append(entry)
+                            if len(matches) >= cap:
+                                truncated = True
+                                break
+                        if file_matched:
+                            files_hit.append(rel)
+                            if files_with_matches and len(files_hit) >= cap:
+                                truncated = True
+                        if truncated:
+                            break
+                    if truncated:
+                        break
+
+                if files_with_matches:
+                    return {"files": files_hit, "truncated": truncated}
+                return {"matches": matches, "truncated": truncated}
 
             fns[f"list_{label}"] = _list_dir
             fns[f"read_{label}_file"] = _read_dir_file
