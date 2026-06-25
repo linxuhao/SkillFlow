@@ -183,9 +183,14 @@ This powers both **inner review loops** (e.g. `review → implement`, `max_loop:
 context:
   - source: { step: "1" }
   - source: { step: "2", mode: "interfaces" }
-  - source: { config: "meta", output: "brief.md" }
+  - source: { config: "meta", output: "brief.md" }                  # any step of another config
+  - source: { config: "meta", step: "finalize", output: "x.json" }  # a SPECIFIC step's output
   - source: { tool: "dir_tree" }
 ```
+
+A cross-config source without `step` scans the other config's step dirs for the
+file; adding `step` reads that one step's output (use it when only a specific
+producing step is authoritative).
 
 ## Checkpoints
 
@@ -244,6 +249,8 @@ end_conditions:
     - type: node_reached
       node: "5_review"
       result: "completed"
+      require_completed: true   # fire only once the node has COMPLETED, not merely
+                                # been reached (i.e. become current_node)
     - type: max_total_steps
       limit: 200
     - type: max_run_duration_seconds
@@ -251,6 +258,17 @@ end_conditions:
     - type: flag_match
       flag: { fatal_error: true }
 ```
+
+`require_completed` (node_reached only) gates termination on the node's step
+reaching `completed` status. Use it when the terminal node is a real agent/tool
+step that must execute before the run ends — without it the condition fires as
+soon as the node becomes `current_node`.
+
+**Terminating a run needs an end condition.** A transition `to: null` does NOT by
+itself end a run: with no resolvable target the run is marked **failed** ("no
+matching transition"). To finish cleanly, give the terminal step `to: null` **and**
+a `node_reached` end condition for that node (the pattern above). This applies to
+`tool` and `gate` steps too, not just `agent` steps.
 
 ## Stale Claim Recovery
 
