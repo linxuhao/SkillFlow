@@ -511,6 +511,77 @@ def test_loop_flat_list(sf_with_workspace):
     assert items == ["one", "two"]
 
 
+def test_resolve_loop_idempotent_without_body_completion(sf_with_workspace):
+    """Re-entering _resolve_loop WITHOUT the body completing must re-pick the
+    SAME item and credit nothing — resolution is read-only w.r.t. progression.
+
+    Regression: the old code credited current_item on every entry, so a stray
+    re-resolve in the dispatch->claim gap skipped items and churned the body
+    claim (the version-15 / 7-claim behavior in the wild).
+    """
+    import json
+    sf = sf_with_workspace
+    run_id = _loop_prepare(sf, [["a", "b", "c"]])
+    resolver = sf._get_resolver_for_run(run_id)
+
+    def _resolve():
+        with sf._tx() as conn:
+            run = conn.execute("SELECT * FROM skillflow_runs WHERE id = ?",
+                               (run_id,)).fetchone()
+            return sf._resolve_loop(conn, run, resolver, "task_iterator")
+
+    def _state():
+        with sf._tx() as conn:
+            r = conn.execute("SELECT completed_items, current_item FROM "
+                             "skillflow_loop_state WHERE run_id = ?",
+                             (run_id,)).fetchone()
+            return json.loads(r["completed_items"] or "[]"), r["current_item"]
+
+    t1 = _resolve(); comp1, cur1 = _state()
+    t2 = _resolve(); comp2, cur2 = _state()   # re-entry, body never ran
+    t3 = _resolve(); comp3, cur3 = _state()
+    assert t1 == t2 == t3 == "process_task"
+    assert cur1 == cur2 == cur3 == "a"        # same item every time
+    assert comp1 == comp2 == comp3 == []      # nothing credited on resolution
+
+
+def test_loop_completed_scoped_to_live_manifest(sf_with_workspace):
+    """completed_items is intersected with the live manifest on each resolve, so
+    superseded names from a prior goal-loop round are dropped (no overcount)."""
+    import json
+    sf = sf_with_workspace
+    run_id = _loop_prepare(sf, [["a", "b"]])
+    resolver = sf._get_resolver_for_run(run_id)
+    with sf._tx() as conn:  # first resolve creates the row + dispatches "a"
+        run = conn.execute("SELECT * FROM skillflow_runs WHERE id = ?",
+                           (run_id,)).fetchone()
+        sf._resolve_loop(conn, run, resolver, "task_iterator")
+    with sf._tx() as conn:  # inject a stale name not in the manifest
+        conn.execute("UPDATE skillflow_loop_state SET completed_items = ? "
+                     "WHERE run_id = ?",
+                     (json.dumps(["a", "stale_old_task"]), run_id))
+    with sf._tx() as conn:  # re-resolve: stale dropped, next item is "b"
+        run = conn.execute("SELECT * FROM skillflow_runs WHERE id = ?",
+                           (run_id,)).fetchone()
+        nxt = sf._resolve_loop(conn, run, resolver, "task_iterator")
+        r = conn.execute("SELECT completed_items, current_item FROM "
+                         "skillflow_loop_state WHERE run_id = ?", (run_id,)).fetchone()
+    assert nxt == "process_task"
+    assert "stale_old_task" not in json.loads(r["completed_items"])
+    assert r["current_item"] == "b"
+
+
+def test_loop_progression_credits_on_body_completion(sf_with_workspace):
+    """End-to-end: each item is dispatched once, in order, and completed_items
+    grows only as body cycles complete (progression lives in confirm_step)."""
+    sf = sf_with_workspace
+    run_id = _loop_prepare(sf, [["a", "b", "c"]])
+    count, items = _drive_loop(sf, run_id)
+    assert sf.get_run(run_id)["status"] == "completed"
+    assert count == 3
+    assert items == ["a", "b", "c"]
+
+
 def test_loop_body_resolves_per_item_file(sf_with_workspace):
     """Loop body context resolves a per-item file via $current_task — the
     mechanism dpe uses to scope each task_loop iteration to its task card."""

@@ -1849,6 +1849,38 @@ class SkillFlow:
             (run_id, *sorted(body_nodes)),
         )
 
+    def _credit_loop_current_item(self, conn, run_id: str, loop_step_id: str) -> None:
+        """Progression (write): mark the loop's current_item completed.
+
+        Called from confirm_step when a body cycle's terminal step routes back to
+        the loop node — exactly once per completed body cycle, atomic with the
+        terminal step's completion. _resolve_loop performs NO crediting (it only
+        reads completed_items to pick the next item), so resolution is idempotent
+        and the separate advance/claim transactions can't cause a spurious
+        advance or skipped item.
+        """
+        row = conn.execute(
+            "SELECT completed_items, current_item FROM skillflow_loop_state "
+            "WHERE run_id = ? AND loop_step_id = ?",
+            (run_id, loop_step_id),
+        ).fetchone()
+        if not row or not row["current_item"]:
+            return
+        completed: set[str] = set()
+        if row["completed_items"]:
+            try:
+                completed = set(self._deserialize(row["completed_items"]))
+            except Exception:
+                pass
+        if row["current_item"] in completed:
+            return  # idempotent — already credited
+        completed.add(row["current_item"])
+        conn.execute(
+            "UPDATE skillflow_loop_state SET completed_items = ?, "
+            "updated_at = datetime('now') WHERE run_id = ? AND loop_step_id = ?",
+            (self._serialize(sorted(completed)), run_id, loop_step_id),
+        )
+
     def _resolve_loop(self, conn, run: dict, resolver, loop_step_id: str) -> str | None:
         """Resolve a loop step to either its body or done transition.
 
@@ -1907,42 +1939,25 @@ class SkillFlow:
                     return t.to
             return None
 
-        # ── Completed set ────────────────────────────────────────────────
+        # ── Completed set — scoped to the LIVE manifest ───────────────────
+        # Resolution is READ-ONLY w.r.t. progression: it never credits
+        # completion (confirm_step does that via _credit_loop_current_item when a
+        # body cycle returns to the loop). So re-entry — e.g. an extra scheduler
+        # tick in the dispatch→claim gap — re-picks the SAME item with
+        # current_item unchanged, never spuriously advancing or skipping work.
         completed: set[str] = set()
-        prev_item: str | None = None
+        current_item: str | None = None
         if row:
             if row["completed_items"]:
                 try:
                     completed = set(self._deserialize(row["completed_items"]))
                 except Exception:
                     pass
-            prev_item = row["current_item"] or None
-        # Backward compat: old rows with current_index (no completed_items).
-        # current_index points to the LAST DISPATCHED item.
-        # Items BEFORE current_index are completed; items[current_index] is
-        # the currently-executing item.  Only reconstruct prev_item when at
-        # least one item has finished (so we have a "previously dispatched"
-        # item to mark completed).
-        if not completed and row and row["current_item"] is None:
-            try:
-                old_items = self._deserialize(row["items_json"]) if row["items_json"] else []
-                old_idx = row["current_index"]
-                if isinstance(old_idx, int) and old_idx > 0:
-                    completed = set(old_items[:old_idx])
-                    if old_idx < len(old_items):
-                        prev_item = old_items[old_idx]
-                elif isinstance(old_idx, int) and old_idx == 0:
-                    pass  # first dispatch — nothing completed, nothing to mark
-            except Exception:
-                pass
-
-        # Mark the previously-dispatched item as completed.
-        # prev_item is None on the very first dispatch (row is None),
-        # so nothing is marked. On every subsequent entry, prev_item
-        # was set by the previous dispatch and has now finished.
-        if prev_item and prev_item not in completed:
-            completed.add(prev_item)
-            prev_item = None
+            current_item = row["current_item"] or None
+        # Drop superseded names from prior goal-loop rounds so completed_items
+        # reflects only the active manifest (prevents the len(completed) overcount
+        # and the scheduler's idx-out-of-range).
+        completed &= set(items)
 
         if row is None:
             if not items:
@@ -1954,13 +1969,6 @@ class SkillFlow:
                 "VALUES (?, ?, ?, '[]', NULL, ?, datetime('now'), datetime('now'))",
                 (run["id"], loop_step_id, self._serialize(items),
                  loop_cfg.item_as or "loop_item"),
-            )
-        else:
-            # Always persist the live manifest so context resolution sees it
-            conn.execute(
-                "UPDATE skillflow_loop_state SET items_json = ?, "
-                "updated_at = datetime('now') WHERE run_id = ? AND loop_step_id = ?",
-                (self._serialize(items), run["id"], loop_step_id),
             )
 
         # ── Find first uncompleted item (manifest order) ────────────────
@@ -1974,17 +1982,23 @@ class SkillFlow:
         if next_item is None:
             return _route_done()
 
-        # ── Dispatch ─────────────────────────────────────────────────────
+        # ── Dispatch (idempotent) ─────────────────────────────────────────
+        # Persist the live manifest + scoped completed set + the item to run.
+        new_dispatch = (next_item != current_item)
         conn.execute(
-            "UPDATE skillflow_loop_state SET completed_items = ?, "
+            "UPDATE skillflow_loop_state SET items_json = ?, completed_items = ?, "
             "current_item = ?, updated_at = datetime('now') "
             "WHERE run_id = ? AND loop_step_id = ?",
-            (self._serialize(sorted(completed)), next_item,
-             run["id"], loop_step_id),
+            (self._serialize(items), self._serialize(sorted(completed)),
+             next_item, run["id"], loop_step_id),
         )
-        self._reset_loop_body_edge_counts(
-            conn, run["id"], resolver, loop_step_id, body_target
-        )
+        # Reset the body's per-iteration retry budget ONLY for a genuinely new
+        # item — never on an idempotent re-entry for the same in-flight item,
+        # which would wipe the body's mid-cycle edge counts.
+        if new_dispatch:
+            self._reset_loop_body_edge_counts(
+                conn, run["id"], resolver, loop_step_id, body_target
+            )
         return body_target
 
     def _resolve_next_in_tx(self, conn, run_id: str, step_id: str,
@@ -2043,7 +2057,16 @@ class SkillFlow:
                 tool_node = resolver.get_node(t.to)
                 if tool_node and not self._should_delegate_tool(tool_node.tool_name):
                     skip_tool = True
-            if resolver.is_gate(t.to) or resolver.is_loop(t.to) or skip_tool:
+            if resolver.is_loop(t.to):
+                # Body cycle returning to the loop — PROGRESSION: credit the
+                # loop's current_item now, atomic with this (terminal body) step's
+                # completion. advance_run then resolves the loop (read-only) to the
+                # next uncompleted item. This fires exactly once per body cycle;
+                # a stray re-tick at the loop node goes through advance_run only
+                # (no credit), so resolution stays idempotent.
+                self._credit_loop_current_item(conn, run_id, t.to)
+                return None
+            if resolver.is_gate(t.to) or skip_tool:
                 return None
 
             # Check max_loop on this edge
