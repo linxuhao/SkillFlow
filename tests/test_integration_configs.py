@@ -582,6 +582,52 @@ def test_loop_progression_credits_on_body_completion(sf_with_workspace):
     assert items == ["a", "b", "c"]
 
 
+def test_loop_body_nodes_excludes_entry_and_loop(sf_with_workspace):
+    """_loop_body_nodes is the loop body only — excludes the external entry step
+    and the loop node itself (topological, config-agnostic)."""
+    sf = sf_with_workspace
+    _load_and_register(sf, "loop_step.yaml")
+    run_id = sf.create_run("loop_step", project_id="test-loop-bn")
+    sf.start_run(run_id)
+    resolver = sf._get_resolver_for_run(run_id)
+    body = sf._loop_body_nodes(resolver, "task_iterator")
+    assert "process_task" in body        # body node
+    assert "prepare" not in body         # external entry — NOT body
+    assert "task_iterator" not in body   # the loop node itself
+
+
+def test_loop_credit_only_on_body_return_not_entry(sf_with_workspace):
+    """Progression credits current_item only when a BODY step returns to the
+    loop. An external step transitioning INTO the loop (entry / goal-loop
+    re-entry) must NOT credit — else it marks the in-flight item complete and
+    skips it."""
+    import json
+    sf = sf_with_workspace
+    run_id = _loop_prepare(sf, [["alpha", "beta"]])
+    resolver = sf._get_resolver_for_run(run_id)
+    # First dispatch → current_item = "alpha", nothing credited yet.
+    with sf._tx() as conn:
+        run = conn.execute("SELECT * FROM skillflow_runs WHERE id = ?",
+                           (run_id,)).fetchone()
+        sf._resolve_loop(conn, run, resolver, "task_iterator")
+
+    def completed():
+        with sf._tx() as conn:
+            r = conn.execute("SELECT completed_items FROM skillflow_loop_state "
+                             "WHERE run_id = ?", (run_id,)).fetchone()
+            return json.loads(r["completed_items"] or "[]")
+
+    assert completed() == []
+    # External entry step (prepare) resolving into the loop → MUST NOT credit.
+    with sf._tx() as conn:
+        sf._resolve_next_in_tx(conn, run_id, "prepare", {}, resolver)
+    assert completed() == []
+    # Body step (process_task) returning to the loop → credits current_item.
+    with sf._tx() as conn:
+        sf._resolve_next_in_tx(conn, run_id, "process_task", {}, resolver)
+    assert completed() == ["alpha"]
+
+
 def test_loop_body_resolves_per_item_file(sf_with_workspace):
     """Loop body context resolves a per-item file via $current_task — the
     mechanism dpe uses to scope each task_loop iteration to its task card."""

@@ -1817,6 +1817,35 @@ class SkillFlow:
             items = flat
         return items, False
 
+    def _loop_body_nodes(self, resolver, loop_step_id) -> set[str]:
+        """The set of node ids that form a loop's body: reachable from the
+        loop's body transition, following transitions, excluding the loop node
+        itself. Purely topological — derived from the graph, no config-specific
+        names — so it stays config-agnostic.
+        """
+        node = resolver.get_node(loop_step_id)
+        if not node:
+            return set()
+        body_target = None
+        for t in node.transitions:
+            if t.to:
+                body_target = t.to
+                break
+        body_nodes: set[str] = set()
+        stack = [body_target]
+        while stack:
+            nid = stack.pop()
+            if not nid or nid in body_nodes or nid == loop_step_id:
+                continue
+            body_nodes.add(nid)
+            n = resolver.get_node(nid)
+            if not n:
+                continue
+            for t in n.transitions:
+                if t.to and t.to != loop_step_id:
+                    stack.append(t.to)
+        return body_nodes
+
     def _reset_loop_body_edge_counts(self, conn, run_id, resolver,
                                      loop_step_id, body_target):
         """Clear edge counts for the loop body so each iteration gets a fresh
@@ -1827,19 +1856,7 @@ class SkillFlow:
         starves later tasks of retries. Resetting the body's edge counts when a
         new item is dispatched scopes the budget to the current iteration.
         """
-        body_nodes: set[str] = set()
-        stack = [body_target]
-        while stack:
-            nid = stack.pop()
-            if not nid or nid in body_nodes or nid == loop_step_id:
-                continue
-            body_nodes.add(nid)
-            node = resolver.get_node(nid)
-            if not node:
-                continue
-            for t in node.transitions:
-                if t.to and t.to != loop_step_id:
-                    stack.append(t.to)
+        body_nodes = self._loop_body_nodes(resolver, loop_step_id)
         if not body_nodes:
             return
         placeholders = ",".join("?" for _ in body_nodes)
@@ -2058,13 +2075,16 @@ class SkillFlow:
                 if tool_node and not self._should_delegate_tool(tool_node.tool_name):
                     skip_tool = True
             if resolver.is_loop(t.to):
-                # Body cycle returning to the loop — PROGRESSION: credit the
-                # loop's current_item now, atomic with this (terminal body) step's
-                # completion. advance_run then resolves the loop (read-only) to the
-                # next uncompleted item. This fires exactly once per body cycle;
-                # a stray re-tick at the loop node goes through advance_run only
-                # (no credit), so resolution stays idempotent.
-                self._credit_loop_current_item(conn, run_id, t.to)
+                # PROGRESSION: credit the loop's current_item — but ONLY when
+                # THIS completing step is inside the loop body (a body cycle
+                # returning). An EXTERNAL step transitioning INTO the loop
+                # (entry / goal-loop re-entry) must NOT credit: that would mark
+                # the in-flight item complete and skip it. Topological check
+                # (no config-specific names). Fires once per body cycle; a stray
+                # re-tick at the loop node goes through advance_run only (no
+                # credit), so resolution stays idempotent.
+                if step_id in self._loop_body_nodes(resolver, t.to):
+                    self._credit_loop_current_item(conn, run_id, t.to)
                 return None
             if resolver.is_gate(t.to) or skip_tool:
                 return None
