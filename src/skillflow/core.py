@@ -3111,6 +3111,11 @@ class SkillFlow:
         kwargs = dict(params)
         kwargs.setdefault("workspace_root", project_root or "")
         kwargs.setdefault("project_root", project_root or "")
+        # Forward step/run identity so tools that want per-step state (e.g.
+        # scratch-file tools) can isolate by step. Signature-filtered below, so
+        # tools that don't declare these params are unaffected.
+        kwargs.setdefault("step_id", step_id or "")
+        kwargs.setdefault("run_id", run_id or "")
         # SF-10: pass step staging/output dirs so read_file (and similar tools)
         # can find files the agent just wrote (in .tmp) or files from previous
         # retries (in the step's final dir). write_* tools write to .tmp; without
