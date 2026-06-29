@@ -932,14 +932,14 @@ class SkillFlow:
                 tmp_dir = self._workspace.get_step_tmp_dir(
                     run["project_id"], run["graph_name"], node.id
                 )
-                # Reset staging at the start of each attempt so create/edit/write
-                # rebuild from a clean baseline (the repo). Without this, a partial
-                # result from a failed attempt pollutes the next one — e.g. a
-                # re-issued edit(old→new) would fail because 'old' was already
-                # replaced last attempt. Keeps step execution idempotent on retry.
-                import shutil
-                if tmp_dir.exists():
-                    shutil.rmtree(str(tmp_dir))
+                # Staging PERSISTS across retries (do not wipe). A retry inherits
+                # the prior attempt's prompt (KV-cache reuse), so the agent issues
+                # follow-up edits against the state it already produced — staging
+                # must match that accumulated state. Wiping would both lose files
+                # a prior attempt created and break follow-up edit() calls
+                # (old_str reverted to the repo baseline → "not found"). A
+                # successful step consumes tmp via promotion (tmp→step_dir rename),
+                # so the next step still starts clean without an explicit wipe.
                 tmp_dir.mkdir(parents=True, exist_ok=True)
                 inputs_with_tools["_output_dir"] = str(tmp_dir)
                 if node.output_fixed:
