@@ -2216,6 +2216,74 @@ class SkillFlow:
             )
             return None
 
+    def _claim_tool_step_in_tx(self, run_id: str, step_id: str, node) -> int | None:
+        """Atomically claim a tool step (pending→claimed) for inline execution.
+
+        Returns the claimed step-instance id, or None if the step is not
+        claimable — i.e. a concurrent advance_run() already claimed it. Mirrors
+        claim_next_step's CAS so the in-flight guard + runaway valve (which key
+        on the 'claimed' status/trace) see inline tool steps too, making
+        execution idempotent under concurrent drivers sharing this DB.
+        """
+        with self._tx() as conn:
+            row = conn.execute(
+                "SELECT version FROM skillflow_steps "
+                "WHERE run_id = ? AND step_id = ? AND status = 'pending'",
+                (run_id, step_id),
+            ).fetchone()
+            if not row:
+                existing = conn.execute(
+                    "SELECT status FROM skillflow_steps "
+                    "WHERE run_id = ? AND step_id = ? ORDER BY id DESC LIMIT 1",
+                    (run_id, step_id),
+                ).fetchone()
+                if existing and existing["status"] == "claimed":
+                    return None  # a concurrent driver owns it
+                # First run with no row, or cyclic re-entry (prev completed/
+                # failed): open a fresh pending instance to claim.
+                conn.execute(
+                    "INSERT INTO skillflow_steps (run_id, step_id, "
+                    "step_config_json, max_retries, status, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, 'pending', datetime('now'), datetime('now'))",
+                    (run_id, step_id, self._serialize(node.config), node.max_retries),
+                )
+                row = conn.execute(
+                    "SELECT version FROM skillflow_steps "
+                    "WHERE run_id = ? AND step_id = ? AND status = 'pending'",
+                    (run_id, step_id),
+                ).fetchone()
+                if not row:
+                    return None
+            ver = row["version"]
+            claimed_at_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time()))
+            cur = conn.execute(
+                "UPDATE skillflow_steps SET status = 'claimed', version = version + 1, "
+                "claimed_at = ?, claimed_by = ?, updated_at = datetime('now') "
+                "WHERE run_id = ? AND step_id = ? AND version = ? AND status = 'pending'",
+                (claimed_at_str, "tool-inline", run_id, step_id, ver),
+            )
+            if cur.rowcount == 0:
+                return None  # lost the race
+            inst = conn.execute(
+                "SELECT id FROM skillflow_steps "
+                "WHERE run_id = ? AND step_id = ? AND status = 'claimed' "
+                "ORDER BY id DESC LIMIT 1",
+                (run_id, step_id),
+            ).fetchone()
+            return inst["id"] if inst else None
+
+    def _reopen_tool_step_in_tx(self, run_id: str, step_id: str) -> None:
+        """Release a claimed tool step back to pending after a crashed execution,
+        so it is retried promptly instead of stalling until its claim times out.
+        """
+        with self._tx() as conn:
+            conn.execute(
+                "UPDATE skillflow_steps SET status = 'pending', claimed_at = NULL, "
+                "claimed_by = NULL, version = version + 1, updated_at = datetime('now') "
+                "WHERE run_id = ? AND step_id = ? AND status = 'claimed'",
+                (run_id, step_id),
+            )
+
     def advance_run(self, run_id: str) -> str | None:
         # Recover stale claims before any traversal
         self.recover_stale_claims(self._stale_threshold)
@@ -2223,23 +2291,19 @@ class SkillFlow:
         resolver = self._get_resolver_for_run(run_id)
 
         # ── Tool fast-path: execute OUTSIDE any write transaction ──
-        # Long-running tools (e.g. run_tests at 10-15 s) must not hold
-        # the SQLite write lock — that blocks agent trace writes and
-        # other scheduler ticks, causing SQLITE_BUSY → crashed agents →
-        # stale claims → infinite loops.
+        # Long-running tools (e.g. run_tests) must not hold the SQLite write
+        # lock — that blocks agent trace writes and other scheduler ticks,
+        # causing SQLITE_BUSY → crashed agents → stale claims → infinite loops.
         #
-        # IDEMPOTENCY NOTE: this inline tool execution is NOT claim-guarded —
-        # two overlapping advance_run() calls would both run the tool. That is
-        # currently safe ONLY because advance_run is synchronous and the host
-        # scheduler drives it on a single event loop in a single process (the
-        # P0-1 advisory lock), so calls for one run can never overlap. The tool
-        # runs synchronously here and blocks that loop for its whole duration.
-        # If a host ever makes tool execution non-blocking (await to_thread /
-        # run_in_executor) so the loop stays responsive during a slow tool,
-        # advance_run gains a yield point mid-tool and concurrent ticks CAN then
-        # overlap → this path must become claim-guarded (CAS pending→claimed
-        # before executing; only the winner runs the tool). Land the two
-        # changes together, never one without the other.
+        # CLAIM-GUARDED (1.3.2): a CAS pending→claimed precedes execution, so
+        # only one advance_run() call runs the tool. This is REQUIRED for
+        # correctness when more than one driver advances the same run — e.g. a
+        # host CLI + a Docker container sharing this DB, or the wake-on-confirm
+        # and interval jobs overlapping. Without it, an unclaimed slow tool gets
+        # re-launched by every tick → dozens of concurrent run_tests pile up and
+        # mutually starve (the step-5 rampage). Losers return None and back off;
+        # a crashed tool reopens to pending; a dead driver's claim is reclaimed
+        # via recover_stale_claims once the node's timeout_seconds elapses.
         run_row = self._conn.execute(
             "SELECT * FROM skillflow_runs WHERE id = ?", (run_id,)
         ).fetchone()
@@ -2250,10 +2314,22 @@ class SkillFlow:
                 tool_node = resolver.get_node(current)
                 if tool_node and not self._should_delegate_tool(
                         tool_node.tool_name):
-                    # Execute tool WITHOUT holding any lock/transaction
-                    tool_result = self._execute_tool_inline(
-                        tool_node, run_id=run_id,
-                        graph_name=run_row["graph_name"])
+                    inst_id = self._claim_tool_step_in_tx(
+                        run_id, current, tool_node)
+                    if inst_id is None:
+                        return None  # another driver owns this tool step
+                    self.trace(run_id, "step", "claimed",
+                               {"tool": tool_node.tool_name, "inline": True},
+                               step_id=current, step_instance_id=inst_id)
+                    try:
+                        # Execute tool WITHOUT holding any lock/transaction
+                        tool_result = self._execute_tool_inline(
+                            tool_node, run_id=run_id,
+                            graph_name=run_row["graph_name"])
+                    except Exception:
+                        # Don't leave a crashed tool wedged in 'claimed'.
+                        self._reopen_tool_step_in_tx(run_id, current)
+                        raise
                     return self._complete_tool_step(
                         run_id, current, tool_result, run_row, resolver)
 
