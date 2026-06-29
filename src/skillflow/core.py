@@ -861,10 +861,15 @@ class SkillFlow:
                     if k.startswith("[") and k not in inputs_with_tools["_resolved_context"]:
                         inputs_with_tools["_resolved_context"][k] = v
 
-            # Merge dynamic write tool schemas from graph's output.fixed
-            if node.output_mode and node.output_fixed:
+            # Merge dynamic write tool schemas derived from the step's output
+            # contract (mode). Write-mode without fixed slots → create/edit
+            # (+ write only when allow_full_write); content-mode → write_/create_/
+            # edit_ per slot. Single source of truth for mutation tools.
+            if node.output_mode:
                 from skillflow.write_tools import generate_write_tool_schemas
-                for ws in generate_write_tool_schemas(node.output_mode, node.output_fixed):
+                for ws in generate_write_tool_schemas(
+                        node.output_mode, node.output_fixed,
+                        allow_full_write=node.output_allow_full_write):
                     tool_schemas[ws["name"]] = ws
 
             # Merge dynamic read tool schemas from graph's context specs
@@ -927,6 +932,14 @@ class SkillFlow:
                 tmp_dir = self._workspace.get_step_tmp_dir(
                     run["project_id"], run["graph_name"], node.id
                 )
+                # Reset staging at the start of each attempt so create/edit/write
+                # rebuild from a clean baseline (the repo). Without this, a partial
+                # result from a failed attempt pollutes the next one — e.g. a
+                # re-issued edit(old→new) would fail because 'old' was already
+                # replaced last attempt. Keeps step execution idempotent on retry.
+                import shutil
+                if tmp_dir.exists():
+                    shutil.rmtree(str(tmp_dir))
                 tmp_dir.mkdir(parents=True, exist_ok=True)
                 inputs_with_tools["_output_dir"] = str(tmp_dir)
                 if node.output_fixed:
@@ -3100,9 +3113,11 @@ class SkillFlow:
                 ac = self.agent_registry.get(node.agent_config)
                 if ac:
                     allowed.update(ac.tools)
-            if node.output_mode and node.output_fixed:
+            if node.output_mode:
                 from skillflow.write_tools import generate_write_tool_schemas
-                for ws in generate_write_tool_schemas(node.output_mode, node.output_fixed):
+                for ws in generate_write_tool_schemas(
+                        node.output_mode, node.output_fixed,
+                        allow_full_write=node.output_allow_full_write):
                     allowed.add(ws["name"])
             # Add read tool names from context specs (mode ∈ {tool, both})
             if node.context:
@@ -3135,13 +3150,25 @@ class SkillFlow:
             else:
                 return execute_write(slot, fixed, params, str(tmp_dir))
 
-        if name == "write":
+        # Generic write-mode tools (mode: write, no fixed slots): create new
+        # files / edit existing ones surgically. edit reads its baseline from
+        # the consolidated repo (project_root) but writes the whole result into
+        # staging — the repo is only ever mutated by on_deliver:repo_apply.
+        if name in ("create", "edit", "write"):
             if not self._workspace:
                 return {"error": "No workspace configured for write tool"}
             pid = self._get_project_id(run_id)
             gname = self._get_graph_name(run_id)
             tmp_dir = self._workspace.get_step_tmp_dir(pid, gname, step_id)
-            from skillflow.write_tools import execute_generic_write
+            from skillflow.write_tools import (execute_generic_create,
+                                               execute_generic_edit,
+                                               execute_generic_write)
+            if name == "create":
+                return execute_generic_create(params, str(tmp_dir),
+                                              source_dir=project_root or "")
+            if name == "edit":
+                return execute_generic_edit(params, str(tmp_dir),
+                                            source_dir=project_root or "")
             return execute_generic_write(params, str(tmp_dir))
 
         # finish_step — no-op completion signal; the host runner detects it and

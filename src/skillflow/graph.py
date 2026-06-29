@@ -117,6 +117,7 @@ class StepNode:
     context: list[dict] = field(default_factory=list)
     output_mode: str = ""
     output_fixed: dict = field(default_factory=dict)
+    output_allow_full_write: bool = False
     validation: list[dict] = field(default_factory=list)
     notify: list[str] | None = None  # event types to push (None = outbox only)
     lifecycle: dict[str, Any] = field(default_factory=dict)
@@ -264,6 +265,7 @@ class PipelineGraph:
                     context=s.get("context", []),
                     output_mode=(s.get("output") or {}).get("mode", "") or s.get("output_mode", ""),
                     output_fixed=(s.get("output") or {}).get("fixed", {}),
+                    output_allow_full_write=bool((s.get("output") or {}).get("allow_full_write", False)),
                     validation=s.get("validation", []),
                     notify=s.get("notify"),
                     lifecycle=s.get("lifecycle", {}),
@@ -337,8 +339,12 @@ class PipelineGraph:
                 sd["context"] = s.context
             if s.output_mode:
                 sd["output_mode"] = s.output_mode
-                if s.output_fixed:
-                    sd["output"] = {"fixed": s.output_fixed}
+                if s.output_fixed or s.output_allow_full_write:
+                    sd["output"] = {}
+                    if s.output_fixed:
+                        sd["output"]["fixed"] = s.output_fixed
+                    if s.output_allow_full_write:
+                        sd["output"]["allow_full_write"] = True
             if s.validation:
                 sd["validation"] = s.validation
             if s.lifecycle:

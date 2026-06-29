@@ -87,31 +87,74 @@ def _archive_old_file(directory: Path, base_name: str) -> str | None:
 
 
 def generate_write_tool_schemas(output_mode: str,
-                                fixed: dict) -> list[dict]:
-    """Generate tool schema dicts for write/create/append tools.
+                                fixed: dict,
+                                allow_full_write: bool = False) -> list[dict]:
+    """Generate tool schema dicts for write/create/edit/append tools.
 
     Returns a list of dicts with 'name', 'description', 'parameters'.
+
+    For generic write-mode (``mode: write`` with no fixed slots) the default
+    tools are ``create`` (new files) + ``edit`` (surgical in-place change) —
+    NOT whole-file ``write``. Rewriting a whole existing file from the model's
+    (necessarily partial) view silently drops any region it didn't reproduce;
+    ``edit`` carries the rest of the file through verbatim, so that failure mode
+    is impossible. Whole-file ``write`` is exposed only when ``allow_full_write``
+    is set on the step (rare: genuine from-scratch authorship).
     """
     if output_mode == "write" and not fixed:
-        return [{
-            "name": "write",
-            "description": "Write a file. The 'file' param must be a bare filename.",
+        tools = [{
+            "name": "create",
+            "description": (
+                "Create a NEW file with the given content. The 'file' param is a "
+                "repo-relative path (e.g. 'core/db_manager.py'). Fails if the file "
+                "already exists — use 'edit' to change an existing file."
+            ),
             "parameters": {
                 "file": {"type": "string", "required": True},
                 "content": {"type": "string", "required": True},
             },
         }, {
+            "name": "edit",
+            "description": (
+                "Surgically change an EXISTING file by replacing an exact, unique "
+                "snippet — use this to fix or update part of a file without "
+                "rewriting the whole thing (the rest is preserved verbatim). "
+                "'old_str' must appear exactly once; include surrounding context "
+                "to make it unique. Fails if the file is absent or 'old_str' isn't "
+                "found exactly once. For multiple changes, call edit repeatedly."
+            ),
+            "parameters": {
+                "file": {"type": "string", "required": True},
+                "old_str": {"type": "string", "required": True,
+                            "description": "Exact text to find (must appear exactly once)."},
+                "new_str": {"type": "string", "required": True,
+                            "description": "Replacement text."},
+            },
+        }]
+        if allow_full_write:
+            tools.append({
+                "name": "write",
+                "description": ("Write a whole file, replacing it entirely if it "
+                                "exists. Prefer 'edit' for existing files."),
+                "parameters": {
+                    "file": {"type": "string", "required": True},
+                    "content": {"type": "string", "required": True},
+                },
+            })
+        tools.append({
             "name": "finish_step",
             "description": (
                 "Signal that all required output files have been written and "
-                "the step is complete. Call this ONLY after all write tool calls "
-                "in the current turn have been made — it must be the last call."
+                "the step is complete. Call this ONLY after all create/edit/write "
+                "tool calls in the current turn have been made — it must be the "
+                "last call."
             ),
             "parameters": {
                 "summary": {"type": "string", "required": False,
                            "description": "Brief summary of what was created or completed"},
             },
-        }]
+        })
+        return tools
 
     if output_mode == "content":
         tools = []
@@ -336,3 +379,72 @@ def execute_generic_write(params: dict, output_dir: str) -> dict:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_ensure_str(params.get("content", "")), encoding="utf-8")
     return {"written": str(Path(*safe_parts))}
+
+
+def execute_generic_create(params: dict, output_dir: str,
+                           source_dir: str = "") -> dict:
+    """Execute a generic create(file, content) call for new repo files.
+
+    Writes the whole file into ``output_dir`` (staging). Refuses to create a
+    file that already exists in staging or in the consolidated repo
+    (``source_dir``) — existing files must be changed with ``edit``, so a
+    create can never silently clobber an existing file's contents.
+    """
+    raw = params.get("file") or params.get("filename") or params.get("path", "")
+    safe_parts = normalize_repo_path(raw)
+    if not safe_parts:
+        return {"error": "Invalid filename: path traversal denied"}
+    rel = str(Path(*safe_parts))
+    staged = Path(output_dir) / rel
+    repo = (Path(source_dir) / rel) if source_dir else None
+    if staged.exists() or (repo is not None and repo.exists()):
+        return {"error": (f"create: '{rel}' already exists — use 'edit' to change "
+                          f"an existing file (create is for new files only).")}
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_text(_ensure_str(params.get("content", "")), encoding="utf-8")
+    return {"written": rel}
+
+
+def execute_generic_edit(params: dict, output_dir: str,
+                         source_dir: str = "") -> dict:
+    """Execute a generic edit(file, old_str, new_str) call on an EXISTING file.
+
+    Baseline is staging-first: read ``output_dir/file`` if a prior edit/create
+    this same step already produced it (so repeated edits to one file compound),
+    else the consolidated repo ``source_dir/file``. Requires ``old_str`` to
+    match exactly once; writes the whole spliced result into staging, from where
+    promotion + repo_apply overwrites the repo copy. The repo is never edited in
+    place — ``edit`` only reads it as a baseline.
+    """
+    raw = params.get("file") or params.get("filename") or params.get("path", "")
+    safe_parts = normalize_repo_path(raw)
+    if not safe_parts:
+        return {"error": "Invalid filename: path traversal denied"}
+    rel = str(Path(*safe_parts))
+    old_str = _ensure_str(params.get("old_str", ""))
+    new_str = _ensure_str(params.get("new_str", ""))
+    if not old_str:
+        return {"error": "edit: 'old_str' is required and must be non-empty"}
+
+    staged = Path(output_dir) / rel
+    repo = (Path(source_dir) / rel) if source_dir else None
+    if staged.exists():
+        src = staged
+    elif repo is not None and repo.exists():
+        src = repo
+    else:
+        return {"error": (f"edit: cannot edit '{rel}' — file does not exist "
+                          f"(use 'create' for a new file).")}
+
+    content = src.read_text(encoding="utf-8")
+    occurrences = content.count(old_str)
+    if occurrences == 0:
+        return {"error": f"edit: 'old_str' not found in '{rel}'"}
+    if occurrences > 1:
+        return {"error": (f"edit: 'old_str' matches {occurrences} times in '{rel}' "
+                          f"— include more surrounding context to make it unique")}
+
+    updated = content.replace(old_str, new_str, 1)
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_text(updated, encoding="utf-8")
+    return {"edited": rel}
