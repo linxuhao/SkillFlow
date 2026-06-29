@@ -2,16 +2,7 @@
 
 import shutil
 import subprocess
-import sys
 from pathlib import Path
-
-
-def _probe(msg: str) -> None:
-    """Diagnostic log for the step-dir-contains-whole-repo investigation.
-
-    Prints to stderr with a greppable marker so it shows in `docker logs`.
-    """
-    print(f"[repo_apply.probe] {msg}", file=sys.stderr, flush=True)
 
 
 def repo_apply(source_dir: str, *, workspace_root: str = "",
@@ -23,12 +14,6 @@ def repo_apply(source_dir: str, *, workspace_root: str = "",
         src = Path(workspace_root) / source_dir
     src = src.resolve()
     dst = Path(project_root).resolve()
-
-    # PROBE: what is repo_apply actually reading from, and is it the repo itself?
-    _probe(f"step={step_id} project={project_id} task={task_name!r} "
-           f"source_dir_param={source_dir!r} resolved_src={src} "
-           f"project_root={dst} workspace_root={workspace_root!r} "
-           f"src==dst? {src == dst}")
 
     if not src.exists():
         return {"applied": False, "files": [],
@@ -47,14 +32,6 @@ def repo_apply(source_dir: str, *, workspace_root: str = "",
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(f, target)
         applied_files.append(str(rel))
-
-    # PROBE: how many files did we just apply? A handful = normal surgical edit;
-    # dozens/hundreds = the leak. Dump a sample so we can see WHAT leaked.
-    if len(applied_files) > 15:
-        _probe(f"LARGE APPLY step={step_id}: {len(applied_files)} files from "
-               f"{src} — first 15: {applied_files[:15]}")
-    else:
-        _probe(f"step={step_id}: applied {len(applied_files)} file(s): {applied_files}")
 
     if not applied_files:
         return {"applied": False, "files": [],
