@@ -312,6 +312,26 @@ def execute_append(slot: str, fixed: dict, params: dict,
     return {"written": base_name}
 
 
+def _unique_replace(content: str, old_str: str, new_str: str, *,
+                    tool: str, name: str) -> "tuple[str | None, dict | None]":
+    """Replace the single exact occurrence of ``old_str`` in ``content``.
+
+    Shared by the slot-mode (``edit_{slot}``) and generic (``edit``) executors so
+    the uniqueness-and-replace rule — the safety-critical heart of a surgical
+    edit — lives in exactly one place. Returns ``(updated_content, None)`` on
+    success, or ``(None, error_dict)`` when ``old_str`` is absent or not unique.
+    ``tool`` and ``name`` only shape the error message (caller's tool label and
+    the file path).
+    """
+    occurrences = content.count(old_str)
+    if occurrences == 0:
+        return None, {"error": f"{tool}: 'old_str' not found in '{name}'"}
+    if occurrences > 1:
+        return None, {"error": (f"{tool}: 'old_str' matches {occurrences} times in "
+                                f"'{name}' — include more surrounding context to make it unique")}
+    return content.replace(old_str, new_str, 1), None
+
+
 def execute_edit(slot: str, fixed: dict, params: dict,
                  output_dir: str, source_dir: str = "") -> dict:
     """Execute an edit_{slot} call: surgical str-replace on the EXISTING file.
@@ -339,14 +359,10 @@ def execute_edit(slot: str, fixed: dict, params: dict,
             return {"error": f"edit_{slot}: cannot edit '{base_name}' — file does not exist"}
 
     content = src.read_text(encoding="utf-8")
-    occurrences = content.count(old_str)
-    if occurrences == 0:
-        return {"error": f"edit_{slot}: 'old_str' not found in '{base_name}'"}
-    if occurrences > 1:
-        return {"error": (f"edit_{slot}: 'old_str' matches {occurrences} times in "
-                          f"'{base_name}' — include more surrounding context to make it unique")}
-
-    updated = content.replace(old_str, new_str, 1)
+    updated, err = _unique_replace(content, old_str, new_str,
+                                   tool=f"edit_{slot}", name=base_name)
+    if err:
+        return err
     out = Path(output_dir) / base_name
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(updated, encoding="utf-8")
@@ -437,14 +453,10 @@ def execute_generic_edit(params: dict, output_dir: str,
                           f"(use 'create' for a new file).")}
 
     content = src.read_text(encoding="utf-8")
-    occurrences = content.count(old_str)
-    if occurrences == 0:
-        return {"error": f"edit: 'old_str' not found in '{rel}'"}
-    if occurrences > 1:
-        return {"error": (f"edit: 'old_str' matches {occurrences} times in '{rel}' "
-                          f"— include more surrounding context to make it unique")}
-
-    updated = content.replace(old_str, new_str, 1)
+    updated, err = _unique_replace(content, old_str, new_str,
+                                   tool="edit", name=rel)
+    if err:
+        return err
     staged.parent.mkdir(parents=True, exist_ok=True)
     staged.write_text(updated, encoding="utf-8")
     return {"edited": rel}
