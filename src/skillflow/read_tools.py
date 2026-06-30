@@ -27,6 +27,21 @@ from pathlib import Path
 # the ``truncated`` flag signals when there is more to page through.
 _MAX_READ_LINES = 2000
 
+# Directories never worth enumerating/searching as "source" — VCS internals and
+# build/dependency caches. Mirrors dir_tree/list_tree's BLOCKED set, which the
+# generated directory read tools previously lacked: a single list_repo_root on a
+# real repo dumped the whole .git tree (~64% of files) into the agent's context.
+_BLOCKED_DIR_PARTS = {".git", "__pycache__", ".venv", "node_modules",
+                      ".mypy_cache", ".pytest_cache", ".ruff_cache"}
+# Hard cap on entries returned by a directory listing so one call can't flood
+# the context with thousands of paths.
+_MAX_LIST_ENTRIES = 1000
+
+
+def _is_blocked_path(rel) -> bool:
+    """True if any path component is a blocked VCS/build directory."""
+    return any(part in _BLOCKED_DIR_PARTS for part in Path(rel).parts)
+
 
 def _page_lines(text: str, start_line: int = 0, end_line: int | None = None) -> dict:
     """Slice file text into a line-numbered window with paging metadata.
@@ -407,19 +422,25 @@ def make_read_tool_fns(specs: list[dict], workspace_root: str,
 
             def _list_dir(_paths=dir_paths) -> str:
                 entries = []
+                truncated = False
                 for dp in _paths:
                     d = Path(dp)
                     if not d.is_dir():
                         continue
                     for f in sorted(d.rglob("*")):
-                        if f.is_file() and f.name != ".gitkeep":
-                            rel = f.relative_to(d)
-                            st = f.stat()
-                            entries.append({
-                                "name": str(rel),
-                                "size": st.st_size,
-                            })
-                return json.dumps(entries, ensure_ascii=False)
+                        if not (f.is_file() and f.name != ".gitkeep"):
+                            continue
+                        rel = f.relative_to(d)
+                        if _is_blocked_path(rel):
+                            continue  # skip .git / build / dependency caches
+                        entries.append({"name": str(rel), "size": f.stat().st_size})
+                        if len(entries) >= _MAX_LIST_ENTRIES:
+                            truncated = True
+                            break
+                    if truncated:
+                        break
+                return json.dumps({"files": entries, "truncated": truncated},
+                                  ensure_ascii=False)
 
             def _read_dir_file(name: str, start_line: int = 0,
                                end_line: int | None = None, _paths=dir_paths) -> dict:
@@ -465,6 +486,8 @@ def make_read_tool_fns(specs: list[dict], workspace_root: str,
                     for f in sorted(d.rglob(glob) if glob else d.rglob("*")):
                         if not f.is_file() or f.name == ".gitkeep":
                             continue
+                        if _is_blocked_path(f.relative_to(d)):
+                            continue  # skip .git / build / dependency caches
                         # Skip binary-looking files
                         if f.suffix in (".pyc", ".pyo", ".so", ".o", ".bin"):
                             continue

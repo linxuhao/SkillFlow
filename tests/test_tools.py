@@ -144,7 +144,12 @@ class TestRepoApply:
         result = repo_apply(source_dir=str(empty),
                             workspace_root=str(tmp_path),
                             project_root=str(proj))
-        assert result["applied"] is False
+        # Empty source is a legitimate no-op step (agent determined no change
+        # needed): report success with no files, not an error that would make
+        # the on_deliver hook retry/fail a clean no-op.
+        assert result["applied"] is True
+        assert result["files"] == []
+        assert result.get("committed") is False
 
 
 class TestLint:

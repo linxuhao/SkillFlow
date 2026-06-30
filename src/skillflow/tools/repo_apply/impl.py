@@ -34,8 +34,10 @@ def repo_apply(source_dir: str, *, workspace_root: str = "",
         applied_files.append(str(rel))
 
     if not applied_files:
-        return {"applied": False, "files": [],
-                "error": "No files to apply (empty or all filtered)"}
+        # Empty source = a legitimate no-op step (the agent determined no change
+        # was needed and produced no output). Nothing to copy or commit; report
+        # success so the on_deliver hook doesn't retry/fail a clean no-op.
+        return {"applied": True, "files": [], "committed": False}
 
     # git add + commit
     r = subprocess.run(["git", "add", "-A"], cwd=dst,
