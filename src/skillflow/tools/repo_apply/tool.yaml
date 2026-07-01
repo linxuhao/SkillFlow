@@ -8,3 +8,7 @@ parameters:
     type: string
     description: "Source directory path (absolute or relative to workspace)"
     required: true
+  ignore:
+    type: array
+    description: "Optional list of fnmatch globs (matched against the path relative to source_dir and the basename). Matching files are NOT copied to the repo — use for host control/scratch files kept in the step dir (e.g. a deletions manifest)."
+    required: false

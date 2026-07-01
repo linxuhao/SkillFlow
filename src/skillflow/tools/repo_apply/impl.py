@@ -1,5 +1,6 @@
 """Apply files from draft directory to project repo."""
 
+import fnmatch
 import shutil
 import subprocess
 from pathlib import Path
@@ -8,7 +9,7 @@ from pathlib import Path
 def repo_apply(source_dir: str, *, workspace_root: str = "",
                project_root: str = "",
                step_id: str = "", project_id: str = "",
-               task_name: str = "") -> dict:
+               task_name: str = "", ignore=None) -> dict:
     src = Path(source_dir)
     if not src.is_absolute():
         src = Path(workspace_root) / source_dir
@@ -19,6 +20,12 @@ def repo_apply(source_dir: str, *, workspace_root: str = "",
         return {"applied": False, "files": [],
                 "error": f"Source dir not found: {source_dir}"}
 
+    # Caller-supplied ignore globs (fnmatch), matched against BOTH the path
+    # relative to source_dir AND the basename — so "web/js/_x.json" and "_x.json"
+    # style patterns both work. Lets a host keep control/scratch files (e.g. a
+    # deletions manifest) in the step dir without them landing in the repo.
+    ignore_globs = tuple(ignore or ())
+
     applied_files = []
     for f in sorted(src.rglob("*")):
         if not f.is_file():
@@ -28,6 +35,11 @@ def repo_apply(source_dir: str, *, workspace_root: str = "",
         if ".git/" in str(f):
             continue
         rel = f.relative_to(src)
+        if ignore_globs and any(
+            fnmatch.fnmatch(str(rel), pat) or fnmatch.fnmatch(f.name, pat)
+            for pat in ignore_globs
+        ):
+            continue
         target = dst / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(f, target)

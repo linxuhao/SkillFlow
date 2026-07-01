@@ -151,6 +151,61 @@ class TestRepoApply:
         assert result["files"] == []
         assert result.get("committed") is False
 
+    def test_ignore_globs_not_copied(self, tmp_path):
+        """Files matching an `ignore` glob stay out of the repo (host control
+        files kept in the step dir, e.g. a deletions manifest)."""
+        proj = tmp_path / "project"
+        proj.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=proj,
+                       capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"],
+                       cwd=proj, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=proj,
+                       capture_output=True)
+        (proj / ".gitkeep").write_text("")
+        subprocess.run(["git", "add", "."], cwd=proj, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=proj,
+                       capture_output=True)
+
+        draft = tmp_path / "draft"
+        draft.mkdir()
+        (draft / "keep.py").write_text("x = 1\n")
+        (draft / "_deletions.json").write_text('["old.js"]')
+        (draft / "sub").mkdir()
+        (draft / "sub" / "_deletions.json").write_text('["y"]')
+
+        result = repo_apply(source_dir=str(draft),
+                            workspace_root=str(tmp_path),
+                            project_root=str(proj),
+                            ignore=["_deletions.json"])
+
+        assert result["applied"] is True
+        assert "keep.py" in result["files"]
+        # basename-matched at any depth → never copied, never committed
+        assert "_deletions.json" not in result["files"]
+        assert "sub/_deletions.json" not in result["files"]
+        assert (proj / "keep.py").exists()
+        assert not (proj / "_deletions.json").exists()
+        assert not (proj / "sub" / "_deletions.json").exists()
+
+    def test_ignore_default_none_copies_everything(self, tmp_path):
+        """Backward-compat: no `ignore` arg → every file copied (unchanged)."""
+        proj = tmp_path / "project"
+        proj.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=proj,
+                       capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=proj,
+                       capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=proj,
+                       capture_output=True)
+        draft = tmp_path / "draft"
+        draft.mkdir()
+        (draft / "_deletions.json").write_text("[]")
+        result = repo_apply(source_dir=str(draft),
+                            workspace_root=str(tmp_path),
+                            project_root=str(proj))
+        assert "_deletions.json" in result["files"]
+
 
 class TestLint:
     """Tests for generic lint tool (replaces syntax_lint + py_compile)."""
