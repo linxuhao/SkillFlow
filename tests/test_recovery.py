@@ -1,15 +1,82 @@
 """Unit tests for recovery.py."""
 
 import time
+from pathlib import Path
 
 import pytest
 
 from skillflow.core import SkillFlow
 from skillflow.graph import PipelineGraph, StepNode, Transition
+from skillflow.tool_loader import ToolLoader
+from skillflow.workspace import WorkspaceManager
+
+_REAL_TOOLS = Path(__file__).parent.parent / "src" / "skillflow" / "tools"
 
 
 def _agent(id: str, transitions=None):
     return StepNode(id=id, step_type="agent", transitions=transitions or [])
+
+
+def test_recover_never_reclaims_tool_with_zero_timeout(sf: SkillFlow):
+    """A tool node with timeout_seconds=0 ('no timeout') is never reclaimed,
+    however old the claim — reclaiming a live no-timeout tool would relaunch it
+    concurrently with itself (the rampage)."""
+    graph = PipelineGraph(
+        name="test", begin="a",
+        steps=[StepNode(id="a", step_type="tool", tool_name="write",
+                        timeout_seconds=0, transitions=[])],
+    )
+    sf.register_graph(graph)
+    run_id = sf.create_run("test")
+    sf.start_run(run_id)
+    long_ago = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 99999))
+    with sf._lock:
+        sf._conn.execute(
+            "INSERT INTO skillflow_steps (run_id, step_id, step_config_json, "
+            "inputs_json, max_retries, status, claimed_at, created_at, updated_at) "
+            "VALUES (?, 'a', '{}', '{}', 3, 'claimed', ?, "
+            "datetime('now'), datetime('now'))",
+            (run_id, long_ago))
+        sf._conn.commit()
+    # Claimed 99999s ago, but timeout_seconds=0 → never stale.
+    assert sf.recover_stale_claims(stale_threshold_seconds=60) == []
+    st = sf._conn.execute(
+        "SELECT status FROM skillflow_steps WHERE run_id=? AND step_id='a' "
+        "ORDER BY id DESC LIMIT 1", (run_id,)).fetchone()
+    assert st["status"] == "claimed"
+
+
+def test_tool_crash_fails_run_after_three(sf: SkillFlow, tmp_path,
+                                          monkeypatch):
+    """A tool that crashes on EVERY execution fails the RUN after 3 crashes,
+    instead of looping forever via advance_run re-resolving into fresh instances
+    (regression: the per-instance _tool_reopen_count was reset each time
+    _claim_tool_step_in_tx opened a new instance)."""
+    sf._tool_loader = ToolLoader(_REAL_TOOLS)
+    sf._workspace = WorkspaceManager(str(tmp_path / "ws"),
+                                     projects_base=str(tmp_path / "proj"))
+    node = StepNode(id="boom", step_type="tool", tool_name="write",
+                    transitions=[Transition(to=None)])
+    sf.register_graph(PipelineGraph(name="crash", begin="boom", steps=[node]))
+    run_id = sf.create_run("crash", {"project_id": "p"})
+    sf.start_run(run_id)
+
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(sf, "_execute_tool_inline", _boom)
+
+    for _ in range(25):
+        try:
+            sf.advance_run(run_id)   # tool fast-path reopens then re-raises
+        except RuntimeError:
+            pass
+        if sf.get_run(run_id)["status"] == "failed":
+            break
+    assert sf.get_run(run_id)["status"] == "failed"
+    n = sf._conn.execute(
+        "SELECT COUNT(*) c FROM skillflow_steps WHERE run_id=? AND step_id='boom'",
+        (run_id,)).fetchone()["c"]
+    assert n == 1, f"crash should fail the run after 1 instance x3, got {n}"
 
 
 def test_recover_respects_tool_timeout_seconds(sf: SkillFlow):

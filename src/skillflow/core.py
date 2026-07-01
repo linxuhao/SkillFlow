@@ -1286,29 +1286,44 @@ class SkillFlow:
                                      hook_name: str, items: list) -> dict:
         """Run a list of tool hooks in order (e.g. repo_apply then repo_delete).
 
-        Each item is a ``{'tool', 'params', 'on_failure'?}`` dict executed via
-        :meth:`_execute_tool_hook` (full variable resolution + project_root
-        injection). Per-item ``on_failure`` is honored: ``warn``/``skip`` log and
-        continue to the next item; ``retry``/``fail`` stop the sequence and
-        bubble up (carrying the item's ``on_failure``) so the caller applies the
-        right step-level outcome.
+        Each item is a ``{'tool', 'params', 'on_failure'?, 'max_retries'?}`` dict
+        executed via :meth:`_execute_tool_hook` (full variable resolution +
+        project_root injection). Per-item policy is honored IN PLACE:
+        ``on_failure: retry`` re-runs THAT item up to its own ``max_retries``
+        (without re-running earlier, already-succeeded items or the agent step);
+        ``warn``/``skip`` log and continue to the next item; ``fail`` (or a retry
+        item that exhausts its retries) stops the sequence and fails the step.
+        The sequence never bubbles ``retry`` to the caller — that would reset the
+        whole agent step and re-execute earlier, already-committed items.
         """
         detail_files = None
         for item in items:
             if not (isinstance(item, dict) and "tool" in item):
                 return {"passed": False,
                         "error": f"Invalid tool hook in '{hook_name}': {item!r}"}
-            res = self._execute_tool_hook(token, node, hook_name, item)
+            on_failure = item.get("on_failure", "fail")
+            max_retries = int(item.get("max_retries", 0) or 0)
+            res = {"passed": False}
+            for attempt in range(max_retries + 1):
+                res = self._execute_tool_hook(token, node, hook_name, item)
+                if res.get("passed", True):
+                    break
+                if on_failure == "retry" and attempt < max_retries:
+                    # Retry THIS item in place — do not re-run earlier items.
+                    self._emit_lifecycle_event(
+                        token, hook_name, "retry", res.get("error", ""))
+                    continue
+                break
             if not res.get("passed", True):
-                on_failure = item.get("on_failure", "fail")
                 if on_failure in ("warn", "skip"):
                     self._emit_lifecycle_event(
                         token, hook_name,
                         "warned" if on_failure == "warn" else "skipped",
                         res.get("error", ""))
                     continue
-                # retry / fail: stop and let the caller apply the step outcome.
-                return {**res, "on_failure": on_failure}
+                # 'fail', or a 'retry' item that exhausted max_retries → fail the
+                # step (never bubble 'retry', which re-runs the whole sequence).
+                return {**res, "on_failure": "fail"}
             files = res.get("files")
             if isinstance(files, list):
                 detail_files = files
@@ -2326,10 +2341,12 @@ class SkillFlow:
         so it retries promptly instead of stalling until its claim times out.
 
         Capped at 3 crashes: a tool that crashes deterministically is broken,
-        not transient, so relaunching it every tick just rampages until the
-        host's step-count valve trips. The SF-20 stale-recovery cap does NOT
-        cover this path (a crash reopens directly, never via
-        recover_stale_claims), so track the count here and fail after 3.
+        not transient. On the 3rd crash the RUN is failed (not just the step) —
+        marking only the step failed + current_node=NULL would let advance_run
+        re-resolve back to the tool and open a FRESH instance with a reset
+        counter, so the crash loop never actually stopped (only the host's
+        step-count valve caught it). The SF-20 stale-recovery cap does NOT cover
+        this path (a crash reopens directly, never via recover_stale_claims).
         """
         with self._tx() as conn:
             row = conn.execute(
@@ -2353,11 +2370,9 @@ class SkillFlow:
                     "claimed_by = NULL, updated_at = datetime('now') WHERE id = ?",
                     (error_msg, row["id"]),
                 )
-                conn.execute(
-                    "UPDATE skillflow_runs SET current_node = NULL, "
-                    "updated_at = datetime('now') WHERE id = ?",
-                    (run_id,),
-                )
+                # Fail the RUN so advance_run returns None instead of re-resolving
+                # the predecessor's transition and opening a fresh tool instance.
+                self._fail_run_in_tx(conn, run_id, error_msg)
                 self.notifications.publish_sync(
                     "step_failed",
                     {"run_id": run_id, "step_id": step_id,
@@ -2984,10 +2999,14 @@ class SkillFlow:
                 try:
                     node = self._get_resolver_for_run(
                         row["run_id"]).get_node(row["step_id"])
-                    if (node and node.step_type == "tool"
-                            and node.timeout_seconds
-                            and node.timeout_seconds > window):
-                        window = float(node.timeout_seconds)
+                    if node and node.step_type == "tool":
+                        if node.timeout_seconds == 0:
+                            # 0 = "no timeout": a live tool may run arbitrarily
+                            # long, so it is NEVER stale — reclaiming it would
+                            # relaunch it concurrently with itself (the rampage).
+                            continue
+                        if node.timeout_seconds > window:
+                            window = float(node.timeout_seconds)
                 except Exception:
                     pass
                 threshold = time.strftime(

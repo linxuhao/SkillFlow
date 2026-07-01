@@ -1247,6 +1247,57 @@ def test_on_deliver_list_order_and_on_failure(sf: SkillFlow, tmp_path: Path,
     assert calls == []
 
 
+def test_on_deliver_item_retries_in_place(sf: SkillFlow, tmp_path: Path,
+                                          monkeypatch):
+    """A failing on_deliver item with on_failure=retry re-runs THAT item up to
+    its own max_retries IN PLACE; earlier items are not re-run, and the sequence
+    never bubbles 'retry' to the caller (which would reset the whole step)."""
+    sf._tool_loader = ToolLoader(
+        Path(__file__).parent.parent / "src" / "skillflow" / "tools")
+    sf._workspace = WorkspaceManager(str(tmp_path / "ws"),
+                                     projects_base=str(tmp_path / "proj"))
+    node = StepNode(id="s1", step_type="agent", output_mode="content",
+                    output_fixed={"out": "r.md"}, transitions=[Transition(to=None)])
+    sf.register_graph(PipelineGraph(name="seq", begin="s1", steps=[node]))
+    rid = sf.create_run("seq", {"project_id": "pid"})
+    sf.start_run(rid)
+    sf.advance_run(rid)
+    token = sf.claim_next_step(rid).token
+
+    calls: list = []
+
+    # 'flaky' fails its first 2 attempts, succeeds on the 3rd.
+    def fake(tok, nd, hook_name, spec):
+        calls.append(spec["tool"])
+        if spec["tool"] == "flaky":
+            return {"passed": calls.count("flaky") >= 3}
+        return {"passed": True}
+    monkeypatch.setattr(sf, "_execute_tool_hook", fake)
+
+    r = sf._execute_lifecycle_hook(token, node, "on_deliver", [
+        {"tool": "repo_apply"},
+        {"tool": "flaky", "on_failure": "retry", "max_retries": 3},
+    ])
+    # repo_apply ran ONCE (not re-run while flaky retried); flaky retried in place.
+    assert calls == ["repo_apply", "flaky", "flaky", "flaky"]
+    assert r["passed"] is True
+
+    # Exhausted retries → fail the STEP, never bubble 'retry'.
+    calls.clear()
+
+    def always_fail(tok, nd, hook_name, spec):
+        calls.append(spec["tool"])
+        return {"passed": spec["tool"] != "boom"}
+    monkeypatch.setattr(sf, "_execute_tool_hook", always_fail)
+    r = sf._execute_lifecycle_hook(token, node, "on_deliver", [
+        {"tool": "repo_apply"},
+        {"tool": "boom", "on_failure": "retry", "max_retries": 2},
+    ])
+    assert calls == ["repo_apply", "boom", "boom", "boom"]  # 1 initial + 2 retries
+    assert r["passed"] is False
+    assert r.get("on_failure") == "fail"   # NOT "retry" — no whole-step re-run
+
+
 # ── Durable run trace ─────────────────────────────────────────────────
 
 def test_trace_append_and_get(sf: SkillFlow):
