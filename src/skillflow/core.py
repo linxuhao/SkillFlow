@@ -1057,7 +1057,11 @@ class SkillFlow:
 
                 if not hook_result.get("passed", False):
                     error = hook_result.get("error", f"Lifecycle hook '{hook_name}' failed")
-                    on_failure = hook_spec.get("on_failure", "fail") if isinstance(hook_spec, dict) else "fail"
+                    # A tool-hook sequence bubbles the failing item's on_failure
+                    # in the result; fall back to the spec-level value otherwise.
+                    on_failure = hook_result.get("on_failure") or (
+                        hook_spec.get("on_failure", "fail")
+                        if isinstance(hook_spec, dict) else "fail")
                     if on_failure == "retry":
                         self._emit_lifecycle_event(token, hook_name, "retry", error)
                         self._handle_lifecycle_retry(token, error)
@@ -1255,18 +1259,63 @@ class SkillFlow:
 
         hook_spec can be:
         - A dict with 'tool' (single tool call): used for after_validate, on_deliver
-        - A list of dicts (multi-check): used for after_deliver
+        - A list of validation specs (multi-check): used for after_deliver
+        - A list of {'tool', 'params'} dicts (sequential tool hooks): used for
+          on_deliver when several repo-mutating tools must run in order (e.g.
+          repo_apply then repo_delete). Each runs via _execute_tool_hook, so
+          $STEP_DIR is resolved and project_root injected — unlike check specs,
+          which run through StepValidator and receive neither.
 
         Returns {passed: bool, error?: str}.
         """
         self._emit_lifecycle_event(token, hook_name, "started")
 
         if isinstance(hook_spec, list):
-            return self._execute_check_hook(token, node, hook_name, hook_spec)
+            # after_deliver runs validation checks against the project repo;
+            # other slots (on_deliver) run a sequence of tool hooks with full
+            # variable resolution.
+            if hook_name == "after_deliver":
+                return self._execute_check_hook(token, node, hook_name, hook_spec)
+            return self._execute_tool_hook_sequence(token, node, hook_name, hook_spec)
         elif isinstance(hook_spec, dict) and "tool" in hook_spec:
             return self._execute_tool_hook(token, node, hook_name, hook_spec)
         else:
             return {"passed": False, "error": f"Invalid hook spec for '{hook_name}'"}
+
+    def _execute_tool_hook_sequence(self, token: ClaimToken, node: StepNode,
+                                     hook_name: str, items: list) -> dict:
+        """Run a list of tool hooks in order (e.g. repo_apply then repo_delete).
+
+        Each item is a ``{'tool', 'params', 'on_failure'?}`` dict executed via
+        :meth:`_execute_tool_hook` (full variable resolution + project_root
+        injection). Per-item ``on_failure`` is honored: ``warn``/``skip`` log and
+        continue to the next item; ``retry``/``fail`` stop the sequence and
+        bubble up (carrying the item's ``on_failure``) so the caller applies the
+        right step-level outcome.
+        """
+        detail_files = None
+        for item in items:
+            if not (isinstance(item, dict) and "tool" in item):
+                return {"passed": False,
+                        "error": f"Invalid tool hook in '{hook_name}': {item!r}"}
+            res = self._execute_tool_hook(token, node, hook_name, item)
+            if not res.get("passed", True):
+                on_failure = item.get("on_failure", "fail")
+                if on_failure in ("warn", "skip"):
+                    self._emit_lifecycle_event(
+                        token, hook_name,
+                        "warned" if on_failure == "warn" else "skipped",
+                        res.get("error", ""))
+                    continue
+                # retry / fail: stop and let the caller apply the step outcome.
+                return {**res, "on_failure": on_failure}
+            files = res.get("files")
+            if isinstance(files, list):
+                detail_files = files
+        out = {"passed": True}
+        if detail_files is not None:
+            out["files"] = detail_files
+        return out
 
     def _execute_tool_hook(self, token: ClaimToken, node: StepNode,
                             hook_name: str, hook_spec: dict) -> dict:

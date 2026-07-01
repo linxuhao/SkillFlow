@@ -1142,6 +1142,111 @@ def test_lifecycle_events_in_outbox(sf: SkillFlow, tmp_path: Path):
     assert step["status"] == "completed"
 
 
+def test_on_deliver_list_runs_tools_end_to_end(sf: SkillFlow, tmp_path: Path):
+    """on_deliver as a LIST runs its tool hooks (not validation checks): a
+    repo_apply in list form resolves $STEP_DIR and commits into the repo.
+
+    Regression: a list previously routed to StepValidator (check hook), which
+    neither unwraps ``params`` nor resolves ``$STEP_DIR`` — so a repo-mutating
+    tool placed there silently no-op'd.
+    """
+    import subprocess
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+
+    sf._tool_loader = ToolLoader(
+        Path(__file__).parent.parent / "src" / "skillflow" / "tools")
+    sf._workspace = WorkspaceManager(
+        str(tmp_path / "ws"), projects_base=str(tmp_path / "projects"),
+        code_path_resolver=lambda pid: str(repo),
+    )
+
+    node = StepNode(
+        id="s1", step_type="agent", output_mode="content",
+        output_fixed={"out": "main.py"},
+        lifecycle={"on_deliver": [
+            {"tool": "repo_apply", "params": {"source_dir": "$STEP_DIR"}},
+        ]},
+        transitions=[Transition(to=None)],
+    )
+    g = PipelineGraph(name="ondeliver_list", begin="s1", steps=[node])
+    sf.register_graph(g)
+
+    rid = sf.create_run("ondeliver_list", {"project_id": "p1"})
+    sf.start_run(rid)
+    sf.advance_run(rid)
+    token = sf.claim_next_step(rid)
+    tmp = sf._workspace.get_step_tmp_dir("p1", "ondeliver_list", "s1")
+    (tmp / "main.py").write_text("print('hi')\n")
+    sf.confirm_step(token.token, StepResult(outputs={}, flags={}))
+
+    # Landed AND committed → the list ran the tool hook with $STEP_DIR resolved
+    # (old code would have no-op'd via the check-hook path).
+    assert (repo / "main.py").read_text() == "print('hi')\n"
+    log = subprocess.run(["git", "log", "--oneline"], cwd=repo,
+                         capture_output=True, text=True).stdout
+    assert "step: s1" in log, f"no apply commit:\n{log}"
+
+
+def test_on_deliver_list_order_and_on_failure(sf: SkillFlow, tmp_path: Path,
+                                               monkeypatch):
+    """on_deliver list = ordered tool-hook sequence honoring per-item
+    on_failure; after_deliver list still routes to validation checks."""
+    sf._tool_loader = ToolLoader(
+        Path(__file__).parent.parent / "src" / "skillflow" / "tools")
+    sf._workspace = WorkspaceManager(str(tmp_path / "ws"),
+                                     projects_base=str(tmp_path / "projects"))
+    node = StepNode(
+        id="s1", step_type="agent", output_mode="content",
+        output_fixed={"out": "r.md"}, transitions=[Transition(to=None)],
+    )
+    g = PipelineGraph(name="seq", begin="s1", steps=[node])
+    sf.register_graph(g)
+    rid = sf.create_run("seq", {"project_id": "pid"})
+    sf.start_run(rid)
+    sf.advance_run(rid)
+    token = sf.claim_next_step(rid).token   # the ClaimToken inside the ClaimedStep
+
+    calls: list = []
+
+    def fake_tool_hook(tok, nd, hook_name, spec):
+        calls.append(spec["tool"])
+        if spec["tool"] == "boom":
+            return {"passed": False, "error": "kaboom"}
+        return {"passed": True, "files": ["x"]}
+    monkeypatch.setattr(sf, "_execute_tool_hook", fake_tool_hook)
+
+    # 1) ordering + all-pass → sequence passes, surfaces files detail
+    r = sf._execute_lifecycle_hook(token, node, "on_deliver",
+        [{"tool": "repo_apply"}, {"tool": "repo_delete"}])
+    assert calls == ["repo_apply", "repo_delete"]
+    assert r["passed"] is True and r.get("files") == ["x"]
+
+    # 2) failing item with on_failure=warn → continue; sequence still passes
+    calls.clear()
+    r = sf._execute_lifecycle_hook(token, node, "on_deliver",
+        [{"tool": "boom", "on_failure": "warn"}, {"tool": "repo_delete"}])
+    assert calls == ["boom", "repo_delete"]
+    assert r["passed"] is True
+
+    # 3) failing item with default on_failure=fail → stop + bubble on_failure
+    calls.clear()
+    r = sf._execute_lifecycle_hook(token, node, "on_deliver",
+        [{"tool": "boom"}, {"tool": "repo_delete"}])
+    assert calls == ["boom"]
+    assert r["passed"] is False and r["on_failure"] == "fail"
+
+    # 4) after_deliver list is unchanged: routes to checks, not the tool
+    #    sequence, so the faked tool-hook path is never touched.
+    calls.clear()
+    sf._execute_lifecycle_hook(token, node, "after_deliver",
+        [{"tool": "syntax_lint", "files": ["*.nomatch"]}])
+    assert calls == []
+
+
 # ── Durable run trace ─────────────────────────────────────────────────
 
 def test_trace_append_and_get(sf: SkillFlow):
