@@ -2322,15 +2322,56 @@ class SkillFlow:
             return inst["id"] if inst else None
 
     def _reopen_tool_step_in_tx(self, run_id: str, step_id: str) -> None:
-        """Release a claimed tool step back to pending after a crashed execution,
-        so it is retried promptly instead of stalling until its claim times out.
+        """Release a claimed tool step back to pending after a CRASHED execution,
+        so it retries promptly instead of stalling until its claim times out.
+
+        Capped at 3 crashes: a tool that crashes deterministically is broken,
+        not transient, so relaunching it every tick just rampages until the
+        host's step-count valve trips. The SF-20 stale-recovery cap does NOT
+        cover this path (a crash reopens directly, never via
+        recover_stale_claims), so track the count here and fail after 3.
         """
         with self._tx() as conn:
+            row = conn.execute(
+                "SELECT id, inputs_json FROM skillflow_steps "
+                "WHERE run_id = ? AND step_id = ? AND status = 'claimed' "
+                "ORDER BY id DESC LIMIT 1",
+                (run_id, step_id),
+            ).fetchone()
+            if not row:
+                return
+            inputs = self._deserialize(row["inputs_json"])
+            reopen_count = inputs.get("_tool_reopen_count", 0) + 1
+            if reopen_count >= 3:
+                error_msg = (
+                    f"Tool step '{step_id}' crashed {reopen_count} times — "
+                    f"failing (likely a bug in the tool, not a transient error)."
+                )
+                conn.execute(
+                    "UPDATE skillflow_steps SET status = 'failed', "
+                    "version = version + 1, last_error = ?, claimed_at = NULL, "
+                    "claimed_by = NULL, updated_at = datetime('now') WHERE id = ?",
+                    (error_msg, row["id"]),
+                )
+                conn.execute(
+                    "UPDATE skillflow_runs SET current_node = NULL, "
+                    "updated_at = datetime('now') WHERE id = ?",
+                    (run_id,),
+                )
+                self.notifications.publish_sync(
+                    "step_failed",
+                    {"run_id": run_id, "step_id": step_id,
+                     "error": error_msg, "retryable": False},
+                    step_id=step_id, run_id=run_id,
+                )
+                return
+            inputs["_tool_reopen_count"] = reopen_count
             conn.execute(
                 "UPDATE skillflow_steps SET status = 'pending', claimed_at = NULL, "
-                "claimed_by = NULL, version = version + 1, updated_at = datetime('now') "
-                "WHERE run_id = ? AND step_id = ? AND status = 'claimed'",
-                (run_id, step_id),
+                "claimed_by = NULL, version = version + 1, inputs_json = ?, "
+                "updated_at = datetime('now') "
+                "WHERE id = ? AND status = 'claimed'",
+                (self._serialize(inputs), row["id"]),
             )
 
     def advance_run(self, run_id: str) -> str | None:
@@ -2918,18 +2959,41 @@ class SkillFlow:
     # ── Recovery ──────────────────────────────────────────────────
 
     def recover_stale_claims(self, stale_threshold_seconds: float = 300) -> list[str]:
-        threshold = time.strftime(
-            "%Y-%m-%dT%H:%M:%SZ",
-            time.gmtime(time.time() - stale_threshold_seconds),
-        )
+        now_epoch = time.time()
         with self._tx() as conn:
-            stale = conn.execute(
+            claimed = conn.execute(
                 """
-                SELECT id, run_id, step_id, inputs_json FROM skillflow_steps
-                WHERE status = 'claimed' AND claimed_at < ?
+                SELECT id, run_id, step_id, inputs_json, claimed_at
+                FROM skillflow_steps WHERE status = 'claimed'
                 """,
-                (threshold,),
             ).fetchall()
+            # For a TOOL step, a claim is stale only once it is older than the
+            # LONGER of the caller's flat threshold and the node's own
+            # timeout_seconds. A slow-but-alive tool (e.g. run_tests, whose node
+            # declares timeout_seconds=1200) must NOT be reclaimed at the flat
+            # threshold — reclaiming it relaunches the tool concurrently with
+            # itself, piling up mutually-starving copies (the step-5 rampage).
+            # Only a claim older than the tool's max legitimate runtime is
+            # presumed dead. Scoped to tool steps on purpose: agent-step
+            # reclaim timing is unchanged (it feeds a separate live
+            # investigation), and this is the only path prone to the rampage
+            # because inline tools re-launch on every advance_run.
+            stale = []
+            for row in claimed:
+                window = stale_threshold_seconds
+                try:
+                    node = self._get_resolver_for_run(
+                        row["run_id"]).get_node(row["step_id"])
+                    if (node and node.step_type == "tool"
+                            and node.timeout_seconds
+                            and node.timeout_seconds > window):
+                        window = float(node.timeout_seconds)
+                except Exception:
+                    pass
+                threshold = time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_epoch - window))
+                if row["claimed_at"] and row["claimed_at"] < threshold:
+                    stale.append(row)
             run_ids: set[str] = set()
             for row in stale:
                 # SF-20: track stale recovery count to detect crash loops.
