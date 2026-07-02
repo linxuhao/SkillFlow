@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -36,6 +37,95 @@ def _ensure_str(value, default: str = "") -> str:
     if value is None:
         return default
     return json.dumps(value, ensure_ascii=False)
+
+
+# ── Structured JSON slots ────────────────────────────────────────────
+# A model asked to author a JSON document as a STRING inside tool-call JSON
+# must escape every backslash twice; under-escaping by one level (e.g. a
+# regex `/\.0$/` quoted in review feedback) produces a file that json.loads
+# rejects — and the run dies on an unmatched transition. For .json slots we
+# therefore move the document INTO the tool arguments, where the provider's
+# constrained decoding guarantees validity:
+#   tier 1 — the slot's `format` spec parses → one argument per field;
+#   tier 2 — no parseable format → a single `content` argument typed OBJECT;
+#   tier 3 — a string is still accepted but json.loads-validated at write
+#            time, returning an actionable tool error instead of writing a
+#            file no reader can parse.
+
+_TYPE_TOKENS = {
+    "bool": {"type": "boolean"},
+    "str": {"type": "string"},
+    "int": {"type": "integer"},
+    "float": {"type": "number"},
+    "num": {"type": "number"},
+}
+
+
+def _is_json_file(pattern: str) -> bool:
+    return pattern.lower().endswith(".json")
+
+
+def _format_value_to_spec(value) -> dict | None:
+    """Convert one parsed format value into a parameter spec, or None."""
+    if isinstance(value, str):
+        token = value[2:-2] if value.startswith("__") and value.endswith("__") else None
+        if token in _TYPE_TOKENS:
+            return dict(_TYPE_TOKENS[token])
+        # Free-text value = a string field described by that text
+        # (e.g. "description": "ONE-LINE summary (max 80 chars)").
+        return {"type": "string", "description": value}
+    if isinstance(value, list):
+        if len(value) != 1:
+            return None
+        items = _format_value_to_spec(value[0])
+        if items is None:
+            return None
+        return {"type": "array", "items": items}
+    if isinstance(value, dict):
+        props = {}
+        for k, v in value.items():
+            spec = _format_value_to_spec(v)
+            if spec is None:
+                return None
+            props[k] = spec
+        return {"type": "object", "properties": props}
+    return None
+
+
+def _parse_format_spec(format_spec) -> dict | None:
+    """Parse a pseudo-JSON ``format`` spec into per-field parameter specs.
+
+    ``'{"passed": bool, "feedback": str, "suggestions": [str, ...]}'``
+    → ``{"passed": {"type": "boolean"}, "feedback": {"type": "string"},
+        "suggestions": {"type": "array", "items": {"type": "string"}}}``
+
+    Returns None when the spec is absent or uses constructs the mini-DSL
+    can't resolve (e.g. a named shape like ``[subtask, ...]``) — callers
+    then fall back to a whole-document object parameter.
+    """
+    if not format_spec or not isinstance(format_spec, str):
+        return None
+    spec = format_spec.strip()
+    if not spec.startswith("{"):
+        return None
+    # ", ..." ellipses are illustrative — drop them
+    normalized = re.sub(r",\s*\.\.\.", "", spec)
+    # quote bare type tokens so the spec becomes valid JSON
+    normalized = re.sub(
+        r"\b(bool|str|int|float|num)\b", r'"__\1__"', normalized)
+    try:
+        data = json.loads(normalized)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict) or not data:
+        return None
+    props = {}
+    for key, value in data.items():
+        spec_v = _format_value_to_spec(value)
+        if spec_v is None:
+            return None
+        props[key] = spec_v
+    return props
 
 
 def _normalize_fixed_entry(value) -> dict:
@@ -165,30 +255,71 @@ def generate_write_tool_schemas(output_mode: str,
             fmt_hint = f"\nExpected format: {format_spec.strip()}" if format_spec else ""
             is_glob = "*" in pattern
 
-            # Shared params
-            if is_glob:
-                id_desc = f"Replaces * in {pattern}"
-                # When the format declares an "id" field, the parameter value
-                # should match it — otherwise the LLM fills in a placeholder
-                # like "unknown" and all task cards land in the same file.
-                if format_spec and '"id"' in format_spec:
-                    id_desc += " — must equal the 'id' field value in your file content"
-                params = {
-                    "id": {"type": "string", "required": True,
-                           "description": id_desc},
-                    "content": {"type": "string", "required": True},
-                }
-            else:
-                params = {"content": {"type": "string", "required": True}}
+            field_props = (_parse_format_spec(format_spec)
+                           if _is_json_file(pattern) else None)
 
-            create_params = dict(params)
-            if "content" in create_params:
+            if field_props:
+                # Tier 1 — one argument per document field: the model authors
+                # no JSON-in-a-string, so backslashes in field text can never
+                # produce an unparseable file.
+                params = {}
+                if is_glob and "id" not in field_props:
+                    params["id"] = {"type": "string", "required": True,
+                                    "description": f"Replaces * in {pattern}"}
+                for fname, fspec in field_props.items():
+                    p = dict(fspec)
+                    p["required"] = True
+                    if is_glob and fname == "id":
+                        extra = f"Replaces * in {pattern}; also written as the 'id' field."
+                        p["description"] = (
+                            f"{p.get('description', '')} {extra}".strip())
+                    params[fname] = p
+                create_params = dict(params)
+                write_hint = (fmt_hint + "\nProvide one argument per field — "
+                              "do NOT pass the document as a JSON-encoded string.")
+            elif _is_json_file(pattern):
+                # Tier 2 — whole document as a structured OBJECT argument
+                # (format absent or beyond the mini-DSL).
+                content_spec = {
+                    "type": "object", "required": True,
+                    "description": ("The complete JSON document as a structured "
+                                    "object — NOT a JSON-encoded string."),
+                }
+                if is_glob:
+                    id_desc = f"Replaces * in {pattern}"
+                    if format_spec and '"id"' in format_spec:
+                        id_desc += " — must equal the 'id' field value in your document"
+                    params = {
+                        "id": {"type": "string", "required": True,
+                               "description": id_desc},
+                        "content": content_spec,
+                    }
+                else:
+                    params = {"content": content_spec}
+                create_params = dict(params)
                 create_params["initialContent"] = create_params.pop("content")
+                write_hint = fmt_hint
+            else:
+                # Text slots (md etc.) — plain string content, unchanged.
+                if is_glob:
+                    id_desc = f"Replaces * in {pattern}"
+                    if format_spec and '"id"' in format_spec:
+                        id_desc += " — must equal the 'id' field value in your file content"
+                    params = {
+                        "id": {"type": "string", "required": True,
+                               "description": id_desc},
+                        "content": {"type": "string", "required": True},
+                    }
+                else:
+                    params = {"content": {"type": "string", "required": True}}
+                create_params = dict(params)
+                create_params["initialContent"] = create_params.pop("content")
+                write_hint = fmt_hint
 
             # write_{slot} — full replace
             tools.append({
                 "name": f"write_{slot}",
-                "description": f"Replace {pattern} with new content.{fmt_hint}",
+                "description": f"Replace {pattern} with new content.{write_hint}",
                 "parameters": params,
             })
 
@@ -198,7 +329,7 @@ def generate_write_tool_schemas(output_mode: str,
                 "description": (
                     f"Create {pattern} with initial content. "
                     f"If file already exists, it is archived with a numeric suffix, "
-                    f"so {pattern} always holds the latest version.{fmt_hint}"
+                    f"so {pattern} always holds the latest version.{write_hint}"
                 ),
                 "parameters": create_params,
             })
@@ -241,6 +372,62 @@ def generate_write_tool_schemas(output_mode: str,
     return []
 
 
+def _resolve_slot_document(slot: str, fixed: dict, params: dict) -> "tuple[str | None, dict | None]":
+    """Resolve the text to write for a write_/create_{slot} call.
+
+    Returns ``(text, None)`` on success or ``(None, error_dict)`` — the error
+    goes back to the agent as the tool result, so it can self-correct within
+    the same step instead of a downstream reader choking on a bad file.
+
+    JSON slots accept three input shapes: per-field arguments (tier 1),
+    a structured object in content/initialContent (tier 2), or a raw string
+    that must survive ``json.loads`` (tier 3 — the legacy path that used to
+    write invalid escapes straight to disk). Non-JSON slots keep the legacy
+    string behaviour verbatim.
+    """
+    entry = fixed.get(slot)
+    normalized = _normalize_fixed_entry(entry) if entry is not None else {"file": ""}
+    pattern = normalized.get("file", "")
+
+    raw = params.get("content")
+    if raw is None or raw == "":
+        raw = params.get("initialContent")
+
+    if not _is_json_file(pattern):
+        return _ensure_str(raw, ""), None
+
+    field_props = _parse_format_spec(normalized.get("format"))
+    if field_props and raw is None:
+        doc, missing = {}, []
+        for fname in field_props:
+            if fname in params:
+                doc[fname] = params[fname]
+            else:
+                missing.append(fname)
+        if missing:
+            return None, {"error": (
+                f"{slot}: missing required field argument(s): "
+                f"{', '.join(missing)} — provide one argument per field "
+                f"of the document.")}
+        return json.dumps(doc, indent=2, ensure_ascii=False), None
+
+    if isinstance(raw, (dict, list)):
+        return json.dumps(raw, indent=2, ensure_ascii=False), None
+
+    if isinstance(raw, str) and raw.strip():
+        try:
+            json.loads(raw)
+        except json.JSONDecodeError as e:
+            return None, {"error": (
+                f"content for '{pattern}' is not valid JSON: {e}. Pass the "
+                f"document as structured arguments (or a plain object), not a "
+                f"JSON-encoded string; if you must pass a string, double every "
+                f"backslash (\\\\).")}
+        return raw, None
+
+    return None, {"error": f"{slot}: no content provided"}
+
+
 def resolve_write_target(slot: str, fixed: dict, params: dict) -> str:
     """Resolve the actual filename to write for a given write_* call."""
     entry = fixed.get(slot)
@@ -260,23 +447,27 @@ def execute_write(slot: str, fixed: dict, params: dict,
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
 
-    if mode == "new":
-        # Flipped rename: archive old file, write new content to canonical name
-        archived = _archive_old_file(directory, base_name)
-        filename = base_name
-    elif mode == "append":
+    if mode == "append":
         filename = base_name
         path = directory / filename
         content = _ensure_str(params.get("content", ""))
         existing = path.read_text(encoding="utf-8") if path.exists() else ""
         path.write_text(existing + content, encoding="utf-8")
         return {"written": filename}
-    else:  # replace
-        filename = base_name
 
+    # Resolve (and validate) the document BEFORE any archive rename, so a
+    # rejected write leaves the existing canonical file untouched.
+    content, err = _resolve_slot_document(slot, fixed, params)
+    if err:
+        return err
+
+    archived = None
+    if mode == "new":
+        # Flipped rename: archive old file, write new content to canonical name
+        archived = _archive_old_file(directory, base_name)
+    filename = base_name
     path = directory / filename
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = _ensure_str(params.get("content") or params.get("initialContent", ""))
     path.write_text(content, encoding="utf-8")
     result = {"written": filename}
     if mode == "new" and archived:
@@ -290,10 +481,15 @@ def execute_create(slot: str, fixed: dict, params: dict,
     base_name = resolve_write_target(slot, fixed, params)
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
+    # Resolve (and validate) BEFORE archiving so a rejected write leaves the
+    # existing canonical file untouched.
+    content, err = _resolve_slot_document(slot, fixed, params)
+    if err:
+        return err
     archived = _archive_old_file(directory, base_name)
     path = directory / base_name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_ensure_str(params.get("content") or params.get("initialContent", "")), encoding="utf-8")
+    path.write_text(content, encoding="utf-8")
     result = {"written": base_name}
     if archived:
         result["archived"] = archived

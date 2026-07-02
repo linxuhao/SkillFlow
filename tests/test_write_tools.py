@@ -232,11 +232,12 @@ class TestWriteTools:
             desc = tool["description"]
             assert "Expected format:" in desc
             assert '{"id": str, "description": str}' in desc
-        # id param description links to content's id field when format has "id"
+        # Structured slot: the id argument IS the content's id field — the
+        # coupling is structural now, not a prompt-hint plea.
         write_tool = next(t for t in schemas if t["name"] == "write_task_card")
         id_desc = write_tool["parameters"]["id"]["description"]
         assert "Replaces * in tasks/*.json" in id_desc
-        assert "must equal the 'id' field value" in id_desc
+        assert "also written as the 'id' field" in id_desc
 
     def test_glob_id_param_without_id_in_format(self):
         """When format lacks 'id', the id param description stays plain."""
@@ -257,3 +258,172 @@ class TestWriteTools:
         # String entry omits format
         result = _normalize_fixed_entry("x.json")
         assert "format" not in result
+
+
+VERDICT_FIXED = {
+    "verdict": {"file": "review_verdict.json", "on_exists": "new",
+                "format": '{"passed": bool, "feedback": str, "suggestions": [str, ...]}'}
+}
+
+
+class TestStructuredJsonSlots:
+    """Structured .json slots: the document rides inside the tool arguments,
+    so JSON-in-a-string double-escaping (the review_verdict '\\.' incident)
+    is structurally impossible — and a string fallback is validated."""
+
+    # ── format-spec parser ──────────────────────────────────────
+
+    def test_parse_format_verdict(self):
+        from skillflow.write_tools import _parse_format_spec
+        props = _parse_format_spec(
+            '{"passed": bool, "feedback": str, "suggestions": [str, ...]}')
+        assert props == {
+            "passed": {"type": "boolean"},
+            "feedback": {"type": "string"},
+            "suggestions": {"type": "array", "items": {"type": "string"}},
+        }
+
+    def test_parse_format_nested_arrays(self):
+        from skillflow.write_tools import _parse_format_spec
+        props = _parse_format_spec('{"execution_order": [[str, ...], ...]}')
+        assert props == {"execution_order": {
+            "type": "array", "items": {"type": "array",
+                                       "items": {"type": "string"}}}}
+
+    def test_parse_format_prose_becomes_description(self):
+        from skillflow.write_tools import _parse_format_spec
+        props = _parse_format_spec(
+            '{"id": str, "description": "ONE-LINE summary (max 80 chars)"}')
+        assert props["description"] == {
+            "type": "string",
+            "description": "ONE-LINE summary (max 80 chars)"}
+
+    def test_parse_format_named_shape_unparseable(self):
+        from skillflow.write_tools import _parse_format_spec
+        # References a named shape the mini-DSL can't resolve → None (tier 2)
+        assert _parse_format_spec(
+            '{"subtasks": [subtask, ...], "execution_order": [[str, ...], ...]}'
+        ) is None
+
+    def test_parse_format_non_object(self):
+        from skillflow.write_tools import _parse_format_spec
+        assert _parse_format_spec("free prose format") is None
+        assert _parse_format_spec(None) is None
+        assert _parse_format_spec("") is None
+
+    # ── schema generation tiers ─────────────────────────────────
+
+    def test_tier1_per_field_params(self):
+        schemas = generate_write_tool_schemas("content", VERDICT_FIXED)
+        create = next(s for s in schemas if s["name"] == "create_verdict")
+        assert set(create["parameters"]) == {"passed", "feedback", "suggestions"}
+        assert create["parameters"]["passed"] == {
+            "type": "boolean", "required": True}
+        assert create["parameters"]["suggestions"]["items"] == {"type": "string"}
+        # no stringly content params anywhere
+        assert "content" not in create["parameters"]
+        assert "initialContent" not in create["parameters"]
+        assert "do NOT pass the document as a JSON-encoded string" in create["description"]
+        # edit stays textual (surgical string replace)
+        edit = next(s for s in schemas if s["name"] == "edit_verdict")
+        assert set(edit["parameters"]) == {"old_str", "new_str"}
+
+    def test_tier2_object_content_when_format_unparseable(self):
+        schemas = generate_write_tool_schemas("content", {
+            "manifest": {"file": "subtasks_manifest.json",
+                         "format": '{"subtasks": [subtask, ...]}'}
+        })
+        write = next(s for s in schemas if s["name"] == "write_manifest")
+        assert write["parameters"]["content"]["type"] == "object"
+        create = next(s for s in schemas if s["name"] == "create_manifest")
+        assert create["parameters"]["initialContent"]["type"] == "object"
+
+    def test_tier3_text_slot_unchanged(self):
+        schemas = generate_write_tool_schemas("content", {
+            "notes": {"file": "research_notes.md", "format": "prose format"}
+        })
+        write = next(s for s in schemas if s["name"] == "write_notes")
+        assert write["parameters"]["content"] == {"type": "string",
+                                                  "required": True}
+
+    # ── executor: per-field assembly ────────────────────────────
+
+    def test_create_assembles_document_from_fields(self, tmp_path):
+        from skillflow.write_tools import execute_create
+        import json as _json
+        res = execute_create("verdict", VERDICT_FIXED, {
+            "passed": True,
+            "feedback": r"the `.replace(/\.0$/, '')` fix is correct",
+            "suggestions": [],
+        }, str(tmp_path))
+        assert res == {"written": "review_verdict.json"}
+        data = _json.loads((tmp_path / "review_verdict.json").read_text())
+        # The backslash that used to kill the run survives intact
+        assert data["passed"] is True
+        assert "\\.0$" in data["feedback"]
+
+    def test_create_missing_field_is_tool_error(self, tmp_path):
+        from skillflow.write_tools import execute_create
+        res = execute_create("verdict", VERDICT_FIXED,
+                             {"passed": True}, str(tmp_path))
+        assert "missing required field" in res["error"]
+        assert not (tmp_path / "review_verdict.json").exists()
+
+    def test_create_accepts_object_content(self, tmp_path):
+        from skillflow.write_tools import execute_create
+        import json as _json
+        res = execute_create("verdict", VERDICT_FIXED, {
+            "initialContent": {"passed": False, "feedback": "x",
+                               "suggestions": ["y"]},
+        }, str(tmp_path))
+        assert res == {"written": "review_verdict.json"}
+        data = _json.loads((tmp_path / "review_verdict.json").read_text())
+        assert data["passed"] is False
+
+    def test_create_validates_string_content(self, tmp_path):
+        from skillflow.write_tools import execute_create
+        # The exact incident: an under-escaped backslash in a JSON string
+        bad = '{"passed": true, "feedback": "regex /\\.0$/ ok", "suggestions": []}'
+        assert "\\." in bad  # single backslash-dot → invalid JSON escape
+        res = execute_create("verdict", VERDICT_FIXED,
+                             {"initialContent": bad}, str(tmp_path))
+        assert "not valid JSON" in res["error"]
+        assert not (tmp_path / "review_verdict.json").exists()
+
+    def test_create_valid_string_still_accepted(self, tmp_path):
+        from skillflow.write_tools import execute_create
+        good = '{"passed": true, "feedback": "ok", "suggestions": []}'
+        res = execute_create("verdict", VERDICT_FIXED,
+                             {"initialContent": good}, str(tmp_path))
+        assert res == {"written": "review_verdict.json"}
+
+    def test_rejected_write_preserves_existing_file(self, tmp_path):
+        from skillflow.write_tools import execute_create
+        (tmp_path / "review_verdict.json").write_text('{"passed": false}')
+        res = execute_create("verdict", VERDICT_FIXED,
+                             {"initialContent": "{invalid"}, str(tmp_path))
+        assert "error" in res
+        # on_exists:new must NOT have archived the old file on a rejected write
+        assert (tmp_path / "review_verdict.json").read_text() == '{"passed": false}'
+        assert not (tmp_path / "review_verdict_1.json").exists()
+
+    def test_glob_id_fills_filename_and_field(self, tmp_path):
+        from skillflow.write_tools import execute_write
+        import json as _json
+        fixed = {"task_card": {"file": "tasks/*.json",
+                               "format": '{"id": str, "description": str}'}}
+        res = execute_write("task_card", fixed, {
+            "id": "core_lib", "description": "build the core library",
+        }, str(tmp_path))
+        assert res == {"written": "tasks/core_lib.json"}
+        data = _json.loads((tmp_path / "tasks/core_lib.json").read_text())
+        assert data == {"id": "core_lib",
+                        "description": "build the core library"}
+
+    def test_text_slot_write_unchanged(self, tmp_path):
+        from skillflow.write_tools import execute_write
+        res = execute_write("notes", {"notes": "research_notes.md"},
+                            {"content": "plain text with \\. backslash"},
+                            str(tmp_path))
+        assert res == {"written": "research_notes.md"}
+        assert "\\." in (tmp_path / "research_notes.md").read_text()

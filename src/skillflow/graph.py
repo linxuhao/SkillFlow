@@ -850,6 +850,15 @@ def _flags_match(match: dict, flags: dict, *,
             return False
         data = _parse_json_extract_last(content)
         if data is None:
+            # The file exists but no JSON value could be parsed out of it
+            # (e.g. an invalid \escape written by an agent). Without this
+            # log the run dies on "No matching transition ... flags {}"
+            # with no hint that the real problem is a syntax error.
+            import logging
+            logging.getLogger("skillflow.graph").warning(
+                "from_file match: '%s' exists but contains no parseable "
+                "JSON — transition treated as unmatched",
+                match["from_file"])
             return False
         return data.get(match["field"]) == match["value"]
 
