@@ -286,6 +286,61 @@ class TestLint:
         assert all_ok is False
         assert len(results) == 2
 
+    # ── Custom (host-registered) backends ──
+
+    def test_custom_backend_dispatch(self, tmp_path):
+        """A manifest naming a host-registered backend dispatches to it."""
+        from skillflow import lint_backends
+        seen = []
+
+        def fake(fp):
+            seen.append(fp.name)
+            return {"passed": False, "error_message": "nope"}
+
+        lint_backends.register_backend("fake_js_linter", fake)
+        try:
+            (tmp_path / "manifest.json").write_text('{".js": "fake_js_linter"}')
+            (tmp_path / "app.js").write_text("console.log('hello world');")
+            all_ok, results = self._lint(tmp_path, "app.js",
+                                         manifest_path="manifest.json")
+            assert seen == ["app.js"]
+            assert all_ok is False
+            assert results[0]["error_message"] == "nope"
+        finally:
+            lint_backends._backends.pop("fake_js_linter", None)
+
+    def test_custom_backend_crash_fails_file(self, tmp_path):
+        """A crashing custom backend fails the file, not the process."""
+        from skillflow import lint_backends
+
+        def boom(fp):
+            raise RuntimeError("kaputt")
+
+        lint_backends.register_backend("boom_linter", boom)
+        try:
+            (tmp_path / "manifest.json").write_text('{".js": "boom_linter"}')
+            (tmp_path / "app.js").write_text("console.log('hello world');")
+            all_ok, results = self._lint(tmp_path, "app.js",
+                                         manifest_path="manifest.json")
+            assert all_ok is False
+            assert "kaputt" in results[0]["error_message"]
+        finally:
+            lint_backends._backends.pop("boom_linter", None)
+
+    def test_custom_backend_overrides_builtin(self, tmp_path):
+        """Registering a built-in name overrides the built-in backend."""
+        from skillflow import lint_backends
+
+        lint_backends.register_backend(
+            "basic", lambda fp: {"passed": True, "error_message": "custom"})
+        try:
+            (tmp_path / "tiny.js").write_text("x")  # built-in basic would fail
+            all_ok, results = self._lint(tmp_path, "tiny.js")
+            assert all_ok is True
+            assert results[0]["error_message"] == "custom"
+        finally:
+            lint_backends._backends.pop("basic", None)
+
 
 class TestPytestTool:
     def test_passing_test_passes(self, tmp_path):

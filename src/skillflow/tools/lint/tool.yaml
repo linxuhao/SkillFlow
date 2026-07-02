@@ -1,7 +1,8 @@
 name: lint
 description: >
   Run linters on code files based on an extension→linter manifest.
-  Auto-installs missing linters via pip. Returns {all_passed, results}.
+  Auto-installs missing linters via pip. Hosts can register extra backends
+  via skillflow.lint_backends.register_backend. Returns {all_passed, results}.
 parameters:
   files:
     type: array

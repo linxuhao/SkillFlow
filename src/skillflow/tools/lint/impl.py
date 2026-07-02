@@ -2,6 +2,10 @@
 
 Reads an optional linter_manifest.json (extension → linter mapping).
 Auto-installs missing linters via pip (cached per process).
+
+Hosts may register additional backends via
+``skillflow.lint_backends.register_backend`` — custom backends are
+consulted before built-ins, so the manifest can name them directly.
 """
 
 from __future__ import annotations
@@ -10,6 +14,8 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+
+from skillflow.lint_backends import get_backend
 
 # ── Install cache (process lifetime) ────────────────────────────────────
 _installed: dict[str, bool] = {}
@@ -73,6 +79,16 @@ def _load_manifest(root: Path, manifest_path: str | None) -> dict[str, str]:
 # ── Backend dispatch ────────────────────────────────────────────────────
 
 def _run_backend(backend: str, fp: Path) -> dict:
+    custom = get_backend(backend)
+    if custom is not None:
+        try:
+            res = custom(fp)
+        except Exception as e:  # a buggy backend fails the file, not the process
+            return {"file": str(fp), "passed": False,
+                    "error_message": f"Custom linter '{backend}' crashed: {e}"}
+        return {"file": str(fp),
+                "passed": bool(res.get("passed", False)),
+                "error_message": str(res.get("error_message", ""))}
     if backend == "ruff":
         return _lint_ruff(fp)
     elif backend == "djlint":
