@@ -1496,7 +1496,7 @@ def test_prune_trace_keep_last_runs(sf: SkillFlow):
 
 
 def test_delete_project_removes_trace(sf: SkillFlow):
-    """Deleting a project drops its runs' trace records (and seq cache)."""
+    """Deleting a project drops its runs' trace records."""
     graph = _simple_graph(name="delproj")
     sf.register_graph(graph)
     rid = sf.create_run("delproj", {"project_id": "doomed"})
@@ -1505,12 +1505,11 @@ def test_delete_project_removes_trace(sf: SkillFlow):
     claimed = sf.claim_next_step(rid)  # writes a 'claimed' trace
     claimed.trace("prompt", "user_prompt", {"text": "hi"})
     assert len(sf.get_trace(rid)) >= 2
-    assert rid in sf._trace_seq
+    # (seq is computed in-SQL now — there is no in-process cache to assert on)
 
     sf.delete_project("doomed")
 
     assert sf.get_trace(rid) == []
-    assert rid not in sf._trace_seq
     # Other projects' trace is untouched
     other = sf.create_run("delproj", {"project_id": "safe"})
     sf.trace(other, "event", "x")

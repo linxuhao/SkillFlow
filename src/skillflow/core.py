@@ -138,12 +138,12 @@ class SkillFlow:
         self._resolvers: dict[str, GraphResolver] = {}
         self._lock = threading.RLock()
         self._tool_loader = tool_loader
-        # Durable run trace. Per-run seq is cached in-process so a hot path
-        # never pays a SELECT MAX(seq) per record (that scan dominated the
-        # write cost in benchmarks). Set trace_enabled=False to disable the
-        # trace entirely (zero write overhead) for latency-sensitive hosts.
+        # Durable run trace. Per-run seq is computed atomically inside each
+        # INSERT (the (run_id, seq) index makes it an O(log n) seek) so the
+        # "unique per run" contract holds across concurrent PROCESSES too.
+        # Set trace_enabled=False to disable the trace entirely (zero write
+        # overhead) for latency-sensitive hosts.
         self._trace_enabled = trace_enabled
-        self._trace_seq: dict[str, int] = {}
         self._load_native_tools()
         self._stale_threshold = stale_threshold_seconds
         self._workspace = None
@@ -611,7 +611,6 @@ class SkillFlow:
                 conn.execute("DELETE FROM skillflow_outbox WHERE payload_json LIKE ?",
                              (f"%{run_id}%",))
                 conn.execute("DELETE FROM skillflow_trace WHERE run_id = ?", (run_id,))
-                self._trace_seq.pop(run_id, None)
             conn.execute("DELETE FROM skillflow_runs WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM skillflow_projects WHERE id = ?", (project_id,))
 
@@ -3141,25 +3140,23 @@ class SkillFlow:
         clean = {k: self._clip(v) for k, v in (payload or {}).items()}
         try:
             with self._lock:
-                # Per-run seq from an in-process counter; seed once from the DB
-                # (one SELECT per run, not per record) so restarts stay ordered.
-                seq = self._trace_seq.get(run_id)
-                if seq is None:
-                    row = self._conn.execute(
-                        "SELECT COALESCE(MAX(seq), 0) FROM skillflow_trace WHERE run_id = ?",
-                        (run_id,),
-                    ).fetchone()
-                    seq = row[0] if row else 0
-                seq += 1
-                self._trace_seq[run_id] = seq
+                # seq is computed INSIDE the insert, atomically per statement.
+                # The old in-process counter (seeded once from MAX) was only
+                # race-free within ONE SkillFlow instance: every additional
+                # process sharing the DB seeded its own counter and minted
+                # DUPLICATE seq values — breaking the "unique per run"
+                # contract keyset pagination and trace consumers rely on.
+                # The (run_id, seq) index makes the MAX an O(log n) seek, and
+                # the per-record commit fsync dwarfs it anyway.
                 self._conn.execute(
                     """
                     INSERT INTO skillflow_trace
                         (run_id, step_id, step_instance_id, seq, category, event, payload_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    SELECT ?, ?, ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?
+                    FROM skillflow_trace WHERE run_id = ?
                     """,
-                    (run_id, step_id or None, step_instance_id, seq,
-                     category, event, self._serialize(clean)),
+                    (run_id, step_id or None, step_instance_id,
+                     category, event, self._serialize(clean), run_id),
                 )
                 self._conn.commit()
         except Exception:
@@ -3181,7 +3178,6 @@ class SkillFlow:
                 cur = self._conn.execute(
                     "DELETE FROM skillflow_trace WHERE run_id = ?", (run_id,))
                 deleted += cur.rowcount
-                self._trace_seq.pop(run_id, None)
             if keep_last_runs is not None:
                 keep = [r[0] for r in self._conn.execute(
                     "SELECT run_id FROM skillflow_trace GROUP BY run_id "
@@ -3191,9 +3187,6 @@ class SkillFlow:
                     cur = self._conn.execute(
                         f"DELETE FROM skillflow_trace WHERE run_id NOT IN ({ph})", keep)
                     deleted += cur.rowcount
-                    for rid in list(self._trace_seq):
-                        if rid not in keep:
-                            self._trace_seq.pop(rid, None)
             self._conn.commit()
         return deleted
 
