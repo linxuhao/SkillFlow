@@ -10,6 +10,7 @@ gates, loops, checkpoints, and error routing behind the tool facade.
 from pathlib import Path
 
 from skillflow.plugins.skill_runner.runner import SkillTool, SkillResponse, PromptAssembler
+from skillflow.plugins.skill_runner.service import RunnerService
 
 
 def load_agent_guide() -> str:
@@ -17,4 +18,5 @@ def load_agent_guide() -> str:
     return (Path(__file__).parent / "AGENT.md").read_text(encoding="utf-8")
 
 
-__all__ = ["SkillTool", "SkillResponse", "PromptAssembler", "load_agent_guide"]
+__all__ = ["SkillTool", "SkillResponse", "PromptAssembler", "RunnerService",
+           "load_agent_guide"]

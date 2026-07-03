@@ -90,26 +90,61 @@ class PromptAssembler:
         # The step task itself
         parts.append(f"## Task: {label}\n\nExecute step `{step.step_id}`.")
 
-        # Expected output files
+        # Output contract — transport-neutral. Naming write_plan/create_plan
+        # as directly-callable functions here misled every driving agent whose
+        # host doesn't expose them (they exist natively only for
+        # scheduler-spawned agents); instead we describe the SLOTS and the two
+        # delivery paths that work on every transport (submit result / the
+        # host's skillflow tool proxy).
         expected_files = inputs.get("_expected_files", [])
-        output_dir = inputs.get("_output_dir", "")
-        if expected_files:
-            files_list = "\n".join(f"- `{f}`" for f in expected_files)
-            if output_dir:
-                parts.append(f"Write output files to the staging directory (`{output_dir}/`):\n{files_list}")
-            else:
-                parts.append(f"Write output files to the output directory:\n{files_list}")
-
-        # Output format hints from tool schemas (write_* / create_* tools)
         tool_schemas = inputs.get("_tool_schemas", {})
-        for name, schema in tool_schemas.items():
-            desc = schema.get("description", "")
-            if desc:
-                parts.append(f"### {name}\n{desc}")
+        slots = self._slot_contract(expected_files, tool_schemas)
+        if slots:
+            parts.append("Expected outputs for this step:\n" + "\n".join(slots))
+            parts.append(
+                "Deliver each output EITHER by including it in your submit "
+                "call — result={\"<slot>\": <content>} — OR, if your host "
+                "exposes skillflow's step tools (e.g. a `skillflow_tool` "
+                "proxy), by writing it with `write_<slot>` before submitting. "
+                "Do not try to call write_/create_ tools that your host does "
+                "not expose, and do not write these files with your own file "
+                "tools — they belong to skillflow's staging area."
+            )
 
-        parts.append("Produce the expected output in the format specified.")
+        parts.append("Produce the expected output in the format specified, "
+                     "then submit to advance.")
 
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _slot_contract(expected_files: list, tool_schemas: dict) -> list[str]:
+        """Build '- slot → file: format hint' lines from write-tool schemas."""
+        lines: list[str] = []
+        seen: set[str] = set()
+        for name, schema in (tool_schemas or {}).items():
+            if not name.startswith("write_"):
+                continue
+            slot = name[len("write_"):]
+            desc = (schema.get("description") or "").strip()
+            # Keep the format hint ("Expected format: ...") — drop the
+            # tool-invocation phrasing ("Replace X with new content.").
+            hint = ""
+            if "Expected format:" in desc:
+                hint = " — " + desc[desc.index("Expected format:"):].strip()
+            fname = ""
+            for f in expected_files or []:
+                stem = f.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+                if stem == slot or slot in f:
+                    fname = f
+                    break
+            lines.append(f"- `{slot}`" + (f" → `{fname}`" if fname else "") + hint)
+            seen.add(slot)
+        # Files with no matching write-tool (rare) still get named.
+        for f in expected_files or []:
+            stem = f.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+            if stem not in seen and not any(f in ln for ln in lines):
+                lines.append(f"- `{f}`")
+        return lines
 
 
 class SkillTool:

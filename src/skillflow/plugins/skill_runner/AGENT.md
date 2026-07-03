@@ -1,8 +1,22 @@
-# skillflow-run — Stateless Pipeline Runner
+# Stateless Pipeline Runner — CLI & MCP
 
-Execute a skillflow pipeline by calling the `skillflow-run` CLI. Each invocation is a **fresh process** — state lives in SQLite, not in memory. You call it, parse the JSON response, do the work, call again.
+Execute a skillflow pipeline through a stateless protocol: state lives in
+SQLite + the workspace, never in the process. You get an instruction, do the
+work, hand in the result, repeat. You never see the graph — the runner tells
+you what to do next.
 
-You never see the graph — the runner tells you what to do next.
+Two transports, same protocol:
+
+- **MCP (preferred when your host supports it)** — `pip install
+  skillflow-py[mcp]`, then register `skillflow-mcp` as a stdio MCP server.
+  You get typed tools (`runner_start`, `runner_next`, `runner_status`,
+  `runner_submit`, `runner_approve`, `runner_reject`, `skillflow_tool`) —
+  no shell quoting of documents.
+- **CLI** — the `skillflow-run` commands below; works with nothing but a
+  shell.
+
+The rest of this document describes the protocol in CLI terms; MCP tool
+parameters map 1:1 (`--result '{"k":"v"}'` ⇔ `result={"k": "v"}`).
 
 ## CLI reference
 
@@ -57,7 +71,13 @@ Agent                         skillflow-run
   "validation_error": ""
 }
 ```
-If `expected_files` is non-empty, **write those files to `output_dir`** before calling `submit`. The `output_dir` is a `.tmp` staging directory — skillflow promotes files from `.tmp/` to the final step directory on successful submit. Use the `tools` (write_*/create_*/append_* helpers) to understand the expected format for each file. Call `submit` with your result to advance.
+Deliver each expected output EITHER by passing it in `submit` —
+`--result '{"<slot>": "<content>"}'` / `result={"<slot>": <content>}` — OR,
+on MCP, by writing it first via the `skillflow_tool` proxy
+(`skillflow_tool(run_id, step_id, name="write_<slot>", params={"content": ...})`)
+and then submitting with an empty result. Do NOT write these files with your
+own file tools — the staging directory belongs to skillflow. The instruction's
+"Expected outputs" section lists each slot and its format.
 
 If `validation_error` is non-empty, the previous `submit` was rejected. Fix the issue described and re-submit.
 
