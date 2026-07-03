@@ -66,6 +66,21 @@ def sf_with_workspace(tmp_path, mock_tools):
     )
 
 
+@pytest.fixture
+def sf_with_trace_db(tmp_path, mock_tools):
+    """SkillFlow with mock ToolLoader + per-project trace DB.
+
+    Use for testing trace writes/reads against per-project trace.db files
+    instead of the shared skillflow_trace table.
+    """
+    return SkillFlow(
+        ":memory:",
+        tool_loader=mock_tools,
+        workspace_base=str(tmp_path / "workspaces"),
+        trace_db_path=str(tmp_path / "workspaces"),
+    )
+
+
 # ── Agent config names used in dpe_full.yaml ──────────────────────
 
 DPE_AGENT_CONFIGS = [

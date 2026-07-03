@@ -132,7 +132,8 @@ class SkillFlow:
                  code_dir: str = "",
                  code_path_resolver: "Callable[[str], str | None] | None" = None,
                  delegate_tools_to_agent: bool = False,
-                 trace_enabled: bool = True):
+                 trace_enabled: bool = True,
+                 trace_db_path: str | None = None):
         self._db_path = db_path
         self._graphs: dict[str, PipelineGraph] = {}
         self._resolvers: dict[str, GraphResolver] = {}
@@ -144,6 +145,12 @@ class SkillFlow:
         # Set trace_enabled=False to disable the trace entirely (zero write
         # overhead) for latency-sensitive hosts.
         self._trace_enabled = trace_enabled
+        # Per-project trace DB: when set, trace records are written to
+        # {trace_db_path}/{project_id}/trace.db instead of the shared DB.
+        # None (default) = backward-compat: trace goes into the shared
+        # skillflow_trace table in self._conn.
+        self._trace_db_path = trace_db_path
+        self._trace_conns: dict[str, sqlite3.Connection] = {}
         self._load_native_tools()
         self._stale_threshold = stale_threshold_seconds
         self._workspace = None
@@ -219,6 +226,71 @@ class SkillFlow:
         if self._tool_loader is None:
             return True
         return not self._tool_loader.is_native(tool_name)
+
+    # ── Per-project trace DB helpers ──────────────────────────────────
+
+    def _trace_db_path_for(self, project_id: str) -> Path | None:
+        """Return the per-project trace DB path, or None if not configured."""
+        if not self._trace_db_path or not project_id:
+            return None
+        return Path(self._trace_db_path) / project_id / "trace.db"
+
+    def _get_trace_conn(self, project_id: str) -> sqlite3.Connection | None:
+        """Get or create a cached SQLite connection for a project's trace.db.
+
+        Returns None when per-project trace DBs are not configured (backward
+        compat — caller should fall back to self._conn).
+        """
+        if not self._trace_db_path:
+            return None
+        if project_id in self._trace_conns:
+            return self._trace_conns[project_id]
+        db_path = self._trace_db_path_for(project_id)
+        if db_path is None:
+            return None
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout = 5000;")
+        self._ensure_trace_table(conn)
+        self._trace_conns[project_id] = conn
+        return conn
+
+    @staticmethod
+    def _ensure_trace_table(conn: sqlite3.Connection) -> None:
+        """Create the skillflow_trace table in a per-project DB if missing."""
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS skillflow_trace (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id           TEXT NOT NULL,
+                step_id          TEXT,
+                step_instance_id INTEGER,
+                seq              INTEGER NOT NULL,
+                category         TEXT NOT NULL,
+                event            TEXT NOT NULL,
+                payload_json     TEXT NOT NULL DEFAULT '{}',
+                created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_skillflow_trace_run "
+            "ON skillflow_trace(run_id, seq)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_skillflow_trace_step "
+            "ON skillflow_trace(step_instance_id)"
+        )
+        conn.commit()
+
+    def _close_trace_conn(self, project_id: str) -> None:
+        """Close and evict a cached per-project trace connection."""
+        conn = self._trace_conns.pop(project_id, None)
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     @contextmanager
     def _tx(self):
@@ -593,8 +665,11 @@ class SkillFlow:
         """Delete all skillflow state for a project.
 
         Removes runs, steps, edge counts, loop state, outbox events,
-        durable trace, and the project row itself.  Safe to call even if
-        the project has no runs.
+        trace records, and the project row itself.  When per-project trace
+        DBs are active, the cached connection is closed so the caller can
+        safely delete the workspace directory (including ``trace.db``)
+        from the filesystem; shared-DB trace rows are deleted inline.
+        Safe to call even if the project has no runs.
         """
         with self._tx() as conn:
             # Collect all run IDs for this project
@@ -610,9 +685,17 @@ class SkillFlow:
                 conn.execute("DELETE FROM skillflow_loop_state WHERE run_id = ?", (run_id,))
                 conn.execute("DELETE FROM skillflow_outbox WHERE payload_json LIKE ?",
                              (f"%{run_id}%",))
-                conn.execute("DELETE FROM skillflow_trace WHERE run_id = ?", (run_id,))
+                # Shared-DB mode: delete trace rows from the main DB.
+                # Per-project mode: the caller handles trace.db via filesystem.
+                if not self._trace_db_path:
+                    conn.execute(
+                        "DELETE FROM skillflow_trace WHERE run_id = ?", (run_id,))
             conn.execute("DELETE FROM skillflow_runs WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM skillflow_projects WHERE id = ?", (project_id,))
+        # Per-project mode: close the cached connection so the workspace
+        # directory (including trace.db) can be safely deleted.
+        if self._trace_db_path:
+            self._close_trace_conn(project_id)
 
     # ── Query APIs ──────────────────────────────────────────────────
 
@@ -3126,7 +3209,8 @@ class SkillFlow:
 
     def trace(self, run_id: str, category: str, event: str,
               payload: dict | None = None, *, step_id: str = "",
-              step_instance_id: int | None = None) -> None:
+              step_instance_id: int | None = None,
+              project_id: str = "") -> None:
         """Append one durable trace record for a run.
 
         category: one of 'event' | 'prompt' | 'response' | 'tool_call' |
@@ -3134,11 +3218,20 @@ class SkillFlow:
         event:    a short verb/name (e.g. 'tool_call', 'on_deliver',
                   'agent_response').
         payload:  arbitrary JSON-able detail; long strings are clipped.
+
+        When ``trace_db_path`` was set at construction and ``project_id`` is
+        provided, the record is written to ``{trace_db_path}/{project_id}/trace.db``
+        instead of the shared DB.  Falls back to the shared ``skillflow_trace``
+        table otherwise (backward-compat).
         """
         if not run_id or not self._trace_enabled:
             return
         clean = {k: self._clip(v) for k, v in (payload or {}).items()}
         try:
+            # Resolve target connection: per-project DB when configured,
+            # otherwise the shared DB (backward-compat).
+            conn = self._get_trace_conn(project_id) if project_id else None
+            target = conn or self._conn
             with self._lock:
                 # seq is computed INSIDE the insert, atomically per statement.
                 # The old in-process counter (seeded once from MAX) was only
@@ -3148,7 +3241,7 @@ class SkillFlow:
                 # contract keyset pagination and trace consumers rely on.
                 # The (run_id, seq) index makes the MAX an O(log n) seek, and
                 # the per-record commit fsync dwarfs it anyway.
-                self._conn.execute(
+                target.execute(
                     """
                     INSERT INTO skillflow_trace
                         (run_id, step_id, step_instance_id, seq, category, event, payload_json)
@@ -3158,20 +3251,39 @@ class SkillFlow:
                     (run_id, step_id or None, step_instance_id,
                      category, event, self._serialize(clean), run_id),
                 )
-                self._conn.commit()
+                target.commit()
         except Exception:
             # Tracing must never break a run.
             pass
 
     def prune_trace(self, run_id: str | None = None, *,
                     keep_last_runs: int | None = None) -> int:
-        """Delete trace records to bound growth (the table is append-only).
+        """Delete trace records to bound growth.
 
-        - run_id: drop all trace for one run.
-        - keep_last_runs: keep only the N most recently-traced runs, drop older.
-        Returns the number of rows deleted. Host calls this as housekeeping
-        (e.g. on run deletion or a periodic cap); skillflow never auto-prunes.
+        - run_id: when per-project trace DBs are active, this resolves the
+          project from the run and closes/removes its cached connection so
+          the caller can delete ``trace.db`` from the filesystem. When
+          using the shared DB, deletes rows from ``skillflow_trace``.
+        - keep_last_runs: only meaningful with the shared DB; with per-project
+          DBs this is a no-op (each project has its own file — bound by
+          filesystem lifecycle, not row count).
+        Returns the number of rows deleted (shared-DB mode) or 0 otherwise.
         """
+        # Per-project DB mode: close the cached connection so the file can
+        # be safely removed from the filesystem.
+        if self._trace_db_path:
+            if run_id is not None:
+                pid = self._get_project_id(run_id)
+                if pid:
+                    self._close_trace_conn(pid)
+            if keep_last_runs is not None:
+                import logging
+                logging.getLogger("skillflow").warning(
+                    "prune_trace(keep_last_runs=…) is a no-op with per-project "
+                    "trace DBs — each project has its own trace.db file")
+            return 0
+
+        # Shared-DB mode (backward compat).
         deleted = 0
         with self._lock:
             if run_id is not None:
@@ -3206,6 +3318,15 @@ class SkillFlow:
         ``limit`` bounds the page. With no cursor/limit the full ordered trace is
         returned (original behavior).
         """
+        # Resolve target connection: per-project trace DB when active.
+        conn = self._conn
+        if self._trace_db_path:
+            pid = self._get_project_id(run_id)
+            if pid:
+                pconn = self._get_trace_conn(pid)
+                if pconn:
+                    conn = pconn
+
         descending = str(order).lower() == "desc"
         q = "SELECT seq, step_id, step_instance_id, category, event, payload_json, created_at " \
             "FROM skillflow_trace WHERE run_id = ?"
@@ -3227,7 +3348,7 @@ class SkillFlow:
             q += " LIMIT ?"
             args.append(limit)
         out = []
-        for r in self._conn.execute(q, args).fetchall():
+        for r in conn.execute(q, args).fetchall():
             out.append({
                 "seq": r["seq"], "step_id": r["step_id"],
                 "step_instance_id": r["step_instance_id"],
@@ -3237,11 +3358,36 @@ class SkillFlow:
             })
         return out
 
+    def trace_query(self, run_id: str, sql: str,
+                    params: tuple = ()) -> list[sqlite3.Row]:
+        """Run a raw SELECT query against the trace DB for a run.
+
+        Resolves the correct database (per-project ``trace.db`` when active,
+        shared DB otherwise) so callers like cache-stats aggregators can
+        run custom aggregations without knowing the storage layout.
+        Only SELECT queries are allowed.
+        """
+        if not sql.strip().upper().lstrip().startswith("SELECT"):
+            raise ValueError("trace_query only supports SELECT statements")
+
+        conn = self._conn
+        if self._trace_db_path:
+            pid = self._get_project_id(run_id)
+            if pid:
+                pconn = self._get_trace_conn(pid)
+                if pconn:
+                    conn = pconn
+        return conn.execute(sql, params).fetchall()
+
     def _get_project_id(self, run_id: str) -> str:
         row = self._conn.execute(
             "SELECT project_id FROM skillflow_runs WHERE id = ?", (run_id,)
         ).fetchone()
         return row["project_id"] if row else ""
+
+    def get_project_id(self, run_id: str) -> str:
+        """Public accessor for the project_id of a run."""
+        return self._get_project_id(run_id)
 
     def _get_graph_name(self, run_id: str) -> str:
         row = self._conn.execute(

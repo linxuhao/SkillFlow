@@ -14,6 +14,7 @@ import threading
 import pytest
 
 from skillflow.core import SkillFlow
+from skillflow.graph import PipelineGraph, StepNode
 
 
 def _seqs(sf, run_id):
@@ -86,3 +87,67 @@ def test_seq_is_per_run(tmp_path):
     sf.trace("run-a", "step", "e")
     assert _seqs(sf, "run-a") == [1, 2]
     assert _seqs(sf, "run-b") == [1]
+
+
+def test_per_project_trace_db_writes_and_reads(sf_with_trace_db):
+    """Trace writes go to per-project trace.db, not the shared DB."""
+    sf = sf_with_trace_db
+
+    # Create a run that belongs to a project.
+    sf.register_agent_config("mock", model="mock", tools=[])
+    graph = _multi_step_graph()
+    sf.register_graph(graph)
+    run_id = sf.create_run("simple", {"project_id": "proj-abc"})
+
+    # Trace with project_id — should write to per-project DB.
+    sf.trace(run_id, "step", "claimed", project_id="proj-abc")
+    sf.trace(run_id, "prompt", "user", {"text": "hello"},
+             project_id="proj-abc")
+
+    # get_trace resolves the per-project DB automatically.
+    traces = sf.get_trace(run_id)
+    assert len(traces) == 2
+    assert traces[0]["seq"] == 1
+    assert traces[0]["category"] == "step"
+    assert traces[1]["seq"] == 2
+    assert traces[1]["category"] == "prompt"
+
+    # The shared DB should have no trace rows for this run.
+    shared_traces = [r[0] for r in sf._conn.execute(
+        "SELECT seq FROM skillflow_trace WHERE run_id = ?", (run_id,)
+    ).fetchall()]
+    assert shared_traces == []
+
+
+def test_per_project_trace_db_delete_project(sf_with_trace_db, tmp_path):
+    """delete_project closes the cached trace connection but doesn't
+    touch the shared DB's skillflow_trace table."""
+    sf = sf_with_trace_db
+
+    sf.register_agent_config("mock", model="mock", tools=[])
+    graph = _multi_step_graph()
+    sf.register_graph(graph)
+    run_id = sf.create_run("simple", {"project_id": "proj-del"})
+
+    sf.trace(run_id, "step", "claimed", project_id="proj-del")
+    assert len(sf.get_trace(run_id)) == 1
+
+    # Delete the project — trace.db still exists on disk (caller
+    # handles filesystem cleanup), but the cached connection is closed.
+    sf.delete_project("proj-del")
+    # Verify cached connection is evicted.
+    assert "proj-del" not in sf._trace_conns
+
+    # The trace.db file exists and can be read directly.
+    trace_db = tmp_path / "workspaces" / "proj-del" / "trace.db"
+    assert trace_db.exists()
+
+
+def _multi_step_graph():
+    from skillflow.graph import PipelineGraph, StepNode
+    return PipelineGraph(
+        name="simple", begin="a",
+        steps=[
+            StepNode(id="a", name="Step A", agent_config="mock"),
+        ],
+    )
