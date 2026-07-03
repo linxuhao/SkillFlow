@@ -193,6 +193,14 @@ class RunnerService:
         if run is None:
             return {"error": f"Run not found: {run_id}"}
 
+        # finish_step is step-CONTROL, not a write: it means "all outputs are
+        # staged, complete the step". Routed to sf.execute_tool it returns a
+        # success-looking echo WITHOUT confirming the step, leaving the run
+        # stuck on a claimed step — so map it to submit, which is the runner
+        # protocol's single completion verb.
+        if name in ("finish_step", "end_step"):
+            return self.submit(run_id, step_id, {})
+
         # Name-prefix guessing would misclassify common host tools
         # (edit_file, read_code_file...) as skillflow's — instead, check the
         # exact set of names this run's GRAPH can generate, plus registered

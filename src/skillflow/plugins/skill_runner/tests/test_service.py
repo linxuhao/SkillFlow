@@ -168,3 +168,16 @@ class TestExecuteStepTool:
     def test_unknown_run_rejected(self, service):
         out = service.execute_step_tool("ghost", "plan", "write_plan", {})
         assert "Run not found" in out["error"]
+
+    def test_finish_step_maps_to_submit(self, service):
+        # finish_step through the proxy must CONFIRM the step — routed to
+        # sf.execute_tool it returned a success-looking echo while leaving the
+        # run stuck on a claimed step (found live).
+        run_id = service.start("gated_task", project_id="p1",
+                               seeds={"task.md": "t"})["run_id"]
+        service.execute_step_tool(run_id, "plan", "write_plan",
+                                  {"content": "## plan"})
+        out = service.execute_step_tool(run_id, "plan", "finish_step",
+                                        {"summary": "done"})
+        assert out["status"] == "paused"  # step confirmed → checkpoint reached
+        assert service.status(run_id)["status"] == "paused"

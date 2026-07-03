@@ -85,7 +85,7 @@ Native tools (13): read_file, write, list_tree, dir_tree, json_schema, syntax_li
 ## Plugins (`src/skillflow/plugins/`)
 
 - `linter` — pipeline-YAML linter; also exposed as the `skillflow_lint` tool + the `skillflow-lint` CLI.
-- `skill_runner` — host-delegated runner mode behind `skillflow-run` (resolves path variables in delegated tool-node params).
+- `skill_runner` — host-delegated runner mode. Three transports over one core: `RunnerService` (`service.py` — in-process embed: start guard, seeding, stateless reconnect, `execute_step_tool` proxy with host-tool redirect, finish_step→submit mapping), the `skillflow-run` CLI, and `skillflow-mcp` (`mcp_server.py`, typed MCP tools over stdio; optional extra `skillflow-py[mcp]`). PromptAssembler emits a transport-neutral slot contract — never advertise write_*/finish_step as directly-callable functions.
 - `skill_converter` — skill→pipeline graph (host-mode agents) behind `skillflow-convert`; AItelier registers it to power its `generate_pipeline` butler tool.
 
 ## Host integration

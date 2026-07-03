@@ -6,7 +6,7 @@
 
 Config-agnostic LLM pipeline graph executor with **human-in-the-loop by design**. Define multi-agent pipelines as YAML DAGs — skillflow handles deterministic traversal, tool execution, approval/reject checkpoints, loops, recovery, a full durable audit trace, and event streaming on SQLite. Provider-agnostic, custom tools, clean per-agent context.
 
-Two ways agents plug in: **embed** skillflow in a host app so it *drives* real agents step-by-step (forced execution order — see [Framework Mode](#framework-mode)), or have an **external agent** (e.g. Goose) drive pipelines over a stateless CLI ([Runner Mode](#runner-mode)). An agent can even *generate* a pipeline from a natural-language description (`skillflow-convert`) and then execute it.
+Two ways agents plug in: **embed** skillflow in a host app so it *drives* real agents step-by-step (forced execution order — see [Framework Mode](#framework-mode)), or have an **external agent** drive pipelines over a stateless protocol ([Runner Mode](#runner-mode)) — via the `skillflow-run` CLI or as typed **MCP tools** (`skillflow-mcp`, works with Claude Code / opencode / any MCP host with zero agent-side code). An agent can even *generate* a pipeline from a natural-language description (`skillflow-convert`) and then execute it.
 
 ## Why Skillflow
 
@@ -38,6 +38,7 @@ CLI commands registered in `~/.local/bin/`:
 |---------|-------------|
 | `skillflow-lint` | Validate pipeline YAML files (one-shot) |
 | `skillflow-run` | Stateless pipeline runner (agent calls via CLI) |
+| `skillflow-mcp` | Same runner protocol as typed MCP tools over stdio (`pip install skillflow-py[mcp]`) |
 | `skillflow-convert` | Convert a skill description → pipeline YAML |
 
 ```bash
@@ -138,6 +139,36 @@ $ skillflow-run --action reject --run-id abc123 \
 | `tool_name` | Tool steps | Tool the agent must execute |
 | `tool_params` | Tool steps | Parameters for the tool |
 | `tools` | Agent steps | Write helpers (`write_*`, `create_*`, `append_*`) with format specs |
+
+#### MCP transport (`skillflow-mcp`)
+
+The same protocol is available as typed MCP tools — any MCP-speaking agent
+(Claude Code, opencode, ...) drives pipelines with **zero agent-side code**
+and no shell quoting of documents:
+
+```jsonc
+// e.g. .mcp.json
+{ "mcpServers": { "skillflow": {
+    "command": "skillflow-mcp",
+    "args": ["--db", "~/.skillflow/skillflow.db",
+             "--workspace", "~/.skillflow/ws",
+             "--graphs", "./graphs",
+             "--agent-configs", "./graphs/agents.yaml"] } } }
+```
+
+Tools: `runner_start` / `runner_next` / `runner_status` / `runner_submit` /
+`runner_approve` / `runner_reject`, plus `skillflow_tool(run_id, step_id,
+name, params)` — a proxy that executes the *current step's* skillflow tools
+(`write_<slot>`, `read_*`, native tools) server-side with allowlisting and
+tracing; host-tool names are bounced with a redirecting error. Stdio
+transport means no standing server: the agent spawns the process per session,
+and all state lives in SQLite — a crashed client reconnects with
+`runner_next(run_id)`. Requires the optional extra: `pip install
+skillflow-py[mcp]`.
+
+Both transports (and in-process hosts) share one core:
+`RunnerService` in `skillflow.plugins.skill_runner` — embed it directly when
+your host process already owns a `SkillFlow` instance.
 
 ## Node Types
 
