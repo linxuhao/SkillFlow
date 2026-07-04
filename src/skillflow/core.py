@@ -3263,6 +3263,11 @@ class SkillFlow:
         try:
             # Resolve target connection: per-project DB when configured,
             # otherwise the shared DB (backward-compat).
+            # Auto-resolve project_id from run_id when not explicitly passed,
+            # so callers that only have a run_id (e.g. the _trace closure in
+            # claim_next_step) still route to the per-project trace.db.
+            if not project_id:
+                project_id = self._get_project_id(run_id)
             conn = self._get_trace_conn(project_id) if project_id else None
             target = conn or self._conn
             with self._lock:
