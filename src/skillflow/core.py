@@ -2324,6 +2324,22 @@ class SkillFlow:
                 error_str = tool_result.get("error", "Tool failed")
                 self._inject_feedback_in_tx(conn, run_id, _t.to, error_str)
             if target:
+                # Count this traversal so max_loop is enforced on a TOOL step's
+                # OUTGOING edge, exactly as advance_run's main path does for
+                # agent-originated edges. Without it a tool step that loops back
+                # (e.g. a run_tests gate → implementer) would never trip
+                # max_loop → the loop runs unbounded. Once the count reaches
+                # max_loop, resolve_transition above raises CycleLimitExceeded
+                # (caught → run fails) on the next pass.
+                conn.execute(
+                    """
+                    INSERT INTO skillflow_edge_counts (run_id, from_step, to_step, count, max_loop)
+                    VALUES (?, ?, ?, 1, NULL)
+                    ON CONFLICT(run_id, from_step, to_step)
+                    DO UPDATE SET count = count + 1
+                    """,
+                    (run_id, step_id, target),
+                )
                 ec = resolver.graph.end_conditions
                 if ec and ec.conditions:
                     end_result = self._evaluate_end_conditions(
@@ -2617,6 +2633,23 @@ class SkillFlow:
                                 conn, run_id,
                                 f"Pipeline completed at gate '{current}'")
                             return None
+                        # Count this gate traversal so max_loop is enforced on a
+                        # gate's outgoing edge in the pre-resolved path too (a
+                        # gate reached FROM a tool step resolves here, not in the
+                        # main path). Update the in-memory dict as well so a gate
+                        # chain that loops within this single pass sees its own
+                        # increments.
+                        conn.execute(
+                            """
+                            INSERT INTO skillflow_edge_counts (run_id, from_step, to_step, count, max_loop)
+                            VALUES (?, ?, ?, 1, NULL)
+                            ON CONFLICT(run_id, from_step, to_step)
+                            DO UPDATE SET count = count + 1
+                            """,
+                            (run_id, current, gtarget),
+                        )
+                        edge_counts[(current, gtarget)] = \
+                            edge_counts.get((current, gtarget), 0) + 1
                         current = gtarget
                     if gate_depth >= 1000:
                         self._fail_run_in_tx(conn, run_id, "Gate resolution exceeded 1000 iterations")

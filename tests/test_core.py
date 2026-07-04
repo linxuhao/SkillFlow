@@ -757,6 +757,95 @@ class TestToolNodeExecution:
         next_node = sf.advance_run(rid)
         assert next_node == "impl"
 
+    def _drive_to_end(self, sf, rid, max_ticks=50):
+        """Advance a graph to termination, confirming agent steps with empty
+        results (tool/gate nodes resolve inline). Returns the final status."""
+        for _ in range(max_ticks):
+            node = sf.advance_run(rid)
+            run = sf.get_run(rid)
+            if node is None:
+                if run["status"] == "running":
+                    continue
+                return run["status"]
+            claimed = sf.claim_next_step(rid)
+            if claimed is None:
+                continue
+            sf.confirm_step(claimed.token, StepResult(flags={}))
+        return "TIMEOUT"
+
+    def test_tool_step_loopback_respects_max_loop(self, sf):
+        """A TOOL step that loops back with max_loop=N must FAIL the run after N
+        traversals, not loop forever. Regression: _complete_tool_step resolved
+        the tool's outgoing transition but never incremented skillflow_edge_counts
+        (unlike advance_run's agent/main path), so max_loop on a tool-originated
+        edge was inert and the loop was unbounded."""
+        from skillflow.graph import (PipelineGraph, StepNode, Transition,
+                                      EndCondition, EndConditions)
+        from unittest.mock import MagicMock
+
+        calls = {"n": 0}
+        def run_tests(**kw):
+            calls["n"] += 1
+            return {"passed": False}  # never goes green
+        mock = MagicMock()
+        mock.load_fn.return_value = run_tests
+        mock.load_schema.return_value = {"name": "run_tests"}
+
+        g = PipelineGraph(name="tl", begin="impl", steps=[
+            StepNode(id="impl", step_type="agent",
+                     transitions=[Transition(to="test")]),
+            StepNode(id="test", step_type="tool", tool_name="run_tests",
+                     transitions=[
+                         Transition(to="done", match={"passed": True}),
+                         Transition(to="impl", match={"passed": False}, max_loop=3),
+                     ]),
+            StepNode(id="done", step_type="gate",
+                     transitions=[Transition(to=None)]),
+        ], end_conditions=EndConditions(combinator="or", conditions=[
+            EndCondition(type="node_reached", node="done", result="completed")]))
+        sf.register_graph(g)
+        sf._tool_loader = mock
+        rid = sf.create_run("tl"); sf.start_run(rid)
+
+        assert self._drive_to_end(sf, rid) == "failed"
+        assert calls["n"] == 4  # initial run + 3 retries (max_loop=3), then bounded
+
+    def test_gate_after_tool_respects_max_loop(self, sf):
+        """A GATE reached FROM a tool step resolves in advance_run's pre-resolved
+        gate path, which also failed to count its outgoing edges — so a gate that
+        loops back there ran unbounded too. max_loop must now be enforced."""
+        from skillflow.graph import (PipelineGraph, StepNode, Transition,
+                                      EndCondition, EndConditions)
+        from unittest.mock import MagicMock
+
+        calls = {"n": 0}
+        def run_tests(**kw):
+            calls["n"] += 1
+            return {"passed": False}
+        mock = MagicMock()
+        mock.load_fn.return_value = run_tests
+        mock.load_schema.return_value = {"name": "run_tests"}
+
+        g = PipelineGraph(name="gt", begin="impl", steps=[
+            StepNode(id="impl", step_type="agent",
+                     transitions=[Transition(to="test")]),
+            StepNode(id="test", step_type="tool", tool_name="run_tests",
+                     transitions=[Transition(to="check")]),
+            StepNode(id="check", step_type="gate", transitions=[
+                Transition(to="done", match={"passed": True}),
+                Transition(to="impl", match={"passed": False}, max_loop=2),
+            ]),
+            StepNode(id="done", step_type="gate",
+                     transitions=[Transition(to=None)]),
+        ], end_conditions=EndConditions(combinator="or", conditions=[
+            EndCondition(type="node_reached", node="done", result="completed")]))
+        sf.register_graph(g)
+        sf._tool_loader = mock
+        rid = sf.create_run("gt"); sf.start_run(rid)
+
+        assert self._drive_to_end(sf, rid) == "failed"
+        assert calls["n"] == 3  # initial run + 2 retries (max_loop=2 on check→impl)
+
     def test_create_run_populates_v2_step_fields(self, sf):
         from skillflow.graph import PipelineGraph, StepNode
         sf.register_agent_config_from_dict("researcher", {"model": "test", "template": "test.md"})
