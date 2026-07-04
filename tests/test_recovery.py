@@ -114,12 +114,15 @@ def test_recover_respects_tool_timeout_seconds(sf: SkillFlow):
     assert st["status"] == "claimed"  # still held, not stolen
 
     # Backdate beyond the 1200s tool timeout → now presumed dead → reclaimed.
-    claimed_1300s_ago = time.strftime(
-        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 1300))
+    # Backdate updated_at too (the activity clock): a tool emits no intra-run
+    # activity, so a truly dead one has been silent since it was claimed.
+    silent_1300s = time.strftime(
+        "%Y-%m-%d %H:%M:%S", time.gmtime(time.time() - 1300))
     with sf._lock:
         sf._conn.execute(
-            "UPDATE skillflow_steps SET claimed_at=? WHERE run_id=? AND step_id='a'",
-            (claimed_1300s_ago, run_id))
+            "UPDATE skillflow_steps SET claimed_at=?, updated_at=? "
+            "WHERE run_id=? AND step_id='a'",
+            (silent_1300s.replace(" ", "T") + "Z", silent_1300s, run_id))
         sf._conn.commit()
     assert run_id in sf.recover_stale_claims(stale_threshold_seconds=60)
 
@@ -204,6 +207,60 @@ def test_recover_stale_claims_fresh_not_affected(sf: SkillFlow):
     # Default threshold — just-claimed step is fresh
     recovered = sf.recover_stale_claims(stale_threshold_seconds=300)
     assert len(recovered) == 0
+
+
+def _seed_claimed_agent(sf, run_id, *, claimed_ago, updated_ago):
+    """Insert a claimed agent step with claimed_at/updated_at backdated by the
+    given seconds (updated_at = the activity clock)."""
+    claimed = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                            time.gmtime(time.time() - claimed_ago))
+    updated = time.strftime("%Y-%m-%d %H:%M:%S",
+                            time.gmtime(time.time() - updated_ago))
+    with sf._lock:
+        sf._conn.execute(
+            "INSERT INTO skillflow_steps (run_id, step_id, step_config_json, "
+            "inputs_json, max_retries, status, claimed_at, created_at, updated_at) "
+            "VALUES (?, 'a', '{}', '{}', 3, 'claimed', ?, datetime('now'), ?)",
+            (run_id, claimed, updated))
+        sf._conn.commit()
+
+
+def test_activity_heartbeat_protects_slow_agent(sf: SkillFlow):
+    """An agent claimed long ago but ACTIVE recently (fresh updated_at) is NOT
+    reaped — staleness is silence, not total runtime. This is the fix for a slow
+    reviewer being falsely recovered mid-run."""
+    graph = PipelineGraph(name="test", begin="a", steps=[_agent("a", [])])
+    sf.register_graph(graph)
+    run_id = sf.create_run("test")
+    sf.start_run(run_id)
+    # Claimed 1000s ago, but last activity 10s ago → alive.
+    _seed_claimed_agent(sf, run_id, claimed_ago=1000, updated_ago=10)
+    assert sf.recover_stale_claims(stale_threshold_seconds=300) == []
+
+
+def test_silent_agent_is_reaped(sf: SkillFlow):
+    """An agent that has been SILENT longer than the window (no heartbeat) is
+    reaped — dead/hung workers are still recovered."""
+    graph = PipelineGraph(name="test", begin="a", steps=[_agent("a", [])])
+    sf.register_graph(graph)
+    run_id = sf.create_run("test")
+    sf.start_run(run_id)
+    # Both claimed and last-active 1000s ago → silent → dead.
+    _seed_claimed_agent(sf, run_id, claimed_ago=1000, updated_ago=1000)
+    assert run_id in sf.recover_stale_claims(stale_threshold_seconds=300)
+
+
+def test_trace_refreshes_liveness(sf: SkillFlow):
+    """A trace() call heartbeats the claimed step (bumps updated_at), so a step
+    that was about to look stale is kept alive by activity."""
+    graph = PipelineGraph(name="test", begin="a", steps=[_agent("a", [])])
+    sf.register_graph(graph)
+    run_id = sf.create_run("test")
+    sf.start_run(run_id)
+    _seed_claimed_agent(sf, run_id, claimed_ago=1000, updated_ago=1000)
+    # One worker action → heartbeat refreshes updated_at → no longer stale.
+    sf.trace(run_id, "tool_call", "edit", {"x": 1}, step_id="a")
+    assert sf.recover_stale_claims(stale_threshold_seconds=300) == []
 
 
 def test_recover_stale_claims_no_stale_steps(sf: SkillFlow):

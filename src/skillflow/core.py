@@ -7,6 +7,7 @@ SQLite connection (single-worker model) with WAL mode for safety.
 
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import sqlite3
@@ -151,6 +152,13 @@ class SkillFlow:
         # skillflow_trace table in self._conn.
         self._trace_db_path = trace_db_path
         self._trace_conns: dict[str, sqlite3.Connection] = {}
+        # Activity-based liveness: each trace() marks the claimed step alive by
+        # bumping its updated_at (throttled via this map: (run_id, step_id) ->
+        # last-heartbeat epoch). recover_stale_claims then measures SILENCE
+        # (now - updated_at), not total runtime, so a slow-but-active step is
+        # never reaped while a truly dead/hung one still is.
+        self._hb_last: dict[tuple[str, str], float] = {}
+        self._hb_min_interval = 25.0  # seconds between heartbeat writes per step
         self._load_native_tools()
         self._stale_threshold = stale_threshold_seconds
         self._workspace = None
@@ -3106,6 +3114,51 @@ class SkillFlow:
 
             return next_node
 
+    # ── Liveness heartbeat ────────────────────────────────────────
+
+    def _heartbeat_step(self, run_id: str, step_id: str) -> None:
+        """Mark a claimed step alive by bumping its updated_at (throttled).
+
+        Called from trace() on every worker action. recover_stale_claims reads
+        updated_at as the activity clock, so a step is reaped for SILENCE, not
+        total runtime — a slow-but-active agent is never falsely recovered.
+        Best-effort: never raise into the caller's hot path.
+        """
+        if not run_id or not step_id:
+            return
+        key = (run_id, step_id)
+        now = time.time()
+        last = self._hb_last.get(key, 0.0)
+        if now - last < self._hb_min_interval:
+            return
+        self._hb_last[key] = now
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "UPDATE skillflow_steps SET updated_at = datetime('now') "
+                    "WHERE run_id = ? AND step_id = ? AND status = 'claimed'",
+                    (run_id, step_id),
+                )
+                self._conn.commit()
+        except Exception:
+            pass  # liveness must never break a run
+
+    @staticmethod
+    def _ts_to_epoch(ts: str | None) -> float | None:
+        """Parse a stored UTC timestamp to epoch seconds, accepting both the
+        strftime ``YYYY-MM-DDTHH:MM:SSZ`` (claimed_at) and SQLite
+        ``datetime('now')`` ``YYYY-MM-DD HH:MM:SS`` (updated_at) formats."""
+        if not ts:
+            return None
+        s = ts.strip().replace("T", " ")
+        if s.endswith("Z"):
+            s = s[:-1]
+        s = s.split(".", 1)[0]  # drop any fractional seconds
+        try:
+            return calendar.timegm(time.strptime(s, "%Y-%m-%d %H:%M:%S"))
+        except Exception:
+            return None
+
     # ── Recovery ──────────────────────────────────────────────────
 
     def recover_stale_claims(self, stale_threshold_seconds: float = 300) -> list[str]:
@@ -3113,7 +3166,7 @@ class SkillFlow:
         with self._tx() as conn:
             claimed = conn.execute(
                 """
-                SELECT id, run_id, step_id, inputs_json, claimed_at
+                SELECT id, run_id, step_id, inputs_json, claimed_at, updated_at
                 FROM skillflow_steps WHERE status = 'claimed'
                 """,
             ).fetchall()
@@ -3124,10 +3177,15 @@ class SkillFlow:
             # threshold — reclaiming it relaunches the tool concurrently with
             # itself, piling up mutually-starving copies (the step-5 rampage).
             # Only a claim older than the tool's max legitimate runtime is
-            # presumed dead. Scoped to tool steps on purpose: agent-step
-            # reclaim timing is unchanged (it feeds a separate live
-            # investigation), and this is the only path prone to the rampage
-            # because inline tools re-launch on every advance_run.
+            # presumed dead.
+            #
+            # Staleness is measured against the ACTIVITY clock (updated_at),
+            # NOT the claim START (claimed_at). An agent step heartbeats
+            # updated_at on every trace() action, so a slow-but-active reviewer
+            # (many turns over minutes) is never reaped — only SILENCE longer
+            # than the window means the worker is dead or hung. A tool step
+            # emits no intra-run activity, so its updated_at == claimed_at and
+            # its window is its timeout_seconds (0 = never stale), unchanged.
             stale = []
             for row in claimed:
                 window = stale_threshold_seconds
@@ -3144,9 +3202,12 @@ class SkillFlow:
                             window = float(node.timeout_seconds)
                 except Exception:
                     pass
-                threshold = time.strftime(
-                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_epoch - window))
-                if row["claimed_at"] and row["claimed_at"] < threshold:
+                # Activity clock: updated_at (heartbeated) falling back to
+                # claimed_at. Epoch comparison is format-robust (claimed_at is
+                # ISO-Z, updated_at is SQLite space-format).
+                activity = row["updated_at"] or row["claimed_at"]
+                ep = self._ts_to_epoch(activity)
+                if ep is not None and (now_epoch - ep) > window:
                     stale.append(row)
             run_ids: set[str] = set()
             for row in stale:
@@ -3277,7 +3338,13 @@ class SkillFlow:
         instead of the shared DB.  Falls back to the shared ``skillflow_trace``
         table otherwise (backward-compat).
         """
-        if not run_id or not self._trace_enabled:
+        if not run_id:
+            return
+        # A trace call is proof the step's worker is alive → refresh its
+        # liveness heartbeat (throttled). Done before the trace_enabled gate so
+        # liveness holds even for hosts that disable the durable trace.
+        self._heartbeat_step(run_id, step_id)
+        if not self._trace_enabled:
             return
         clean = {k: self._clip(v) for k, v in (payload or {}).items()}
         try:
