@@ -82,7 +82,7 @@ def test_repo_apply_lands_in_existing_repo(tmp_path):
 
     # 2. It was committed there (repo_apply runs git add + commit).
     log = _git(existing, "log", "--oneline")
-    assert "step: s1" in log, f"no apply commit in existing repo:\n{log}"
+    assert "/s1:" in log, f"no apply commit in existing repo:\n{log}"
 
     # 3. It did NOT leak into the default workspace location.
     assert not (projects_base / "fixproj" / "server.py").exists()

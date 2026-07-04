@@ -1277,7 +1277,8 @@ def test_on_deliver_list_runs_tools_end_to_end(sf: SkillFlow, tmp_path: Path):
     assert (repo / "main.py").read_text() == "print('hi')\n"
     log = subprocess.run(["git", "log", "--oneline"], cwd=repo,
                          capture_output=True, text=True).stdout
-    assert "step: s1" in log, f"no apply commit:\n{log}"
+    # New traceable format: "<config>/<step>: … [<project>] (N file(s))"
+    assert "/s1:" in log, f"no apply commit:\n{log}"
 
 
 def test_on_deliver_list_order_and_on_failure(sf: SkillFlow, tmp_path: Path,

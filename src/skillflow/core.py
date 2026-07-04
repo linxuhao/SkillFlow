@@ -1421,6 +1421,7 @@ class SkillFlow:
         params = dict(hook_spec.get("params", {}))
 
         # Resolve variables
+        row = None
         if self._workspace:
             row = self._conn.execute(
                 "SELECT project_id, graph_name FROM skillflow_runs WHERE id = ?",
@@ -1449,6 +1450,25 @@ class SkillFlow:
                 fn = self._tool_loader.load_fn(tool_name)
                 params.setdefault("run_id", token.run_id)
                 params.setdefault("step_id", token.step_id)
+                # Inject run context so tools like repo_apply can build a
+                # traceable commit message (config/graph + project + task). The
+                # tool-STEP path injects these too; the lifecycle-hook path (this
+                # one, used by on_deliver → repo_apply) historically did not, so
+                # commits read a bare "step: work N file(s)". The kwarg filter
+                # below drops any a given tool doesn't accept.
+                if row:
+                    if row["project_id"]:
+                        params.setdefault("project_id", row["project_id"])
+                    if row["graph_name"]:
+                        params.setdefault("config_name", row["graph_name"])
+                    try:
+                        lr = self._conn.execute(
+                            "SELECT current_item FROM skillflow_loop_state "
+                            "WHERE run_id = ? LIMIT 1", (token.run_id,)).fetchone()
+                        if lr and lr["current_item"]:
+                            params.setdefault("task_name", lr["current_item"])
+                    except Exception:
+                        pass
                 # Filter kwargs to only what the function accepts
                 import inspect as _inspect
                 try:

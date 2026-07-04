@@ -9,7 +9,7 @@ from pathlib import Path
 def repo_apply(source_dir: str, *, workspace_root: str = "",
                project_root: str = "",
                step_id: str = "", project_id: str = "",
-               task_name: str = "", ignore=None) -> dict:
+               task_name: str = "", config_name: str = "", ignore=None) -> dict:
     src = Path(source_dir)
     if not src.is_absolute():
         src = Path(workspace_root) / source_dir
@@ -58,13 +58,17 @@ def repo_apply(source_dir: str, *, workspace_root: str = "",
         return {"applied": False, "files": applied_files,
                 "error": f"git add failed: {r.stderr.strip()}"}
 
-    # Build descriptive commit message
-    parts = [f"step: {step_id}"] if step_id else ["step: apply"]
+    # Build a descriptive, traceable commit message:
+    #   "<config>/<step>: <task> [<project>] (N file(s))"
+    # Each qualifier is included only when the caller supplied it, so a bare
+    # call still degrades to "apply: (N file(s))" rather than empty noise.
+    head = "/".join(p for p in (config_name, step_id) if p) or "apply"
+    parts = [f"{head}:"]
+    if task_name:
+        parts.append(task_name)
     if project_id:
         parts.append(f"[{project_id}]")
-    if task_name:
-        parts.append(f"{task_name}")
-    parts.append(f"{len(applied_files)} file(s)")
+    parts.append(f"({len(applied_files)} file(s))")
     msg = " ".join(parts)
 
     r = subprocess.run(

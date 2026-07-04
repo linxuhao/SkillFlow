@@ -135,6 +135,52 @@ class TestRepoApply:
         assert "main.py" in result["files"]
         assert (proj / "main.py").read_text() == "print('hello')"
 
+    def test_commit_message_is_traceable(self, tmp_path):
+        # The message must name the config, step, task and project so an
+        # offloaded run's commits are attributable — not a bare "step: work".
+        proj = tmp_path / "project"
+        proj.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=proj, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=proj, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=proj, capture_output=True)
+        (proj / ".gitkeep").write_text("")
+        subprocess.run(["git", "add", "."], cwd=proj, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=proj, capture_output=True)
+
+        draft = tmp_path / "draft"
+        draft.mkdir()
+        (draft / "a.py").write_text("x = 1")
+
+        result = repo_apply(source_dir=str(draft), workspace_root=str(tmp_path),
+                            project_root=str(proj), step_id="work",
+                            config_name="subagent", project_id="sub-abc123",
+                            task_name="add feature X")
+        assert result["committed"] is True
+        subject = subprocess.run(
+            ["git", "log", "-1", "--format=%s"], cwd=proj,
+            capture_output=True, text=True).stdout.strip()
+        assert subject == "subagent/work: add feature X [sub-abc123] (1 file(s))"
+
+    def test_commit_message_degrades_without_context(self, tmp_path):
+        # A bare call (no config/step/task) must still produce a sane subject.
+        proj = tmp_path / "project"
+        proj.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=proj, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=proj, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=proj, capture_output=True)
+        (proj / ".gitkeep").write_text("")
+        subprocess.run(["git", "add", "."], cwd=proj, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=proj, capture_output=True)
+        draft = tmp_path / "draft"
+        draft.mkdir()
+        (draft / "a.py").write_text("x = 1")
+        repo_apply(source_dir=str(draft), workspace_root=str(tmp_path),
+                   project_root=str(proj))
+        subject = subprocess.run(
+            ["git", "log", "-1", "--format=%s"], cwd=proj,
+            capture_output=True, text=True).stdout.strip()
+        assert subject == "apply: (1 file(s))"
+
     def test_no_files(self, tmp_path):
         proj = tmp_path / "project"
         proj.mkdir()
