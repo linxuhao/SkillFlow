@@ -3505,9 +3505,10 @@ class SkillFlow:
         return conn.execute(sql, params).fetchall()
 
     def _get_project_id(self, run_id: str) -> str:
-        row = self._conn.execute(
-            "SELECT project_id FROM skillflow_runs WHERE id = ?", (run_id,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT project_id FROM skillflow_runs WHERE id = ?", (run_id,)
+            ).fetchone()
         return row["project_id"] if row else ""
 
     def get_project_id(self, run_id: str) -> str:
@@ -3515,9 +3516,10 @@ class SkillFlow:
         return self._get_project_id(run_id)
 
     def _get_graph_name(self, run_id: str) -> str:
-        row = self._conn.execute(
-            "SELECT graph_name FROM skillflow_runs WHERE id = ?", (run_id,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT graph_name FROM skillflow_runs WHERE id = ?", (run_id,)
+            ).fetchone()
         return row["graph_name"] if row else ""
 
     # ── Host tool execution API ─────────────────────────────────────
