@@ -28,9 +28,9 @@ from pathlib import Path
 _MAX_READ_LINES = 2000
 
 # Directories never worth enumerating/searching as "source" — VCS internals and
-# build/dependency caches. Mirrors dir_tree/list_tree's BLOCKED set, which the
-# generated directory read tools previously lacked: a single list_repo_root on a
-# real repo dumped the whole .git tree (~64% of files) into the agent's context.
+# build/dependency caches. Mirrors dir_tree/list_tree's BLOCKED set: without it
+# a single `list`/`search` over a real repo would dump the whole .git tree
+# (~64% of files) into the agent's context.
 _BLOCKED_DIR_PARTS = {".git", "__pycache__", ".venv", "node_modules",
                       ".mypy_cache", ".pytest_cache", ".ruff_cache"}
 # Hard cap on entries returned by a directory listing so one call can't flood
@@ -198,358 +198,436 @@ def resolve_context_paths(
     return []
 
 
-# ── Label derivation ─────────────────────────────────────────────────
-
-def _derive_label(spec: dict, loop_context: dict | None = None) -> str:
-    """Derive a stable tool-name label from a context spec.
-
-    If *loop_context* is provided, ``$variable`` references in file
-    paths are resolved before deriving the label (so ``tasks/$current_task.json``
-    becomes ``tasks/frontend_product.json`` instead of the literal
-    ``$current_task``)."""
-
-    source_type = spec.get("source_type", "step")
-
-    if source_type == "step":
-        step_id = spec.get("step_id", "").replace("-", "_")
-        files = [_resolve_var_path(f, loop_context) for f in spec.get("files", [])]
-        if len(files) == 1:
-            name = Path(files[0]).stem.replace(".", "_").replace("-", "_")
-            return f"step_{step_id}_{name}"
-        return f"step_{step_id}"
-
-    elif source_type == "config":
-        cfg = spec.get("config_name", "").replace("-", "_")
-        step_id = spec.get("step_id", "").replace("-", "_")
-        files = [_resolve_var_path(f, loop_context) for f in spec.get("files", [])]
-        if step_id and len(files) == 1:
-            name = Path(files[0]).stem.replace(".", "_").replace("-", "_")
-            return f"config_{cfg}_{step_id}_{name}"
-        elif step_id:
-            return f"config_{cfg}_{step_id}"
-        return f"config_{cfg}"
-
-    elif source_type == "workspace":
-        path = _resolve_var_path(spec.get("path", ""), loop_context)
-        name = Path(path).stem.replace(".", "_").replace("-", "_")
-        return f"workspace_{name}" if name else "workspace"
-
-    elif source_type == "repository":
-        path = _resolve_var_path(spec.get("path", ""), loop_context)
-        name = Path(path).stem.replace(".", "_").replace("-", "_") if path else "root"
-        return f"repo_{name}"
-
-    return "unknown"
-
-
 # ── Tool schema generation ───────────────────────────────────────────
-
-def _is_single_file(spec: dict, paths: list[str]) -> bool:
-    """True if paths point to individual files (not directories)."""
-    if not paths:
-        return False
-    return all(Path(p).is_file() for p in paths)
-
 
 def generate_read_tool_schemas(
     specs: list[dict],
-    workspace_root: str,
+    workspace_root: str = "",
     current_config: str = "",
     code_root: str = "",
     loop_context: dict | None = None,
+    step_tmp_dir: str = "",
+    step_dir: str = "",
+    _smap: dict | None = None,
 ) -> list[dict]:
-    """Generate read tool schema dicts from normalized context specs.
+    """Generate the unified read/search/list tool schemas for a step.
 
-    Only generates tools for specs where mode ∈ {tool, both}.
-
-    Returns list of {name, description, parameters} dicts suitable for
-    merging into _tool_schemas.
+    One gated trio replaces the old per-source read_{label}* tools. A step
+    reads its WORKING TREE by default (own staging shadows the repo, so
+    read-after-edit is consistent) and any DECLARED context source by name.
+    Returns [] when the step has nothing readable. Pass ``_smap`` to reuse a
+    source map already built by the caller (avoids re-resolving).
     """
-    tools: list[dict] = []
+    smap = _smap if _smap is not None else build_source_map(
+        specs, workspace_root, current_config, code_root,
+        loop_context, step_tmp_dir, step_dir)
+    if not (smap["working_tree"] or smap["named"]):
+        return []
 
-    for spec in specs:
-        mode = spec.get("mode", "both")
-        if mode == "inline":
-            continue
+    allowed = sorted(smap["allowed"])
+    src_list = ", ".join(f"'{s}'" for s in allowed) or "(none)"
+    src_param = {
+        "type": "string",
+        "description": (
+            "Optional. Omit to read your WORKING TREE (your own pending "
+            "create/edit output shadows the repo baseline — reads reflect what "
+            f"you just wrote). Or one of: {src_list}."),
+    }
 
-        label = _derive_label(spec, loop_context)
-        paths = resolve_context_paths(spec, workspace_root, current_config, code_root, loop_context)
-        if not paths:
-            continue
-
-        source_type = spec.get("source_type", "step")
-        source_desc = _source_description(spec)
-
-        if _is_single_file(spec, paths):
-            # Single file → read only
-            fname = Path(paths[0]).name
-            tools.append({
-                "name": f"read_{label}",
-                "description": f"Read {fname} from {source_desc}. Large files are "
-                               f"paged: pass start_line/end_line (0-based start) "
-                               f"and check the returned 'truncated'/'total_lines'.",
-                "parameters": {
-                    "start_line": {
-                        "type": "integer",
-                        "description": "0-based first line to read (optional)",
-                    },
-                    "end_line": {
-                        "type": "integer",
-                        "description": "Exclusive end line (optional)",
-                    },
-                },
-            })
-        else:
-            # Directory → list + read + search
-            dir_path = paths[0]
-            tools.append({
-                "name": f"list_{label}",
-                "description": f"List all files in {source_desc}.",
-                "parameters": {},
-            })
-            tools.append({
-                "name": f"read_{label}_file",
-                "description": f"Read a file from {source_desc}. Large files are "
-                               f"paged: pass start_line/end_line (0-based start) "
-                               f"and check the returned 'truncated'/'total_lines'.",
-                "parameters": {
-                    "name": {
-                        "type": "string",
-                        "required": True,
-                        "description": f"Filename within {source_desc} (e.g. 'example.md')",
-                    },
-                    "start_line": {
-                        "type": "integer",
-                        "description": "0-based first line to read (optional)",
-                    },
-                    "end_line": {
-                        "type": "integer",
-                        "description": "Exclusive end line (optional)",
-                    },
-                },
-            })
-            tools.append({
-                "name": f"search_{label}",
-                "description": f"Search (grep) file contents in {source_desc}. "
-                               f"Returns matching {{file, line, text}}; pass "
-                               f"files_with_matches=true for just the file list.",
-                "parameters": {
-                    "pattern": {
-                        "type": "string",
-                        "required": True,
-                        "description": "Regex (case-insensitive) or literal substring to find",
-                    },
-                    "glob": {
-                        "type": "string",
-                        "description": "Optional filename glob filter (e.g. '*.py')",
-                    },
-                    "context_lines": {
-                        "type": "integer",
-                        "description": "Lines of surrounding context to include per match (default 0)",
-                    },
-                    "files_with_matches": {
-                        "type": "boolean",
-                        "description": "Return only the list of matching file paths",
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Max matches to return (default 50)",
-                    },
-                },
-            })
-
-    return tools
+    return [
+        {
+            "name": "read",
+            "description": (
+                "Read a file by repo-relative path. Omit `source` to read your "
+                "working tree (your pending edits are visible). The result's "
+                "`source` field names the layer that served the file. Large "
+                "files page: pass start_line/end_line (0-based) and check "
+                "`truncated`/`total_lines`."),
+            "parameters": {
+                "path": {"type": "string", "required": True,
+                         "description": "Repo-relative file path (e.g. 'core/db.py')."},
+                "source": src_param,
+                "start_line": {"type": "integer",
+                               "description": "0-based first line (optional)"},
+                "end_line": {"type": "integer",
+                             "description": "Exclusive end line (optional)"},
+            },
+        },
+        {
+            "name": "search",
+            "description": (
+                "Grep file contents. Omit `source` to search your working tree; "
+                "or pass a declared source. Returns {file, line, text, source}; "
+                "pass files_with_matches=true for just the file list."),
+            "parameters": {
+                "pattern": {"type": "string", "required": True,
+                            "description": "Regex (case-insensitive) or literal substring."},
+                "source": src_param,
+                "glob": {"type": "string",
+                         "description": "Optional filename glob filter (e.g. '*.py')"},
+                "context_lines": {"type": "integer",
+                                  "description": "Lines of context per match (default 0)"},
+                "files_with_matches": {"type": "boolean",
+                                       "description": "Return only matching file paths"},
+                "max_results": {"type": "integer",
+                                "description": "Max matches (default 50)"},
+            },
+        },
+        {
+            "name": "list",
+            "description": (
+                "List files. Omit `source` for your working tree; or pass a "
+                "declared source. Returns {name, size, source}."),
+            "parameters": {
+                "source": src_param,
+                "glob": {"type": "string",
+                         "description": "Optional filename glob filter (e.g. '*.py')"},
+            },
+        },
+    ]
 
 
-def _source_description(spec: dict) -> str:
-    """Human-readable description of the source for tool descriptions."""
-    source_type = spec.get("source_type", "step")
-    if source_type == "step":
-        return f"Step {spec.get('step_id', '?')}'s output"
-    elif source_type == "config":
+# ── Unified read surface: source map + read / search / list ──────────
+#
+# One gated trio replaces the old per-source read_{label}* tools. A step
+# reads its WORKING TREE by default — own staging (pending create/edit) →
+# promoted dir → repo baseline, first-match-wins — so read-after-edit is
+# consistent (no "read pristine repo → re-issue edit with a stale old_str →
+# thrash" loop). It reaches any DECLARED context source by explicit `source`.
+# Every result carries the `source` layer that served it.
+
+def _source_key(spec: dict) -> str:
+    """Canonical `source` argument value for a context spec."""
+    st = spec.get("source_type", "step")
+    if st == "repository":
+        return "repo"
+    if st == "step":
+        return f"step:{spec.get('step_id', '?')}"
+    if st == "config":
         cfg = spec.get("config_name", "?")
         step = spec.get("step_id", "")
-        return f"Config '{cfg}'" + (f" Step '{step}'" if step else "")
-    elif source_type == "workspace":
-        return f"project workspace ({spec.get('path', 'root')})"
-    elif source_type == "repository":
-        return f"code repository ({spec.get('path', 'root')})"
-    return "unknown source"
+        return f"config:{cfg}/{step}" if step else f"config:{cfg}"
+    if st == "workspace":
+        path = spec.get("path", "")
+        return f"workspace:{path}" if path else "workspace"
+    return "unknown"
 
 
-# ── Tool execution functions (closures over resolved paths) ──────────
+def _dir_roots(paths: list[str]) -> list[str]:
+    """Reduce resolved context paths to unique directory roots (a file's
+    parent stands in for the file, so read/search/list see the whole
+    delivered unit)."""
+    roots: list[str] = []
+    for p in paths:
+        pp = Path(p)
+        root = str(pp if pp.is_dir() else pp.parent)
+        if root not in roots:
+            roots.append(root)
+    return roots
 
-def make_read_tool_fns(specs: list[dict], workspace_root: str,
+
+def _source_roots(spec: dict, workspace_root: str, current_config: str,
+                  code_root: str, loop_context: dict | None) -> list[str]:
+    """Directory root(s) a declared source is addressed against.
+
+    When the source names a concrete STEP container (a ``step`` source, or a
+    ``config`` source that names a step), address against that step dir: strip
+    the file selectors so ``resolve_context_paths`` returns the container, and
+    ``read(path, source=…)`` resolves ``path`` against the step root (natural
+    paths work, same-key specs don't collapse).
+
+    Otherwise — a stepless ``config`` output (scan-located across step dirs) or a
+    ``workspace`` file — there is no single container, so a resolved file stands
+    in via its parent dir (``_dir_roots``). Stripping selectors there would widen
+    to the whole config/workspace tree and break same-name path addressing.
+    """
+    st = spec.get("source_type", "step")
+    has_step_container = st == "step" or (st == "config" and spec.get("step_id"))
+    if has_step_container:
+        dir_spec = {k: v for k, v in spec.items()
+                    if k not in ("files", "file", "output")}
+        return resolve_context_paths(dir_spec, workspace_root, current_config,
+                                     code_root, loop_context)
+    return _dir_roots(resolve_context_paths(spec, workspace_root,
+                                            current_config, code_root,
+                                            loop_context))
+
+
+def build_source_map(specs: list[dict], workspace_root: str,
+                     current_config: str = "", code_root: str = "",
+                     loop_context: dict | None = None,
+                     step_tmp_dir: str = "", step_dir: str = "") -> dict:
+    """Resolve a step's readable sources.
+
+    Returns {working_tree, named, allowed}:
+      working_tree — ordered [(tag, dir)] used when `source` is omitted:
+                     own staging → repo. Staging-first ⇒ the agent sees its own
+                     pending edits; the layers match execute_generic_edit's
+                     baseline (staging→repo) so read-after-edit is consistent.
+      named        — {source_key: [(tag, dir), ...]} every addressable source,
+                     including 'self' (own scratch: staging→promoted) and 'repo'.
+      allowed      — set of source_key strings accepted in the `source` arg.
+
+    staging/promoted are included by PATH (not gated on is_dir): they are
+    created DURING execution, and the closures' call-time is_dir/is_file guards
+    handle a not-yet-created dir — so the staging-first read can't silently
+    no-op before the first write.
+
+    Read tools are offered only to a step that declares at least one non-inline
+    (tool/both) context source — matching ``get_read_tool_names`` so the schema
+    the agent sees and the execution allowlist agree. An all-inline step (only
+    injected content, e.g. a bare dir_tree) gets no read surface.
+    """
+    if not any(s.get("mode", "both") != "inline" for s in (specs or [])):
+        return {"working_tree": [], "named": {}, "allowed": set()}
+
+    self_layers: list[tuple[str, str]] = [
+        (tag, d) for tag, d in
+        (("staging", step_tmp_dir), ("promoted", step_dir)) if d]
+
+    working_tree: list[tuple[str, str]] = []
+    if step_tmp_dir:
+        working_tree.append(("staging", step_tmp_dir))
+    if code_root and Path(code_root).is_dir():
+        working_tree.append(("repo", code_root))
+
+    named: dict[str, list[tuple[str, str]]] = {}
+    if self_layers:
+        named["self"] = self_layers
+    if code_root and Path(code_root).is_dir():
+        named["repo"] = [("repo", code_root)]
+
+    for spec in specs or []:
+        if spec.get("mode", "both") == "inline":
+            continue
+        if spec.get("source_type") == "repository":
+            continue  # already mapped to 'repo'
+        key = _source_key(spec)
+        if key == "unknown" or key in named:
+            continue
+        roots = _source_roots(spec, workspace_root, current_config, code_root,
+                              loop_context)
+        if roots:
+            named[key] = [(key, r) for r in roots]
+
+    return {"working_tree": working_tree, "named": named,
+            "allowed": set(named)}
+
+
+def _layers_for(smap: dict, source):
+    """Resolve the `source` arg to an ordered [(tag, dir)] list.
+
+    Returns (layers, error_dict). error_dict is None on success; on an
+    unknown source it lists the allowed sources so the agent self-corrects.
+    """
+    if not source:
+        return smap["working_tree"], None
+    if source in smap["named"]:
+        return smap["named"][source], None
+    return [], {"error": f"unknown source '{source}'",
+                "allowed_sources": sorted(smap["allowed"]),
+                "hint": "omit source to read your working tree"}
+
+
+def _within(base: Path, rel: str):
+    """Safe-join rel under base; None if it escapes the base dir."""
+    try:
+        cand = (base / rel).resolve()
+    except Exception:
+        return None
+    b = base.resolve()
+    if cand != b and b not in cand.parents:
+        return None
+    return cand
+
+
+def _deleted_this_step(step_tmp_dir: str) -> set:
+    """Repo-relative paths the agent queued for deletion this step
+    (delete_file writes a bare JSON list to _deletions.json)."""
+    if not step_tmp_dir:
+        return set()
+    f = Path(step_tmp_dir) / "_deletions.json"
+    if not f.is_file():
+        return set()
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    items = data.get("deletions", []) if isinstance(data, dict) else data
+    out = set()
+    for it in items or []:
+        if isinstance(it, str):
+            out.add(it)
+        elif isinstance(it, dict) and it.get("file"):
+            out.add(it["file"])
+    return out
+
+
+def unified_read(smap, path, source=None, start_line=0, end_line=None,
+                 deleted=None):
+    layers, err = _layers_for(smap, source)
+    if err:
+        return err
+    # Reading the working tree / own scratch reflects a deletion queued this
+    # step (the repo copy still exists until repo_delete runs on deliver).
+    if deleted and path in deleted and (source in (None, "", "self")):
+        return {"error": f"'{path}' was deleted this step", "source": "staging"}
+    for tag, root in layers:
+        cand = _within(Path(root), path)
+        if cand is None:
+            continue
+        if cand.is_file():
+            try:
+                text = cand.read_text(encoding="utf-8", errors="replace")
+            except Exception as e:
+                return {"error": str(e)}
+            out = _page_lines(text, start_line, end_line)
+            out["source"] = tag
+            out["path"] = path
+            return out
+    return {"error": f"File not found: {path}",
+            "searched": [t for t, _ in layers]}
+
+
+def unified_search(smap, pattern, source=None, glob=None, context_lines=0,
+                   files_with_matches=False, max_results=50):
+    layers, err = _layers_for(smap, source)
+    if err:
+        return err
+    try:
+        regex = re.compile(pattern, re.IGNORECASE)
+    except re.error:
+        regex = None  # invalid regex → literal substring match
+
+    cap = max_results if isinstance(max_results, int) and max_results > 0 else 50
+    matches, files_hit = [], []
+    seen = set()  # earlier layer wins → staging shadows repo
+    truncated = False
+    for tag, root in layers:
+        d = Path(root)
+        if not d.is_dir():
+            continue
+        for f in sorted(d.rglob(glob) if glob else d.rglob("*")):
+            if not f.is_file() or f.name == ".gitkeep":
+                continue
+            rel = str(f.relative_to(d))
+            if _is_blocked_path(rel):
+                continue  # skip .git / build / dependency caches
+            if f.suffix in (".pyc", ".pyo", ".so", ".o", ".bin"):
+                continue
+            if rel in seen:
+                continue  # already searched the shadowing layer's copy
+            seen.add(rel)
+            try:
+                lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+            except Exception:
+                continue
+            file_matched = False
+            for li, line in enumerate(lines, 1):
+                hit = regex.search(line) if regex else (pattern.lower() in line.lower())
+                if not hit:
+                    continue
+                file_matched = True
+                if files_with_matches:
+                    break
+                entry = {"file": rel, "line": li, "text": line.strip()[:200],
+                         "source": tag}
+                if context_lines and context_lines > 0:
+                    lo = max(0, li - 1 - context_lines)
+                    hi = min(len(lines), li + context_lines)
+                    entry["context"] = "\n".join(
+                        f"{lo + j + 1}\t{lines[lo + j]}" for j in range(hi - lo))
+                matches.append(entry)
+                if len(matches) >= cap:
+                    truncated = True
+                    break
+            if file_matched:
+                files_hit.append({"file": rel, "source": tag})
+                if files_with_matches and len(files_hit) >= cap:
+                    truncated = True
+            if truncated:
+                break
+        if truncated:
+            break
+
+    if files_with_matches:
+        return {"files": files_hit, "truncated": truncated}
+    return {"matches": matches, "truncated": truncated}
+
+
+def unified_list(smap, source=None, glob=None):
+    layers, err = _layers_for(smap, source)
+    if err:
+        return err
+    entries, seen = [], set()
+    truncated = False
+    for tag, root in layers:
+        d = Path(root)
+        if not d.is_dir():
+            continue
+        for f in sorted(d.rglob(glob) if glob else d.rglob("*")):
+            if not (f.is_file() and f.name != ".gitkeep"):
+                continue
+            rel = str(f.relative_to(d))
+            if _is_blocked_path(rel):
+                continue
+            if rel in seen:
+                continue  # shadowing layer already listed it
+            seen.add(rel)
+            entries.append({"name": rel, "size": f.stat().st_size, "source": tag})
+            if len(entries) >= _MAX_LIST_ENTRIES:
+                truncated = True
+                break
+        if truncated:
+            break
+    return json.dumps({"files": entries, "truncated": truncated},
+                      ensure_ascii=False)
+
+
+def make_read_tool_fns(specs: list[dict], workspace_root: str = "",
                        current_config: str = "", code_root: str = "",
                        loop_context: dict | None = None,
+                       step_tmp_dir: str = "", step_dir: str = "",
+                       _smap: dict | None = None,
                        ) -> dict[str, callable]:
-    """Create execution functions for all read tools from context specs.
+    """Build the unified read/search/list callables for a step.
 
-    Returns a dict of tool_name → callable.  Each callable accepts kwargs
-    matching the corresponding tool schema parameters and returns a result dict
-    or string.
-
-    Only generates functions for specs where mode ∈ {tool, both}.
+    Returns {"read", "search", "list"} closures over the step's resolved
+    source map (or {} when nothing is readable). Registered fresh each step,
+    so the closures capture this step's staging + loop-resolved sources. Pass
+    ``_smap`` to reuse a source map already built by the caller.
     """
-    fns: dict[str, callable] = {}
+    smap = _smap if _smap is not None else build_source_map(
+        specs, workspace_root, current_config, code_root,
+        loop_context, step_tmp_dir, step_dir)
+    if not (smap["working_tree"] or smap["named"]):
+        return {}
+    deleted = _deleted_this_step(step_tmp_dir)
 
-    for spec in specs:
-        mode = spec.get("mode", "both")
-        if mode == "inline":
-            continue
+    def _read(path: str, source: str = None, start_line: int = 0,
+              end_line: int | None = None) -> dict:
+        return unified_read(smap, path, source, start_line, end_line, deleted)
 
-        label = _derive_label(spec, loop_context)
-        paths = resolve_context_paths(spec, workspace_root, current_config, code_root, loop_context)
-        if not paths:
-            continue
+    def _search(pattern: str, source: str = None, glob: str = None,
+                context_lines: int = 0, files_with_matches: bool = False,
+                max_results: int = 50) -> dict:
+        return unified_search(smap, pattern, source, glob, context_lines,
+                              files_with_matches, max_results)
 
-        if _is_single_file(spec, paths):
-            file_path = paths[0]
+    def _list(source: str = None, glob: str = None) -> str:
+        return unified_list(smap, source, glob)
 
-            def _read_single(start_line: int = 0, end_line: int | None = None,
-                             _path=file_path) -> dict:
-                try:
-                    text = Path(_path).read_text(encoding="utf-8", errors="replace")
-                except FileNotFoundError:
-                    return {"error": f"File not found: {_path}"}
-                except Exception as e:
-                    return {"error": str(e)}
-                return _page_lines(text, start_line, end_line)
-
-            fns[f"read_{label}"] = _read_single
-        else:
-            dir_paths = paths
-
-            def _list_dir(_paths=dir_paths) -> str:
-                entries = []
-                truncated = False
-                for dp in _paths:
-                    d = Path(dp)
-                    if not d.is_dir():
-                        continue
-                    for f in sorted(d.rglob("*")):
-                        if not (f.is_file() and f.name != ".gitkeep"):
-                            continue
-                        rel = f.relative_to(d)
-                        if _is_blocked_path(rel):
-                            continue  # skip .git / build / dependency caches
-                        entries.append({"name": str(rel), "size": f.stat().st_size})
-                        if len(entries) >= _MAX_LIST_ENTRIES:
-                            truncated = True
-                            break
-                    if truncated:
-                        break
-                return json.dumps({"files": entries, "truncated": truncated},
-                                  ensure_ascii=False)
-
-            def _read_dir_file(name: str, start_line: int = 0,
-                               end_line: int | None = None, _paths=dir_paths) -> dict:
-                for dp in _paths:
-                    d = Path(dp)
-                    if not d.is_dir():
-                        continue
-                    # Try exact match first, then recursive
-                    candidate = d / name
-                    if candidate.is_file():
-                        try:
-                            text = candidate.read_text(encoding="utf-8", errors="replace")
-                        except Exception as e:
-                            return {"error": str(e)}
-                        return _page_lines(text, start_line, end_line)
-                    # Recursive search
-                    for f in d.rglob(name):
-                        if f.is_file():
-                            try:
-                                text = f.read_text(encoding="utf-8", errors="replace")
-                            except Exception as e:
-                                return {"error": str(e)}
-                            return _page_lines(text, start_line, end_line)
-                return {"error": f"File not found: {name}"}
-
-            def _search_dir(pattern: str, glob: str = None, context_lines: int = 0,
-                            files_with_matches: bool = False, max_results: int = 50,
-                            _paths=dir_paths) -> dict:
-                try:
-                    regex = re.compile(pattern, re.IGNORECASE)
-                except re.error:
-                    regex = None  # invalid regex → literal substring match
-
-                cap = max_results if isinstance(max_results, int) and max_results > 0 else 50
-                matches = []
-                files_hit = []
-                truncated = False
-
-                for dp in _paths:
-                    d = Path(dp)
-                    if not d.is_dir():
-                        continue
-                    for f in sorted(d.rglob(glob) if glob else d.rglob("*")):
-                        if not f.is_file() or f.name == ".gitkeep":
-                            continue
-                        if _is_blocked_path(f.relative_to(d)):
-                            continue  # skip .git / build / dependency caches
-                        # Skip binary-looking files
-                        if f.suffix in (".pyc", ".pyo", ".so", ".o", ".bin"):
-                            continue
-                        try:
-                            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
-                        except Exception:
-                            continue
-                        rel = str(f.relative_to(d))
-                        file_matched = False
-                        for li, line in enumerate(lines, 1):
-                            hit = regex.search(line) if regex else (pattern.lower() in line.lower())
-                            if not hit:
-                                continue
-                            file_matched = True
-                            if files_with_matches:
-                                break  # one hit is enough to list the file
-                            entry = {"file": rel, "line": li, "text": line.strip()[:200]}
-                            if context_lines and context_lines > 0:
-                                lo = max(0, li - 1 - context_lines)
-                                hi = min(len(lines), li + context_lines)
-                                entry["context"] = "\n".join(
-                                    f"{lo + j + 1}\t{lines[lo + j]}" for j in range(hi - lo)
-                                )
-                            matches.append(entry)
-                            if len(matches) >= cap:
-                                truncated = True
-                                break
-                        if file_matched:
-                            files_hit.append(rel)
-                            if files_with_matches and len(files_hit) >= cap:
-                                truncated = True
-                        if truncated:
-                            break
-                    if truncated:
-                        break
-
-                if files_with_matches:
-                    return {"files": files_hit, "truncated": truncated}
-                return {"matches": matches, "truncated": truncated}
-
-            fns[f"list_{label}"] = _list_dir
-            fns[f"read_{label}_file"] = _read_dir_file
-            fns[f"search_{label}"] = _search_dir
-
-    return fns
+    return {"read": _read, "search": _search, "list": _list}
 
 
 def get_read_tool_names(specs: list[dict], loop_context: dict | None = None) -> set[str]:
-    """Return the set of tool names that would be generated from these specs.
-    Doesn't resolve paths — just derives names from spec labels.
-    Used for allowlist building in _execute_tool_impl.
+    """Tool names the unified read surface exposes for these specs.
+
+    The trio (read/search/list) is granted whenever the step declares any
+    non-inline context source; the step's own staging + repo baseline ride
+    along as the default working tree. Used for allowlist building.
     """
-    names: set[str] = set()
-    for spec in specs:
-        mode = spec.get("mode", "both")
-        if mode == "inline":
-            continue
-        label = _derive_label(spec, loop_context)
-        # We don't know if it's single-file or directory without paths,
-        # so add all possible names. Execution will resolve correctly.
-        names.add(f"read_{label}")
-        names.add(f"list_{label}")
-        names.add(f"read_{label}_file")
-        names.add(f"search_{label}")
-    return names
+    for spec in specs or []:
+        if spec.get("mode", "both") != "inline":
+            return {"read", "search", "list"}
+    return set()

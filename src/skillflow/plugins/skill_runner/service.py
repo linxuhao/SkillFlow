@@ -256,7 +256,12 @@ class RunnerService:
                 try:
                     names.update(get_read_tool_names(node.context))
                 except Exception:
-                    pass
+                    # Missing names here make the proxy bounce read/search/list
+                    # as "host tools" — the runner's read surface goes dark.
+                    import logging
+                    logging.getLogger("skillflow").warning(
+                        "get_read_tool_names failed for a %s node",
+                        graph_name, exc_info=True)
         return names
 
     def _loader_has(self, name: str) -> bool:

@@ -847,6 +847,12 @@ def _flags_match(match: dict, flags: dict, *,
         try:
             content = file_reader(match["from_file"])
         except Exception:
+            # A read error (vs a legitimately-absent file) that silently reads
+            # as "no match" can misroute a transition — surface it.
+            import logging
+            logging.getLogger("skillflow").warning(
+                "transition file_reader failed for %s", match.get("from_file"),
+                exc_info=True)
             return False
         data = _parse_json_extract_last(content)
         if data is None:

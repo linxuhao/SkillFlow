@@ -941,7 +941,13 @@ class SkillFlow:
                     if resolved:
                         inputs_with_tools["_resolved_context"] = resolved
                 except Exception:
-                    pass  # Context resolution is best-effort
+                    # Best-effort, but an exception here (vs a clean "no match")
+                    # is a resolver bug that silently drops the agent's injected
+                    # context — leave a breadcrumb.
+                    import logging
+                    logging.getLogger("skillflow").warning(
+                        "context resolution failed for step %s",
+                        getattr(node, "id", "?"), exc_info=True)
 
             # Also inject loop variables directly for prompt-level access
             if loop_context:
@@ -966,6 +972,7 @@ class SkillFlow:
             if self._workspace and node.context:
                 try:
                     from skillflow.read_tools import (
+                        build_source_map,
                         generate_read_tool_schemas,
                         make_read_tool_fns,
                     )
@@ -975,23 +982,41 @@ class SkillFlow:
                     code_root = str(self._workspace.get_project_code_path(
                         run["project_id"]
                     )) if self._workspace else ""
-                    read_schemas = generate_read_tool_schemas(
+                    # Staging-first working tree: the current step's .tmp
+                    # (create/edit output) shadows the repo baseline so a
+                    # write-mode agent sees its own pending edits (no read
+                    # pristine → re-edit stale old_str → thrash). Build the
+                    # source map ONCE and share it with both the schema and the
+                    # fn builders (avoids re-resolving every context spec twice).
+                    _step_tmp = str(self._workspace.get_step_tmp_dir(
+                        run["project_id"], run["graph_name"], node.id))
+                    _step_dir = str(self._workspace.get_step_dir(
+                        run["project_id"], run["graph_name"], node.id))
+                    _smap = build_source_map(
                         node.context,
                         workspace_root=ws_root,
                         current_config=run["graph_name"],
                         code_root=code_root,
                         loop_context=loop_context if loop_context else None,
+                        step_tmp_dir=_step_tmp,
+                        step_dir=_step_dir,
+                    )
+                    read_schemas = generate_read_tool_schemas(
+                        node.context,
+                        step_tmp_dir=_step_tmp,
+                        step_dir=_step_dir,
+                        _smap=_smap,
                     )
                     if read_schemas and self._tool_loader:
-                        # Clear stale dynamic read tools from previous task
-                        # iterations (e.g. list_step_3_$current_task from an
-                        # earlier claim before the $var was resolved).
+                        # Unified read/search/list closures over this step's
+                        # source map. Re-registered fresh each step (names are
+                        # stable); the stale-clear below removes any old-style
+                        # per-label dynamic read tools left in the cache.
                         read_fns = make_read_tool_fns(
                             node.context,
-                            workspace_root=ws_root,
-                            current_config=run["graph_name"],
-                            code_root=code_root,
-                            loop_context=loop_context if loop_context else None,
+                            step_tmp_dir=_step_tmp,
+                            step_dir=_step_dir,
+                            _smap=_smap,
                         )
                         stale = [n for n in self._tool_loader._cache
                                  if any(n.startswith(p) for p in
@@ -1009,7 +1034,16 @@ class SkillFlow:
                                 tool_schemas[name] = rs
                                 self._tool_loader.register_dynamic_tool(name, rs, fn)
                 except Exception:
-                    pass  # Read tool generation is best-effort
+                    # Best-effort: the step still runs without read tools. But
+                    # build_source_map handles missing paths gracefully, so an
+                    # exception here is an unexpected wiring bug, not a routine
+                    # miss — log it (a silent pass once hid a TypeError that
+                    # dropped read tools for every step).
+                    import logging
+                    logging.getLogger("skillflow").warning(
+                        "read tool registration failed for step %s; agent will "
+                        "run without read/search/list",
+                        getattr(node, "id", "?"), exc_info=True)
 
             inputs_with_tools["_tool_schemas"] = tool_schemas
 
@@ -1870,7 +1904,13 @@ class SkillFlow:
                         kwargs["project_root"] = str(
                             self._workspace.get_project_code_path(pid))
             except Exception:
-                pass  # variable resolution is best-effort
+                # Best-effort default-filling, but a failure here leaves a tool
+                # without workspace_root/project_root → it misfires later with a
+                # confusing error. Log so the real cause is visible.
+                import logging
+                logging.getLogger("skillflow").warning(
+                    "tool arg resolution (workspace/project root) failed",
+                    exc_info=True)
         # Trace tool-type STEP nodes (e.g. repo_apply/repo_validate/notify as
         # whole steps) the same way agent-invoked tools are traced.
         param_summary = {k: (f"<{len(v)} chars>" if isinstance(v, str) and len(v) > 200 else v)
@@ -2075,7 +2115,11 @@ class SkillFlow:
             try:
                 completed = set(self._deserialize(row["completed_items"]))
             except Exception:
-                pass
+                # A silent empty set here re-runs already-completed loop items.
+                import logging
+                logging.getLogger("skillflow").warning(
+                    "failed to deserialize loop completed_items; "
+                    "completed items may re-run", exc_info=True)
         if row["current_item"] in completed:
             return  # idempotent — already credited
         completed.add(row["current_item"])
@@ -2156,7 +2200,11 @@ class SkillFlow:
                 try:
                     completed = set(self._deserialize(row["completed_items"]))
                 except Exception:
-                    pass
+                    # A silent empty set here re-runs already-completed items.
+                    import logging
+                    logging.getLogger("skillflow").warning(
+                        "failed to deserialize loop completed_items; "
+                        "completed items may re-run", exc_info=True)
             current_item = row["current_item"] or None
         # Drop superseded names from prior goal-loop rounds so completed_items
         # reflects only the active manifest (prevents the len(completed) overcount
@@ -3578,7 +3626,12 @@ class SkillFlow:
             try:
                 node = self._get_resolver_for_run(run_id).get_node(step_id)
             except Exception:
-                pass
+                # node drives the tool allowlist + output.fixed; a silent None
+                # here degrades tool gating for this call.
+                import logging
+                logging.getLogger("skillflow").warning(
+                    "failed to resolve node for %s/%s; tool gating degraded",
+                    run_id, step_id, exc_info=True)
 
         # Build allowed tool set from agent config + write tool schemas + read tools
         allowed: set[str] = set()
@@ -3674,7 +3727,12 @@ class SkillFlow:
                     kwargs.setdefault("step_dir",
                                       str(self._workspace.get_step_dir(pid, gname, step_id)))
             except Exception:
-                pass
+                # Without these, read_file loses the staging/step dirs and can't
+                # see files the agent just wrote (breaks staging-first reads).
+                import logging
+                logging.getLogger("skillflow").warning(
+                    "failed to attach step staging dirs for read_file/list_tree",
+                    exc_info=True)
         # Filter kwargs to only what the function accepts
         import inspect as _inspect
         try:

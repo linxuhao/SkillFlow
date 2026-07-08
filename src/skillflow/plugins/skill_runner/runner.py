@@ -220,7 +220,12 @@ class SkillTool:
                 try:
                     self.sf.fail_run(self.run_id, "aborted by agent")
                 except Exception:
-                    pass
+                    # If swallowed, the abort is silently ignored and the run
+                    # keeps looking alive.
+                    import logging
+                    logging.getLogger("skillflow").warning(
+                        "fail_run failed while aborting %s", self.run_id,
+                        exc_info=True)
             self.run_id = None
             self._current_claim = None
             return SkillResponse(status="aborted", run_id=self.run_id or "")
@@ -292,7 +297,12 @@ class SkillTool:
                     tool_params = self.sf._workspace.resolve_variables(
                         pid, gname, claimed.step_id, tool_params)
         except Exception:
-            pass
+            # A swallow here leaves $CONFIG_DIR/$STEP_DIR/… unexpanded, so the
+            # delegated tool runs against literal placeholder paths.
+            import logging
+            logging.getLogger("skillflow").warning(
+                "path-variable resolution failed for delegated tool params",
+                exc_info=True)
 
         return SkillResponse(
             status="in_progress",

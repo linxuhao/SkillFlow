@@ -57,8 +57,7 @@ def test_list_repo_tool_excludes_git_tree(tmp_path):
     specs = [{"source_type": "repository", "mode": "tool"}]
     fns = make_read_tool_fns(specs, str(tmp_path), code_root=str(repo))
 
-    list_fn = next(fn for name, fn in fns.items() if name.startswith("list_"))
-    payload = json.loads(list_fn())
+    payload = json.loads(fns["list"]())
     names = [e["name"] for e in payload["files"]]
 
     assert "src/main.py" in names
