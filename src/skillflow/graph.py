@@ -230,6 +230,29 @@ class PipelineGraph:
         return cls._from_dict(data)
 
     @classmethod
+    def from_yaml_with_overlays(
+        cls, base_path: str | Path, overlay_paths: "list[str | Path]"
+    ) -> "PipelineGraph":
+        """Load a base graph and apply addon overlays (see ``skillflow.compose``).
+
+        The base's ``anchors`` map and each overlay's ``overlay`` op-list are
+        resolved into a single graph, which then goes through normal validation.
+        """
+        try:
+            import yaml
+        except ImportError:
+            raise ImportError("PyYAML is required for from_yaml_with_overlays().")
+        from .compose import compose_graph
+
+        def _load(p):
+            with open(Path(p), "r", encoding="utf-8") as f:
+                return yaml.safe_load(f)
+
+        base = _load(base_path)
+        overlays = [_load(p) for p in overlay_paths]
+        return cls._from_dict(compose_graph(base, overlays))
+
+    @classmethod
     def _from_dict(cls, data: dict) -> "PipelineGraph":
         """Build a PipelineGraph from a parsed YAML dict."""
         steps = []
