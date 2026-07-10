@@ -124,7 +124,24 @@ def _apply_add_context(base: dict, to_id: str, source: dict) -> None:
         ctx.append(entry)
 
 
-_OPS = {"insert_after", "add_context"}
+def _apply_add_template(base: dict, to_id: str, fragment: str) -> None:
+    """Attach an extra prompt fragment to an existing (agent) step.
+
+    Stored on the step's opaque ``config.extra_templates`` list — skillflow does
+    not interpret it; the host's prompt assembler appends the named fragment
+    after the step's base template. This lets an addon carry engine/domain
+    guidance that only reaches the agent when the addon is applied, instead of
+    baking it into the base template for every run."""
+    by_id = {s["id"]: s for s in base["steps"]}
+    if to_id not in by_id:
+        raise ComposeError(f"add_template target '{to_id}' not found in base graph")
+    cfg = by_id[to_id].setdefault("config", {})
+    frags = cfg.setdefault("extra_templates", [])
+    if fragment not in frags:
+        frags.append(fragment)
+
+
+_OPS = {"insert_after", "add_context", "add_template"}
 
 
 def compose_graph(base: dict, overlays: list[dict]) -> dict:
@@ -160,5 +177,11 @@ def compose_graph(base: dict, overlays: list[dict]) -> dict:
                     merged,
                     _resolve_anchor(op["add_context"], anchors),
                     op["source"],
+                )
+            elif action == "add_template":
+                _apply_add_template(
+                    merged,
+                    _resolve_anchor(op["add_template"], anchors),
+                    op["fragment"],
                 )
     return merged

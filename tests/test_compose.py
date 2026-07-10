@@ -109,6 +109,36 @@ def test_add_context_is_idempotent():
     assert by_id["c"]["context"].count({"source": {"step": "x"}}) == 1
 
 
+def test_add_template_attaches_fragment_to_step_config():
+    ov = {"name": "h", "overlay": [
+        {"add_template": "@post_b", "fragment": "addons/game/architect.md"},
+    ]}
+    by_id = {s["id"]: s for s in compose_graph(_base(), [ov])["steps"]}
+    assert by_id["b"]["config"]["extra_templates"] == ["addons/game/architect.md"]
+
+
+def test_add_template_is_idempotent_and_stacks():
+    ov = {"name": "h", "overlay": [
+        {"add_template": "b", "fragment": "a.md"},
+        {"add_template": "b", "fragment": "a.md"},
+        {"add_template": "b", "fragment": "b.md"},
+    ]}
+    by_id = {s["id"]: s for s in compose_graph(_base(), [ov])["steps"]}
+    assert by_id["b"]["config"]["extra_templates"] == ["a.md", "b.md"]
+
+
+def test_multiple_addons_compose_in_order():
+    a1 = {"name": "a1", "overlay": [{"insert_after": "b",
+          "steps": [{"id": "x", "step_type": "tool"}]}]}
+    a2 = {"name": "a2", "overlay": [{"insert_after": "b",
+          "steps": [{"id": "y", "step_type": "tool"}]}]}
+    by_id = {s["id"]: s for s in compose_graph(_base(), [a1, a2])["steps"]}
+    # a1 first: b->x->c ; then a2 inserts after b: b->y->x->c
+    assert by_id["b"]["transitions"] == [{"to": "y"}]
+    assert by_id["y"]["transitions"] == [{"to": "x"}]
+    assert by_id["x"]["transitions"] == [{"to": "c"}]
+
+
 def test_unknown_anchor_raises():
     with pytest.raises(ComposeError, match="unknown anchor"):
         compose_graph(_base(), [_harness_overlay(anchor="@nope")])
