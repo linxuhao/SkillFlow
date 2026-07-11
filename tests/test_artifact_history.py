@@ -65,11 +65,22 @@ def test_trace_db_and_staging_are_gitignored(tmp_path):
     assert ".tmp" not in tracked
 
 
-def test_off_by_default_no_commits(tmp_path):
-    sf = SkillFlow(":memory:", workspace_base=str(tmp_path / "ws"))  # no flag
+def test_on_by_default(tmp_path):
+    sf = SkillFlow(":memory:", workspace_base=str(tmp_path / "ws"))  # no flag → on
+    assert sf._artifact_history is True
     root = sf._workspace.get_project_path("p")
     root.mkdir(parents=True, exist_ok=True)
     _write_step(root, "dpe_game", "3", "x")
-    # step_output_versions is empty and no git repo is created.
+    sf._artifact_commit("p", "dpe_game", "3", "r")
+    assert len(sf.step_output_versions("p", "dpe_game", "3")) == 1
+
+
+def test_explicitly_disabled_no_commits(tmp_path):
+    sf = SkillFlow(":memory:", workspace_base=str(tmp_path / "ws"),
+                   artifact_history=False)
+    root = sf._workspace.get_project_path("p")
+    root.mkdir(parents=True, exist_ok=True)
+    _write_step(root, "dpe_game", "3", "x")
+    # No git repo is created and no versions are recorded.
     assert sf.step_output_versions("p", "dpe_game", "3") == []
     assert not (root / ".git").exists()
