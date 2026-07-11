@@ -808,6 +808,10 @@ def _normalize_context_spec(spec: dict) -> dict:
     s.setdefault("path", "")
     s.setdefault("step_id", "")
     s.setdefault("config_name", "")
+    # `required: true` — the step must fail (RequiredContextMissing) rather than
+    # run when this source resolves to no content. Readable whether written on the
+    # `source:` wrapper or as its sibling.
+    s["required"] = bool(s.get("required") or spec.get("required", False))
     return s
 
 

@@ -37,6 +37,7 @@ from skillflow.exceptions import (
     GraphValidationError,
     NoMatchingTransition,
     OutputValidationError,
+    RequiredContextMissing,
     StepVersionConflict,
     SkillFlowError,
 )
@@ -940,6 +941,12 @@ class SkillFlow:
                     )
                     if resolved:
                         inputs_with_tools["_resolved_context"] = resolved
+                except RequiredContextMissing:
+                    # A `required: true` source is missing → this is a REAL failure
+                    # (the step would otherwise run on absent context). Propagate so
+                    # the step fails loudly instead of being swallowed like a
+                    # best-effort miss.
+                    raise
                 except Exception:
                     # Best-effort, but an exception here (vs a clean "no match")
                     # is a resolver bug that silently drops the agent's injected

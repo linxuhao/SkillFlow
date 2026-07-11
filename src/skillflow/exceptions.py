@@ -18,6 +18,17 @@ class StepVersionConflict(SkillFlowError):
     """
 
 
+class RequiredContextMissing(SkillFlowError):
+    """A context source marked ``required: true`` resolved to no content.
+
+    Raised by ContextResolver when a required input (e.g. a project brief the
+    step cannot meaningfully run without) is missing or empty. The step must
+    fail loudly rather than run on absent context and hallucinate — so callers
+    should let this propagate (fail the step) instead of swallowing it like a
+    best-effort resolution miss.
+    """
+
+
 class CycleLimitExceeded(SkillFlowError):
     """A transition's max_loop limit has been reached.
 

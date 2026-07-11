@@ -54,6 +54,16 @@ class ContextResolver:
             label, content = self._resolve_one(source, current_config, loop_context)
             if content:
                 result[label] = content
+            elif spec.get("required") or source.get("required"):
+                # A required input resolved to nothing → fail the step loudly
+                # instead of running on absent context (which invites hallucinated
+                # output). See exceptions.RequiredContextMissing.
+                from skillflow.exceptions import RequiredContextMissing
+                desc = label or source.get("step") or source.get("config") \
+                    or source.get("path") or source.get("source_type") or str(source)
+                raise RequiredContextMissing(
+                    f"Required context source resolved to no content: {desc}. "
+                    "The step cannot run without it.")
         return result
 
     @staticmethod
