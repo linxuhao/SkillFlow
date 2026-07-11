@@ -139,6 +139,10 @@ class SkillFlow:
                  artifact_history: bool = True):
         self._db_path = db_path
         self._graphs: dict[str, PipelineGraph] = {}
+        # Named overlay specs (base binding + overlay ops) that compose onto a
+        # base graph — the mechanical half of the "addon" registry (the host
+        # keeps manifests/prompt-fragments). See register_overlay/compose_config.
+        self._overlays: dict[str, dict] = {}
         self._resolvers: dict[str, GraphResolver] = {}
         self._lock = threading.RLock()
         self._tool_loader = tool_loader
@@ -390,6 +394,78 @@ class SkillFlow:
                 pass
             out.append({"name": r["name"], "version": r["version"], "description": description})
         return out
+
+    # ── Overlay registry (composable addons) ──────────────────────────
+    def register_overlay(self, name: str, spec: dict) -> None:
+        """Register a named overlay spec so it can be composed onto a base graph.
+
+        ``spec`` is the raw overlay dict — ``base`` (the graph it targets),
+        optional ``alias`` (the blessed composed name for base+this), optional
+        ``description``/``whenToUse``, and ``overlay: [op, ...]`` ops. This is the
+        mechanical half of "addons": the host still owns prompt fragments,
+        manifests, and assets.
+        """
+        self._overlays[name] = dict(spec)
+
+    def list_overlays(self) -> list[dict]:
+        """Return registered overlays as ``{name, base, alias, description, whenToUse}``."""
+        return [{"name": n, "base": s.get("base", ""), "alias": s.get("alias", ""),
+                 "description": s.get("description", ""),
+                 "whenToUse": s.get("whenToUse", "")}
+                for n, s in self._overlays.items()]
+
+    def composed_config_name(self, base_name: str, overlay_names: list[str]) -> str:
+        """The name a base+overlays combo composes to: a single overlay's
+        ``alias`` when set (the blessed combo), else emergent ``base__a+b``."""
+        if len(overlay_names) == 1:
+            alias = self._overlays.get(overlay_names[0], {}).get("alias")
+            if alias:
+                return alias
+        return f"{base_name}__{'+'.join(sorted(overlay_names))}"
+
+    def compose_config(self, base_name: str, overlay_names: list[str], *,
+                       name: str | None = None, register: bool = True) -> str:
+        """Compose a base graph + named overlays into a runnable graph.
+
+        Sources the base from the graph registry (its ``anchors`` are preserved
+        so overlay ``@anchor`` targets resolve) and the overlays from the overlay
+        registry. Validates each overlay's declared ``base`` matches. Registers
+        the composed graph (re-validating reachability/cycles/agent refs) unless
+        ``register=False``. Returns the composed config name.
+        """
+        from skillflow.compose import compose_graph
+        if base_name not in self._graphs:
+            raise SkillFlowError(f"compose_config: unknown base graph '{base_name}'")
+        base_dict = self._graphs[base_name].to_dict()
+        overlays: list[dict] = []
+        for on in overlay_names:
+            spec = self._overlays.get(on)
+            if spec is None:
+                raise SkillFlowError(f"compose_config: unknown overlay '{on}'")
+            declared = spec.get("base", "")
+            if declared and declared != base_name:
+                raise SkillFlowError(
+                    f"overlay '{on}' binds to base '{declared}', not '{base_name}'")
+            overlays.append(spec)
+        cfg_name = name or self.composed_config_name(base_name, overlay_names)
+        merged = compose_graph(base_dict, overlays)
+        merged["name"] = cfg_name
+        graph = PipelineGraph._from_dict(merged)
+        if register:
+            self.register_graph(graph)
+        return cfg_name
+
+    def describe_config(self, config_name: str) -> dict:
+        """Decompose a config name into ``{base, addons}``: an overlay alias →
+        its base + [that overlay]; an emergent ``base__a+b`` → parsed; otherwise
+        the name itself as a plain base with no addons."""
+        for n, s in self._overlays.items():
+            if s.get("alias") and s["alias"] == config_name:
+                return {"base": s.get("base", ""), "addons": [n]}
+        if "__" in config_name:
+            base, _, rest = config_name.partition("__")
+            return {"base": base, "addons": [a for a in rest.split("+") if a]}
+        return {"base": config_name, "addons": []}
 
     def register_agent_config(self, name: str, **kwargs) -> None:
         """Register an agent config so graph validation can check references."""

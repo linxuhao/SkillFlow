@@ -206,6 +206,11 @@ class PipelineGraph:
     begin: str = ""
     steps: list[StepNode] = field(default_factory=list)
     end_conditions: EndConditions | None = None
+    # Named references to steps (``@name`` → step id) that overlays target when
+    # this graph is used as a composition base. Preserved through the registry
+    # (unlike compose_graph, which strips them from the *composed result*) so a
+    # registered base stays composable — see SkillFlow.compose_config.
+    anchors: dict = field(default_factory=dict)
 
     # ── YAML serialization ──────────────────────────────────────
 
@@ -320,6 +325,7 @@ class PipelineGraph:
             begin=data.get("begin", ""),
             steps=steps,
             end_conditions=end_conditions,
+            anchors=data.get("anchors", {}) or {},
         )
 
     def to_dict(self) -> dict:
@@ -409,6 +415,8 @@ class PipelineGraph:
                     for c in self.end_conditions.conditions
                 ],
             }
+        if self.anchors:
+            result["anchors"] = self.anchors
         return result
 
     # ── Validation ───────────────────────────────────────────────
