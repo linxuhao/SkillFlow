@@ -798,6 +798,20 @@ class SkillFlow:
             if not node:
                 raise _TxRollback()
 
+            # An inline (non-delegated) tool step is executed via advance_run's
+            # fast-path, NOT claimed and handed to the host's agent runner — a
+            # tool step has no agent_config, so the runner would raise
+            # "Agent config '' not found". Mirror the is_gate guard above.
+            # Delegated tools (runner mode, delegate_tools_to_agent=True) still
+            # fall through so the agent claims and executes them. Without this,
+            # a tool step spliced right after another tool step (e.g. an addon's
+            # scaffold after git_sync_pre, or 5_compile after 5_test) can be
+            # claimed as an agent step if a tick reaches claim before the host
+            # drains it, failing the step until it self-heals on a later tick.
+            if resolver.is_tool(run["current_node"]) and not \
+                    self._should_delegate_tool(node.tool_name):
+                raise _TxRollback()
+
             current_version = conn.execute(
                 "SELECT version FROM skillflow_steps WHERE run_id = ? AND step_id = ? AND status = 'pending'",
                 (run_id, run["current_node"]),
