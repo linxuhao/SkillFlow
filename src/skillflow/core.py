@@ -136,7 +136,7 @@ class SkillFlow:
                  delegate_tools_to_agent: bool = False,
                  trace_enabled: bool = True,
                  trace_db_path: str | None = None,
-                 artifact_history: bool = False):
+                 artifact_history: bool = True):
         self._db_path = db_path
         self._graphs: dict[str, PipelineGraph] = {}
         self._resolvers: dict[str, GraphResolver] = {}
@@ -164,12 +164,15 @@ class SkillFlow:
         self._load_native_tools()
         self._stale_threshold = stale_threshold_seconds
         self._workspace = None
-        # Artifact history: when True, _step_commit commits each promoted step
-        # output dir to a git repo at the workspace root, so a goal-loop re-run
-        # (which rmtree-wipes the prior {step}/ before renaming the new one in)
-        # no longer destroys the previous output — every iteration is recoverable
-        # via `git log`/`git show` for tracing. Best-effort; git failures never
-        # break a run. See _artifact_commit / step_output_versions.
+        # Artifact history (ON by default): _step_commit commits each promoted
+        # step output dir to a git repo at the workspace root, so a goal-loop
+        # re-run (which rmtree-wipes the prior {step}/ before renaming the new
+        # one in) no longer destroys the previous output — every iteration is
+        # recoverable via `git log`/`git show` for tracing. Best-effort; git
+        # failures never break a run (and it no-ops without a workspace, so
+        # :memory:/workspace-less hosts are unaffected). Pass
+        # artifact_history=False to disable. See _artifact_commit /
+        # step_output_versions.
         self._artifact_history = artifact_history
         self.delegate_tools_to_agent = delegate_tools_to_agent
         if workspace_base:

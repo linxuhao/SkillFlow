@@ -353,6 +353,28 @@ sf.prune_trace(keep_last_runs=200)                    # cap to recent runs
 
 `delete_project` removes a project's trace automatically. This is what turns "why did this run do X?" from forensic git-archaeology into one query.
 
+## Artifact History
+
+The trace records *what happened*; **artifact history records the actual files each step produced**. A step's output is promoted `{step}.tmp/ → {step}/` on commit, and `_step_commit` **rmtree's the old `{step}/` before renaming the new one in** — so a goal/review loop that re-runs the same step (re-plan, re-implement, re-verify) would otherwise **overwrite and lose** every earlier iteration's output.
+
+With `artifact_history` (**on by default**), each promoted step-output dir is committed to a git repo at the **workspace root**. The previous version was committed by that step's previous `_step_commit`, so the overwrite loses nothing — every iteration stays recoverable for tracing.
+
+```python
+SkillFlow(db, workspace_base="…")                    # artifact history ON by default
+SkillFlow(db, workspace_base="…", artifact_history=False)   # opt out
+
+# List a step's output versions (newest first) and recover any of them
+for v in sf.step_output_versions(project_id, "dpe_default", "3"):
+    print(v["commit"], v["timestamp"], v["message"])
+# git show <commit>:<config>/<step>/<file>   (run at the workspace root)
+```
+
+- **Best-effort**: any git failure is swallowed — it never breaks a run.
+- **No-op without a workspace** (`:memory:` / workspace-less hosts are unaffected), and a no-change step produces no empty commit.
+- **Volatile files stay out of history**: `*.tmp/` staging dirs and trace DBs (`trace.db*`, `*.db-wal/shm`) are auto-gitignored; one commit == one step's promoted output.
+
+Complements the trace: the trace answers *why*, artifact history hands you the *exact files* a step wrote on any iteration.
+
 ## Tools
 
 ### Native (13 built-in)
