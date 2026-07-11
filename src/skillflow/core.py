@@ -135,7 +135,8 @@ class SkillFlow:
                  code_path_resolver: "Callable[[str], str | None] | None" = None,
                  delegate_tools_to_agent: bool = False,
                  trace_enabled: bool = True,
-                 trace_db_path: str | None = None):
+                 trace_db_path: str | None = None,
+                 artifact_history: bool = False):
         self._db_path = db_path
         self._graphs: dict[str, PipelineGraph] = {}
         self._resolvers: dict[str, GraphResolver] = {}
@@ -163,6 +164,13 @@ class SkillFlow:
         self._load_native_tools()
         self._stale_threshold = stale_threshold_seconds
         self._workspace = None
+        # Artifact history: when True, _step_commit commits each promoted step
+        # output dir to a git repo at the workspace root, so a goal-loop re-run
+        # (which rmtree-wipes the prior {step}/ before renaming the new one in)
+        # no longer destroys the previous output — every iteration is recoverable
+        # via `git log`/`git show` for tracing. Best-effort; git failures never
+        # break a run. See _artifact_commit / step_output_versions.
+        self._artifact_history = artifact_history
         self.delegate_tools_to_agent = delegate_tools_to_agent
         if workspace_base:
             from skillflow.workspace import WorkspaceManager
@@ -1612,12 +1620,88 @@ class SkillFlow:
                 rel = item.relative_to(tmp_dir)
                 moved_files.append(str(rel))
 
-        # Atomic: remove old step dir, rename tmp → step
+        # Atomic: remove old step dir, rename tmp → step. The prior {step}/ was
+        # already committed to the artifact-history git by its own _step_commit,
+        # so this rmtree loses no history when artifact_history is on.
         if step_dir.exists():
             shutil.rmtree(str(step_dir))
         os.rename(str(tmp_dir), str(step_dir))
 
+        if self._artifact_history:
+            self._artifact_commit(pid, gname, token.step_id, token.run_id)
+
         return {"passed": True, "files": moved_files}
+
+    # ── Artifact history (opt-in git versioning of promoted step outputs) ──
+    def _artifact_commit(self, pid: str, config_name: str, step_id: str,
+                         run_id: str = "") -> None:
+        """Commit a just-promoted step output dir to the workspace git repo.
+
+        Preserves every iteration of a step's output across goal-loop re-runs
+        (which overwrite {step}/) so they stay recoverable for tracing. The repo
+        lives at the workspace root; volatile files (staging {*.tmp}/, trace DBs)
+        are gitignored. Entirely best-effort — never raises into the run path.
+        """
+        import subprocess
+        try:
+            root = self._workspace.get_project_path(pid)
+            if not root or not root.is_dir():
+                return
+            env = {**os.environ, "GIT_TERMINAL_PROMPT": "0",
+                   "GIT_AUTHOR_NAME": "skillflow", "GIT_AUTHOR_EMAIL": "skillflow@localhost",
+                   "GIT_COMMITTER_NAME": "skillflow", "GIT_COMMITTER_EMAIL": "skillflow@localhost"}
+            def _git(*args, check=False):
+                return subprocess.run(["git", *args], cwd=str(root), env=env,
+                                      capture_output=True, text=True, check=check)
+            if not (root / ".git").is_dir():
+                _git("init", "-q")
+            # Keep volatile/large files out of history (idempotent).
+            gi = root / ".gitignore"
+            want = ["*.tmp/", "trace.db", "trace.db-*", "*.db-wal", "*.db-shm",
+                    "__pycache__/", "*.pyc"]
+            have = gi.read_text(encoding="utf-8").splitlines() if gi.is_file() else []
+            missing = [w for w in want if w not in have]
+            if missing:
+                gi.write_text("\n".join(have + missing).strip() + "\n", encoding="utf-8")
+                _git("add", ".gitignore")
+            # Stage just this step's promoted dir (one commit == one step output).
+            rel = f"{config_name}/{step_id}"
+            _git("add", "--", rel)
+            # Skip an empty commit (nothing staged → step wrote nothing new).
+            if _git("diff", "--cached", "--quiet").returncode == 0:
+                return
+            msg = f"{rel}" + (f" @ {run_id[:8]}" if run_id else "")
+            _git("commit", "-q", "-m", msg)
+        except Exception:
+            pass  # best-effort: artifact history must never break a run
+
+    def step_output_versions(self, project_id: str, config_name: str,
+                             step_id: str) -> list[dict]:
+        """Return the artifact-history commits that touched a step's output dir,
+        newest first: ``[{commit, timestamp, message}]``. Empty if history is
+        off / no git / no versions. Recover a version with
+        ``git show <commit>:<config_name>/<step_id>/<file>`` at the workspace root.
+        """
+        import subprocess
+        out: list[dict] = []
+        try:
+            if not self._workspace:
+                return out
+            root = self._workspace.get_project_path(project_id)
+            if not root or not (root / ".git").is_dir():
+                return out
+            rel = f"{config_name}/{step_id}"
+            res = subprocess.run(
+                ["git", "log", "--pretty=%H%x1f%cI%x1f%s", "--", rel],
+                cwd=str(root), capture_output=True, text=True)
+            for line in res.stdout.splitlines():
+                parts = line.split("\x1f")
+                if len(parts) == 3:
+                    out.append({"commit": parts[0], "timestamp": parts[1],
+                                "message": parts[2]})
+        except Exception:
+            pass
+        return out
 
     def _draft_promote(self, token: ClaimToken) -> dict:
         """Deprecated: use _step_commit instead. Kept for backward compat."""
