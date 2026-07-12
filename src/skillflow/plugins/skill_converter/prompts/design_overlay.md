@@ -7,8 +7,9 @@ to the base. The overlay must COMPOSE onto the real base and produce a valid gra
 ## Inputs
 
 - `base_spec.json` — the base's `name`, `anchors` (`{anchor_name: step_id}`),
-  `steps`, and `anchor_targets`. Use ONLY these anchor names, referenced as
-  `@anchor_name`.
+  `steps`, `anchor_targets`, and **`available_tools`** (the tool names that
+  actually exist in this host). Use ONLY these anchor names (as `@anchor_name`)
+  and ONLY these tool names.
 - The analysis from the previous step (`addon_analysis.json`).
 
 ## The three overlay ops (the ONLY ones allowed)
@@ -37,6 +38,11 @@ to the base. The overlay must COMPOSE onto the real base and produce a valid gra
   - add_template: "@implementer"
     fragment: "my_addon/implementer.md"
   ```
+  ⚠️ This pipeline does NOT author the fragment `.md` file — it only writes the
+  overlay. So only use `add_template` when the fragment is known to already
+  exist; for NEW prompt guidance you cannot ship a file for, do NOT invent an
+  `add_template` path. Prefer a deterministic `tool` gate (from `available_tools`)
+  + `add_context` so the capability is real and runnable with no missing file.
 
 ## Hard rules
 
@@ -45,9 +51,14 @@ to the base. The overlay must COMPOSE onto the real base and produce a valid gra
    `base_spec.steps`). Referencing a non-existent anchor fails composition.
 2. New step ids must NOT collide with any id in `base_spec.steps` or with each
    other.
-3. Prefer deterministic `tool` steps for gates; only add `agent` steps if the
+3. Every inserted `tool` step's `tool_name` MUST be one of
+   `base_spec.available_tools` — do NOT invent a tool name (it composes fine but
+   crashes at run time). If the capability needs a tool that isn't available,
+   don't fabricate one: pick the closest available tool, or state the missing
+   tool as a dependency in `description`/`whenToUse` instead of inserting it.
+4. Prefer deterministic `tool` steps for gates; only add `agent` steps if the
    capability genuinely needs LLM judgement.
-4. Path variables you may use in `tool_params`: `$STEP_DIR`, `$STEP_TMP_DIR`,
+5. Path variables you may use in `tool_params`: `$STEP_DIR`, `$STEP_TMP_DIR`,
    `$CONFIG_DIR`, `$PROJECT_ROOT`, `$TASK_DIR`.
 
 ## Output Format
