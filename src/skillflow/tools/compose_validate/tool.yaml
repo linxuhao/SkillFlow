@@ -1,0 +1,32 @@
+name: compose_validate
+description: >
+  Validate an addon OVERLAY spec by actually composing it onto its base graph.
+  Reads the overlay (insert_after / add_context / add_template ops targeting the
+  base's @anchors) and the full base graph dict, composes them via
+  skillflow.compose, builds the resulting PipelineGraph, and runs the normal
+  graph validation (reachability, cycle-safety, transition targets). Composition
+  IS the acceptance test — an overlay that references a non-existent anchor, a
+  colliding step id, or produces an invalid graph fails here. Writes
+  compose_report.json to out_dir and returns
+  {passed: bool, errors: [str, ...], summary: str}.
+parameters:
+  overlay_path:
+    type: string
+    description: Path to the overlay YAML/JSON file to validate.
+    required: false
+  overlay_content:
+    type: string
+    description: Raw overlay YAML/JSON content (alternative to overlay_path).
+    required: false
+  base_path:
+    type: string
+    description: Path to the base graph YAML/JSON dict (as produced by graph.to_dict(), anchors intact).
+    required: false
+  base_content:
+    type: string
+    description: Raw base graph YAML/JSON content (alternative to base_path).
+    required: false
+  out_dir:
+    type: string
+    description: Directory to write compose_report.json into (typically $STEP_DIR).
+    required: false

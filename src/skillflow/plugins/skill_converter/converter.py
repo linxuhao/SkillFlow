@@ -32,6 +32,7 @@ from skillflow.plugins.skill_runner.runner import SkillTool
 
 _CONVERTER_DIR = Path(__file__).parent
 _CONVERTER_YAML = _CONVERTER_DIR / "skill_converter.yaml"
+_ADDON_CONVERTER_YAML = _CONVERTER_DIR / "addon_converter.yaml"
 
 
 def setup_converter(
@@ -168,6 +169,60 @@ def _register_converter_agents(sf: SkillFlow):
             sf.register_agent_config_from_dict(name, cfg)
         except Exception:
             pass
+
+
+def _register_addon_converter_agents(sf: SkillFlow):
+    """Register the agent configs needed by the addon_converter pipeline.
+
+    Sibling of :func:`_register_converter_agents`: addon_converter authors an
+    OVERLAY (ops against a base's anchors) instead of a standalone graph, so its
+    agents reason over ``base_spec.json`` (the base's extension surface) and the
+    acceptance test is the ``compose_validate`` tool, not the static linter."""
+    agents = {
+        "addon_analyst": {
+            "model": "host",
+            "tools": ["read_file", "write"],
+            "system_prompt": _load_prompt("analyze_addon.md"),
+        },
+        "overlay_designer": {
+            "model": "host",
+            "tools": ["read_file", "write"],
+            "system_prompt": _load_prompt("design_overlay.md"),
+        },
+        "overlay_explainer": {
+            "model": "host",
+            "tools": ["read_file", "write"],
+            "system_prompt": _load_prompt("explain_overlay.md"),
+        },
+        "overlay_fixer": {
+            "model": "host",
+            "tools": ["read_file", "write"],
+            "system_prompt": _load_prompt("fix_overlay.md"),
+        },
+    }
+    for name, cfg in agents.items():
+        try:
+            sf.register_agent_config_from_dict(name, cfg)
+        except Exception:
+            pass
+
+
+def get_addon_output_file(sf: SkillFlow, run_id: str) -> Path | None:
+    """Return the path to the generated overlay YAML in the workspace.
+
+    Checks fix_overlay/ first (post-fix output), then design_overlay/
+    (first-attempt output). Mirrors :func:`get_output_file` for skill pipelines.
+    """
+    pid = sf._get_project_id(run_id)
+    gname = sf._get_graph_name(run_id)
+    if not pid or not gname or not sf._workspace:
+        return None
+
+    for step_id in ("fix_overlay", "design_overlay"):
+        f = sf._workspace.get_step_dir(pid, gname, step_id) / "overlay.yaml"
+        if f.exists():
+            return f
+    return None
 
 
 def _load_prompt(filename: str) -> str:
