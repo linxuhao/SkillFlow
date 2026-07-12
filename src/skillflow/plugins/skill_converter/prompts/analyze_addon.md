@@ -25,7 +25,9 @@ pipeline, plus that base's extension points. Decide WHAT to inject and WHERE.
      (e.g. so a reviewer reads a new gate's report).
    - `add_template` — attach an extra prompt fragment to an existing agent step
      (guidance that reaches the agent ONLY when this addon is applied).
-3. **Tools** — any tool names new `insert_after` gate steps will call.
+3. **Tools** — any tool names new `insert_after` gate steps will call. These MUST
+   come from `base_spec.available_tools` — do not plan around a tool that isn't
+   listed there.
 4. Only use anchors that exist in `base_spec.anchors`. Never invent one.
 
 ## Output Format
