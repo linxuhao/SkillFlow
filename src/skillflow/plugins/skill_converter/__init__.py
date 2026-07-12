@@ -7,7 +7,10 @@ The linter's skillflow_lint tool provides the validation feedback loop.
 
 from pathlib import Path
 
-from skillflow.plugins.skill_converter.converter import setup_converter, get_output_file, save_output
+from skillflow.plugins.skill_converter.converter import (
+    setup_converter, get_output_file, save_output,
+    _register_addon_converter_agents, get_addon_output_file,
+)
 
 
 def load_agent_guide() -> str:
@@ -15,4 +18,5 @@ def load_agent_guide() -> str:
     return (Path(__file__).parent / "AGENT.md").read_text(encoding="utf-8")
 
 
-__all__ = ["setup_converter", "get_output_file", "save_output", "load_agent_guide"]
+__all__ = ["setup_converter", "get_output_file", "save_output", "load_agent_guide",
+           "_register_addon_converter_agents", "get_addon_output_file"]

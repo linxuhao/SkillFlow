@@ -1,0 +1,127 @@
+# addon_converter.yaml — sibling of skill_converter that authors an addon OVERLAY.
+#
+# skill_converter turns a skill description into a standalone pipeline graph;
+# addon_converter turns a "capability to add + a target base" into a validated
+# OVERLAY (insert_after / add_context / add_template ops against the base's
+# @anchors). The acceptance test is compose_validate: the overlay must actually
+# compose onto its real base and yield a valid graph.
+#
+# Base context is injected by the HOST as seed files the analyze step reads:
+#   base_spec.json  — {name, anchors: {name: step_id}, steps: [id, ...],
+#                      anchor_targets: {anchor: [step_id, ...]}}  (concise, for agents)
+#   base_graph.yaml — the FULL base graph dict (graph.to_dict(), anchors intact),
+#                     read only by the compose_validate tool.
+#   addon_description.md — the capability to add (seed_text).
+
+name: "addon_converter"
+description: "Convert a capability description + a base graph into a validated addon overlay"
+begin: "analyze_addon"
+
+end_conditions:
+  combinator: or
+  conditions:
+    # Loop-external `done` gate — reached only when compose passes. Not
+    # `node_reached: validate_compose` (inside the fix loop; a stale completed
+    # row would fire early — the coding_impl/subagent premature-firing trap). A
+    # gate has no completed step row, so it fires at most once. The never-passes
+    # loop is bounded by max_loop below.
+    - type: node_reached
+      node: "done"
+      result: "completed"
+    - type: max_total_steps
+      limit: 50
+
+steps:
+  - id: "analyze_addon"
+    step_type: "agent"
+    agent_config: "addon_analyst"
+    context:
+      - source: { config: "addon_converter", output: "addon_description.md" }
+      - source: { config: "addon_converter", output: "base_spec.json" }
+    output:
+      mode: "content"
+      fixed:
+        analysis: { file: "addon_analysis.json", format: '{"intent": str, "injections": [{anchor: str, what: str, kind: str}, ...], "tools": [str, ...], "context_additions": [str, ...], "template_fragments": [str, ...]}' }
+    transitions:
+      - to: "design_overlay"
+
+  - id: "design_overlay"
+    step_type: "agent"
+    agent_config: "overlay_designer"
+    context:
+      - source: { config: "addon_converter", output: "base_spec.json" }
+      - source: { step: "analyze_addon" }
+    output:
+      mode: "content"
+      fixed:
+        overlay: { file: "overlay.yaml", on_exists: "new" }
+    transitions:
+      - to: "explain_overlay"
+
+  - id: "explain_overlay"
+    step_type: "agent"
+    agent_config: "overlay_explainer"
+    context:
+      - source: { step: "analyze_addon" }
+      - source: { step: "design_overlay" }
+    output:
+      mode: "content"
+      fixed:
+        explanation: { file: "overlay_explanation.md" }
+    checkpoint: true
+    checkpoint_label: "Overlay Review — approve to compose-validate, reject to revise"
+    checkpoint_reject_to: "design_overlay"
+    transitions:
+      - to: "validate_compose"
+        match: { from: "checkpoint", value: "approved" }
+
+  - id: "validate_compose"
+    step_type: "tool"
+    tool_name: "compose_validate"
+    tool_params:
+      overlay_path: "$CONFIG_DIR/design_overlay/overlay.yaml"
+      base_path: "$CONFIG_DIR/_seed/base_graph.yaml"
+      out_dir: "$STEP_DIR"
+    transitions:
+      - to: "done"
+        match: { passed: true }
+      - to: "fix_overlay"
+        match: { passed: false }
+        max_loop: 3
+        feedback: true
+
+  - id: "fix_overlay"
+    step_type: "agent"
+    agent_config: "overlay_fixer"
+    context:
+      - source: { config: "addon_converter", output: "base_spec.json" }
+      - source: { step: "design_overlay" }
+      - source: { step: "validate_compose" }   # the compose_report.json errors
+    output:
+      mode: "content"
+      fixed:
+        overlay: { file: "overlay.yaml", on_exists: "replace" }
+    transitions:
+      - to: "validate_fix"
+
+  - id: "validate_fix"
+    step_type: "tool"
+    tool_name: "compose_validate"
+    tool_params:
+      overlay_path: "$CONFIG_DIR/fix_overlay/overlay.yaml"
+      base_path: "$CONFIG_DIR/_seed/base_graph.yaml"
+      out_dir: "$STEP_DIR"
+    transitions:
+      - to: "done"
+        match: { passed: true }
+      - to: "fix_overlay"
+        match: { passed: false }
+        max_loop: 3
+        feedback: true
+
+  # Loop-external terminal — reached only after compose passes; the node the
+  # end-condition fires on. Gate = no completed step row, so it fires at most once.
+  - id: "done"
+    step_type: "gate"
+    transitions:
+      - to: null
