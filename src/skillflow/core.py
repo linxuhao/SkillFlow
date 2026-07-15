@@ -978,6 +978,13 @@ class SkillFlow:
                     validation_error = existing_inputs["_validation_error"]
                 if "_feedback" in existing_inputs:
                     feedback = existing_inputs["_feedback"]
+            # Prefer the accumulated checkpoint-feedback log (ALL rounds) over the
+            # scalar _feedback (latest only), so a re-run honors every round of
+            # user feedback instead of drifting toward the most recent one.
+            _fb_log = self._read_feedback_log(
+                run["project_id"], run["graph_name"], run["current_node"])
+            if _fb_log:
+                feedback = _fb_log
 
             # Emit via notification bus (real-time push + durable outbox).
             # publish_sync schedules an async task; outbox write happens
@@ -1713,13 +1720,18 @@ class SkillFlow:
 
     # ── Artifact history (opt-in git versioning of promoted step outputs) ──
     def _artifact_commit(self, pid: str, config_name: str, step_id: str,
-                         run_id: str = "") -> None:
+                         run_id: str = "", *, rel: str = "",
+                         msg_prefix: str = "") -> None:
         """Commit a just-promoted step output dir to the workspace git repo.
 
         Preserves every iteration of a step's output across goal-loop re-runs
         (which overwrite {step}/) so they stay recoverable for tracing. The repo
         lives at the workspace root; volatile files (staging {*.tmp}/, trace DBs)
         are gitignored. Entirely best-effort — never raises into the run path.
+
+        ``rel`` overrides the staged path (defaults to ``{config}/{step}``) so the
+        same plumbing can version a sibling artifact — e.g. the accumulating
+        checkpoint-feedback log at ``{config}/_feedback/{step}.md``.
         """
         import subprocess
         try:
@@ -1743,16 +1755,68 @@ class SkillFlow:
             if missing:
                 gi.write_text("\n".join(have + missing).strip() + "\n", encoding="utf-8")
                 _git("add", ".gitignore")
-            # Stage just this step's promoted dir (one commit == one step output).
-            rel = f"{config_name}/{step_id}"
+            # Stage just this artifact (one commit == one step output / feedback round).
+            rel = rel or f"{config_name}/{step_id}"
             _git("add", "--", rel)
             # Skip an empty commit (nothing staged → step wrote nothing new).
             if _git("diff", "--cached", "--quiet").returncode == 0:
                 return
-            msg = f"{rel}" + (f" @ {run_id[:8]}" if run_id else "")
+            msg = f"{msg_prefix}{rel}" + (f" @ {run_id[:8]}" if run_id else "")
             _git("commit", "-q", "-m", msg)
         except Exception:
             pass  # best-effort: artifact history must never break a run
+
+    # ── Checkpoint-feedback log (persisted, appended, git-historized) ──────
+    # Reject feedback used to be a SCALAR (_feedback in inputs_json), overwritten
+    # on every reject — so consecutive rounds of user feedback drifted: the step
+    # re-ran seeing only the LATEST round and silently dropped earlier requests.
+    # Instead, each round is APPENDED to a per-step log that lives BESIDE the step
+    # dir (a step dir is rmtree'd on every re-run, so an in-dir log would be
+    # wiped). The full log is injected into the re-run's prompt, and versioned in
+    # the artifact-history git repo for an audit trail of what was asked, when.
+    def _feedback_log_path(self, pid: str, config_name: str, step_id: str):
+        if not self._workspace:
+            return None
+        return (self._workspace.get_config_path(pid, config_name)
+                / "_feedback" / f"{step_id}.md")
+
+    def _read_feedback_log(self, pid: str, config_name: str, step_id: str):
+        p = self._feedback_log_path(pid, config_name, step_id)
+        if p and p.is_file():
+            try:
+                return p.read_text(encoding="utf-8")
+            except Exception:
+                return None
+        return None
+
+    def _append_feedback_log(self, pid: str, config_name: str, step_id: str,
+                             feedback, run_id: str = "") -> None:
+        """Append one round of checkpoint feedback to the step's persisted log.
+
+        Best-effort — feedback history must never break a run. Called AFTER the
+        reject transaction commits (git is a subprocess; keep it off the write
+        lock)."""
+        p = self._feedback_log_path(pid, config_name, step_id)
+        if not p:
+            return
+        try:
+            import datetime as dt
+            text = feedback if isinstance(feedback, str) else self._serialize(feedback)
+            if not (text or "").strip():
+                return
+            p.parent.mkdir(parents=True, exist_ok=True)
+            existing = p.read_text(encoding="utf-8") if p.is_file() else ""
+            n = existing.count("## 反馈轮 #") + 1
+            ts = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            entry = f"## 反馈轮 #{n} · {ts}\n\n{text.strip()}\n"
+            p.write_text((existing + ("\n\n" if existing.strip() else "") + entry),
+                         encoding="utf-8")
+            if self._artifact_history:
+                self._artifact_commit(pid, config_name, step_id, run_id,
+                                      rel=f"{config_name}/_feedback/{step_id}.md",
+                                      msg_prefix="feedback: ")
+        except Exception:
+            pass
 
     def step_output_versions(self, project_id: str, config_name: str,
                              step_id: str) -> list[dict]:
@@ -2618,6 +2682,35 @@ class SkillFlow:
                     (target, run_id),
                 )
                 return target
+            # Checkpoint on a TOOL step: the `from: checkpoint` edge matches on
+            # _checkpoint_approved, which the tool's own flags never carry, so
+            # `target` is None here — but this is a pause point, not a dead end.
+            # The agent completion path (advance_run) pauses on checkpoints;
+            # mirror it here so a tool step can carry a checkpoint too (e.g. a
+            # `restage` gate that stages a maker's output for human review after
+            # an intervening reviewer). Without this the run would fall through to
+            # _fail_run_in_tx("No matching transition …") below.
+            ckpt_node = resolver.get_node(step_id)
+            if ckpt_node and ckpt_node.checkpoint:
+                ckpt_target = next(
+                    (t.to for t in ckpt_node.transitions
+                     if t.match and t.match.get("from") == "checkpoint"), None)
+                if ckpt_target is not None:
+                    conn.execute(
+                        "UPDATE skillflow_runs SET current_node = ?, status = 'paused',"
+                        " updated_at = datetime('now') WHERE id = ?",
+                        (ckpt_target, run_id))
+                    _lbl = ckpt_node.checkpoint_label or ckpt_node.name or step_id
+                    self.notifications.publish_sync(
+                        "checkpoint_paused",
+                        {"step_id": step_id, "label": _lbl, "next_node": ckpt_target,
+                         "project_id": run_row["project_id"],
+                         "graph_name": run_row["graph_name"]},
+                        step_id=step_id, run_id=run_id)
+                    self.trace(run_id, "step", "checkpoint_paused",
+                               {"step_id": step_id, "label": _lbl,
+                                "next_node": ckpt_target}, step_id=step_id)
+                    return None
             # No target — check end_conditions against the current node
             ec = resolver.graph.end_conditions
             if ec and ec.conditions:
@@ -3266,6 +3359,14 @@ class SkillFlow:
                 {"run_id": run_id, "step_id": step_id},
                 step_id=step_id, run_id=run_id,
             )
+
+        # Append this round of feedback to the redirect target's persisted,
+        # git-historized log — AFTER the tx so the git subprocess never holds the
+        # write lock. The step re-runs seeing the FULL history (all rounds), not
+        # just this latest one, so consecutive requests no longer drift.
+        self._append_feedback_log(
+            run["project_id"], run["graph_name"], redirect_to or step_id,
+            feedback, run_id)
 
     def approve_checkpoint(self, run_id: str) -> str:
         """Approve the current checkpoint and advance the pipeline.

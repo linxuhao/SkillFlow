@@ -1605,3 +1605,110 @@ def test_delete_project_removes_trace(sf: SkillFlow):
     sf.trace(other, "event", "x")
     sf.delete_project("doomed")  # idempotent, no effect on 'safe'
     assert len(sf.get_trace(other)) == 1
+
+
+# ── Checkpoint on a TOOL step (regression: tool completion path had no
+#    checkpoint handling → it failed with "No matching transition") ──────
+
+def _stage_tool_loader(sf):
+    from unittest.mock import MagicMock
+    def stage_tool(**kw):
+        return {"staged": True}  # flags that match NO from:checkpoint edge
+    mock = MagicMock()
+    mock.load_fn.return_value = stage_tool
+    mock.load_schema.return_value = {"name": "stage"}
+    sf._tool_loader = mock
+
+
+def _tool_checkpoint_graph(name, reject_to=""):
+    from skillflow.graph import PipelineGraph, StepNode, Transition
+    gate = StepNode(id="gate", step_type="tool", tool_name="stage",
+                    checkpoint=True, checkpoint_label="Human review",
+                    checkpoint_reject_to=reject_to,
+                    transitions=[Transition(to="done",
+                        match={"from": "checkpoint", "value": "approved"})])
+    return PipelineGraph(name=name, begin="a", steps=[
+        StepNode(id="a", step_type="agent", transitions=[Transition(to="gate")]),
+        gate,
+        StepNode(id="done", step_type="agent", transitions=[Transition(to=None)]),
+    ])
+
+
+def test_tool_step_checkpoint_pauses_not_fails(sf: SkillFlow):
+    """A checkpoint on a TOOL step must PAUSE for approval, not fail. The tool
+    completion path (_complete_tool_step) previously had no checkpoint handling
+    — only the agent path did — so the tool's own flags matched no transition
+    and the run died with 'No matching transition'."""
+    _stage_tool_loader(sf)
+    sf.register_graph(_tool_checkpoint_graph("tcp"))
+    rid = sf.create_run("tcp")
+    sf.start_run(rid)
+    token = sf.claim_next_step(rid)
+    sf.confirm_step(token.token, StepResult(outputs={}, flags={}))
+    sf.advance_run(rid)   # resolve a → gate (defers the native tool)
+    sf.advance_run(rid)   # execute gate inline → checkpoint pause
+
+    run = sf.get_run(rid)
+    assert run["status"] == "paused"        # regression: was "failed"
+    assert run["current_node"] == "done"    # the approve target
+
+    sf.approve_checkpoint(rid)
+    sf.advance_run(rid)
+    assert sf.get_run(rid)["status"] != "failed"
+
+
+def test_tool_step_checkpoint_reject_loops_back(sf: SkillFlow):
+    _stage_tool_loader(sf)
+    sf.register_graph(_tool_checkpoint_graph("tcp2", reject_to="a"))
+    rid = sf.create_run("tcp2")
+    sf.start_run(rid)
+    token = sf.claim_next_step(rid)
+    sf.confirm_step(token.token, StepResult(outputs={}, flags={}))
+    sf.advance_run(rid)
+    sf.advance_run(rid)
+    assert sf.get_run(rid)["status"] == "paused"
+
+    sf.reject_checkpoint(rid, "gate", "redo", redirect_to="a")
+    assert sf.get_run(rid)["status"] == "running"
+    assert sf.get_run(rid)["current_node"] == "a"
+
+
+def test_checkpoint_feedback_log_accumulates(sf_with_workspace):
+    """Consecutive checkpoint rejections must ACCUMULATE: each round is appended
+    to a persisted per-step log and the FULL history is injected into the re-run,
+    so later feedback no longer overwrites (and silently drops) earlier feedback."""
+    sf = sf_with_workspace
+    from skillflow.graph import PipelineGraph, StepNode, Transition
+    g = PipelineGraph(name="fblog", begin="a", steps=[
+        StepNode(id="a", step_type="agent", checkpoint=True,
+                 transitions=[Transition(to="b",
+                     match={"from": "checkpoint", "value": "approved"})]),
+        StepNode(id="b", step_type="agent", transitions=[Transition(to=None)]),
+    ])
+    sf.register_graph(g)
+    rid = sf.create_run("fblog", {"project_id": "pid"})
+    sf.start_run(rid)
+
+    tok = sf.claim_next_step(rid); sf.confirm_step(tok.token, StepResult(outputs={}))
+    sf.advance_run(rid)
+    assert sf.get_run(rid)["status"] == "paused"
+    sf.reject_checkpoint(rid, "a", "把主角写得更黑暗")
+
+    tok = sf.claim_next_step(rid)
+    assert "把主角写得更黑暗" in (tok.inputs.get("_feedback") or "")  # round 1 reaches re-run
+    sf.confirm_step(tok.token, StepResult(outputs={}))
+    sf.advance_run(rid)
+    assert sf.get_run(rid)["status"] == "paused"
+    sf.reject_checkpoint(rid, "a", "增加一个对立势力")
+
+    # Round-3 claim must see BOTH rounds — the regression is that only round 2 did.
+    tok = sf.claim_next_step(rid)
+    fb = tok.inputs.get("_feedback") or ""
+    assert "把主角写得更黑暗" in fb and "增加一个对立势力" in fb
+
+    # Persisted, appended log beside the step dir holds both rounds.
+    log = sf._workspace.get_config_path("pid", "fblog") / "_feedback" / "a.md"
+    assert log.is_file()
+    body = log.read_text(encoding="utf-8")
+    assert body.count("## 反馈轮 #") == 2
+    assert "把主角写得更黑暗" in body and "增加一个对立势力" in body
