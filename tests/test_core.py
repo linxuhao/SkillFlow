@@ -1739,6 +1739,12 @@ def test_feedback_log_injection_carries_read_contract(sf_with_workspace):
     fb = tok.inputs.get("_feedback") or ""
     assert fb.startswith("[How to read this feedback log]")
     assert "NOT text to reproduce" in fb
+    # feedback is a constraint, not text to put IN the artifact — the second
+    # half of the same meta/object confusion (a revision answered "deaths cost
+    # no stat points" by writing "...no stat points are deducted" into the
+    # prose, teaching the reader that stat points exist)
+    assert "CONSTRAINT on the artifact" in fb
+    assert "do not assert the absence of something" in fb
     assert "「引用的原句」这句不对，删掉" in fb
     # the read contract is prepended at READ time only — the file on disk
     # stays clean so round counting never miscounts

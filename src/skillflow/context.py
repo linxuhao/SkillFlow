@@ -18,11 +18,18 @@ from pathlib import Path
 
 # ── Checkpoint-feedback log (written by core.reject_checkpoint) ─────────────
 # One file per step at {config}/_feedback/{step}.md, appended round by round.
-# The read contract below exists because of an observed failure mode: user
-# feedback QUOTED the offending passage before demanding a change, and a later
-# revision pasted the quote back into the output verbatim — precisely reverting
-# an earlier round's fix. The preamble is prepended at READ time only; the file
-# on disk stays clean (append logic counts rounds from the raw file).
+# The read contract below exists because of two observed failure modes, both
+# the same root error — reading META text (talk ABOUT the artifact) as OBJECT
+# text (the artifact itself):
+#   1. feedback QUOTED the offending passage; the next revision pasted the
+#      quote back verbatim, precisely reverting an earlier round's fix;
+#   2. feedback stated a CONSTRAINT ("deaths cost no stat points"); the next
+#      revision transcribed it into the artifact ("...no stat points are
+#      deducted") — announcing compliance instead of complying. The code
+#      equivalent is a "// no globals used here" comment answering "don't use
+#      globals".
+# The preamble is prepended at READ time only; the file on disk stays clean
+# (append logic counts rounds from the raw file).
 FEEDBACK_LOG_PREAMBLE = (
     "[How to read this feedback log]\n"
     "- Rounds are CUMULATIVE. Every round below is still binding: fixing the "
@@ -33,6 +40,11 @@ FEEDBACK_LOG_PREAMBLE = (
     "they are NOT text to reproduce. A later revision may already have fixed "
     "them; check the current version first, and never copy a quoted passage "
     "back into your output.\n"
+    "- Feedback is a CONSTRAINT on the artifact, not text to put IN it. You "
+    "satisfy it by what the artifact IS, never by restating it. In "
+    "particular, do not assert the absence of something to prove compliance "
+    "with \"don't do X\" — a reader who never knew X was possible only learns "
+    "it exists from your denial. Just leave X out.\n"
 )
 
 

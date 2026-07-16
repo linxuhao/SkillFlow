@@ -170,9 +170,11 @@ class TestFeedbackOfSource:
         content = result[label]
         assert "别用真实地名" in content
         # the read contract rides along: quotes locate problems, they are not
-        # text to reproduce; every round stays binding
+        # text to reproduce; feedback constrains the artifact rather than
+        # belonging in it; every round stays binding
         assert "How to read this feedback log" in content
         assert "NOT text to reproduce" in content
+        assert "CONSTRAINT on the artifact" in content
 
     def test_absent_log_resolves_to_nothing(self, workspace):
         resolver = ContextResolver(workspace)
