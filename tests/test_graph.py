@@ -561,3 +561,14 @@ class TestNotifyField:
         from skillflow.graph import _flags_match
         match = {"from_file": "x.json", "field": "passed", "value": True}
         assert _flags_match(match, {}) is False
+
+
+def test_feedback_of_spec_normalization():
+    """{feedback_of: "x"} must NOT fall through to the "step" default — that
+    would hand it to read_tools with an empty step_id. It is prompt-inline
+    only."""
+    from skillflow.graph import _normalize_context_spec
+    s = _normalize_context_spec({"feedback_of": "outline"})
+    assert s["source_type"] == "feedback"
+    assert s["mode"] == "inline"
+    assert s["feedback_of"] == "outline"

@@ -149,3 +149,49 @@ class TestVolatilityOrdering:
         assert "SOTA Report" in text
         # static config read appears before the step output
         assert text.index("Test project brief content") < text.index("SOTA Report")
+
+
+class TestFeedbackOfSource:
+    """{feedback_of: "step"} — inject another step's accumulated checkpoint-
+    feedback log (e.g. onto a reviewer, so a revision that silently reverts an
+    earlier round's fix no longer passes review unchallenged)."""
+
+    def test_resolves_log_with_read_contract(self, workspace):
+        fb = workspace / "dpe_default" / "_feedback"
+        fb.mkdir(parents=True)
+        (fb / "2.md").write_text("## 反馈轮 #1 · ts\n\n别用真实地名\n",
+                                 encoding="utf-8")
+        resolver = ContextResolver(workspace)
+        result = resolver.resolve([{"feedback_of": "2"}],
+                                  current_config="dpe_default")
+        assert len(result) == 1
+        label = next(iter(result))
+        assert "feedback on step '2'" in label
+        content = result[label]
+        assert "别用真实地名" in content
+        # the read contract rides along: quotes locate problems, they are not
+        # text to reproduce; every round stays binding
+        assert "How to read this feedback log" in content
+        assert "NOT text to reproduce" in content
+
+    def test_absent_log_resolves_to_nothing(self, workspace):
+        resolver = ContextResolver(workspace)
+        result = resolver.resolve([{"feedback_of": "2"}],
+                                  current_config="dpe_default")
+        assert result == {}
+
+    def test_feedback_is_volatile_ordered_after_step_outputs(self, workspace):
+        fb = workspace / "dpe_default" / "_feedback"
+        fb.mkdir(parents=True)
+        (fb / "2.md").write_text("轮次内容", encoding="utf-8")
+        resolver = ContextResolver(workspace)
+        specs = [
+            {"feedback_of": "2"},  # declared FIRST on purpose
+            {"source": {"step": "2", "output": "step2_design.md"}},
+        ]
+        result = resolver.resolve(specs, current_config="dpe_default")
+        labels = list(result)
+        assert len(labels) == 2
+        # feedback changes every reject round — it must sort to the volatile
+        # tail so it can't poison the prompt-cache prefix
+        assert "feedback" in labels[-1].lower()

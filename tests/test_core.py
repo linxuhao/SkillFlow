@@ -1712,3 +1712,66 @@ def test_checkpoint_feedback_log_accumulates(sf_with_workspace):
     body = log.read_text(encoding="utf-8")
     assert body.count("## 反馈轮 #") == 2
     assert "把主角写得更黑暗" in body and "增加一个对立势力" in body
+
+
+def test_feedback_log_injection_carries_read_contract(sf_with_workspace):
+    """The injected feedback log must open with the read contract: rounds are
+    cumulative, and quoted passages are the complained-about OLD text — never
+    text to reproduce. (Observed failure: a revision pasted a feedback quote
+    back verbatim, precisely reverting an earlier round's fix.)"""
+    sf = sf_with_workspace
+    from skillflow.graph import PipelineGraph, StepNode, Transition
+    g = PipelineGraph(name="fbcontract", begin="a", steps=[
+        StepNode(id="a", step_type="agent", checkpoint=True,
+                 transitions=[Transition(to="b",
+                     match={"from": "checkpoint", "value": "approved"})]),
+        StepNode(id="b", step_type="agent", transitions=[Transition(to=None)]),
+    ])
+    sf.register_graph(g)
+    rid = sf.create_run("fbcontract", {"project_id": "pid"})
+    sf.start_run(rid)
+    tok = sf.claim_next_step(rid)
+    sf.confirm_step(tok.token, StepResult(outputs={}))
+    sf.advance_run(rid)
+    sf.reject_checkpoint(rid, "a", "「引用的原句」这句不对，删掉")
+
+    tok = sf.claim_next_step(rid)
+    fb = tok.inputs.get("_feedback") or ""
+    assert fb.startswith("[How to read this feedback log]")
+    assert "NOT text to reproduce" in fb
+    assert "「引用的原句」这句不对，删掉" in fb
+    # the read contract is prepended at READ time only — the file on disk
+    # stays clean so round counting never miscounts
+    log = sf._workspace.get_config_path("pid", "fbcontract") / "_feedback" / "a.md"
+    assert "How to read this feedback log" not in log.read_text(encoding="utf-8")
+
+
+def test_edit_fallback_dir_gated_to_same_run(sf_with_workspace):
+    """The promoted-step-dir edit baseline is only offered to a revision loop
+    WITHIN a run. Step dirs are shared across runs of one config, so a fresh
+    run's first attempt must NOT get the previous run's promoted output as an
+    edit baseline (a chapter-2 outline silently 'editing' chapter 1's)."""
+    sf = sf_with_workspace
+    from skillflow.graph import PipelineGraph, StepNode, Transition
+    g = PipelineGraph(name="fbk", begin="a", steps=[
+        StepNode(id="a", step_type="agent", transitions=[Transition(to="b")]),
+        StepNode(id="b", step_type="agent", transitions=[Transition(to=None)]),
+    ])
+    sf.register_graph(g)
+    rid1 = sf.create_run("fbk", {"project_id": "pid"})
+    sf.start_run(rid1)
+    tok = sf.claim_next_step(rid1)
+    sf.confirm_step(tok.token, StepResult(outputs={}))
+
+    # simulate the promoted output dir (promotion normally creates it)
+    final = sf._workspace.get_config_path("pid", "fbk") / "a"
+    final.mkdir(parents=True, exist_ok=True)
+
+    # run 1 completed step a → its revision loop may edit the promoted output
+    assert sf._edit_fallback_dir(rid1, "pid", "fbk", "a") == str(final)
+
+    # a FRESH run of the same config has NOT completed step a → no fallback,
+    # even though the shared dir still holds run 1's promoted output
+    rid2 = sf.create_run("fbk", {"project_id": "pid"})
+    sf.start_run(rid2)
+    assert sf._edit_fallback_dir(rid2, "pid", "fbk", "a") == ""

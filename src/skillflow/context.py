@@ -1,12 +1,13 @@
 """Context resolution from step config context specs.
 
 Resolves ``context`` entries from a step node's config into assembled
-content for prompt injection. Supports five source types:
+content for prompt injection. Supports six source types:
 
 - ``{config: "name", output: "file"}`` — cross-config read
 - ``{config: "name", step: "id", output: "file"}`` — cross-config from specific step
 - ``{step: "id", file: "name", mode: "full"|"summary"|"interfaces"}`` — same-config read
 - ``{step: "id"}`` — all files from that step's directory
+- ``{feedback_of: "id"}`` — accumulated checkpoint-feedback log of another step
 - ``{tool: "name"}`` — dynamic tool call (e.g. dir_tree)
 """
 
@@ -14,6 +15,48 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+
+# ── Checkpoint-feedback log (written by core.reject_checkpoint) ─────────────
+# One file per step at {config}/_feedback/{step}.md, appended round by round.
+# The read contract below exists because of an observed failure mode: user
+# feedback QUOTED the offending passage before demanding a change, and a later
+# revision pasted the quote back into the output verbatim — precisely reverting
+# an earlier round's fix. The preamble is prepended at READ time only; the file
+# on disk stays clean (append logic counts rounds from the raw file).
+FEEDBACK_LOG_PREAMBLE = (
+    "[How to read this feedback log]\n"
+    "- Rounds are CUMULATIVE. Every round below is still binding: fixing the "
+    "latest round must NOT undo what an earlier round demanded. Before "
+    "submitting, re-check your output against each round in turn.\n"
+    "- Quoted passages inside a round are the OLD text being complained "
+    "about, captured when that feedback was given. They locate the problem — "
+    "they are NOT text to reproduce. A later revision may already have fixed "
+    "them; check the current version first, and never copy a quoted passage "
+    "back into your output.\n"
+)
+
+
+def feedback_log_path(config_dir: Path, step_id: str) -> Path:
+    """Path of a step's accumulated checkpoint-feedback log."""
+    return config_dir / "_feedback" / f"{step_id}.md"
+
+
+def read_feedback_log(config_dir: Path, step_id: str) -> str | None:
+    """Read a step's feedback log, prefixed with the read-contract preamble.
+
+    Returns None when the log is absent, unreadable, or blank — callers treat
+    that as "no feedback to inject".
+    """
+    p = feedback_log_path(config_dir, step_id)
+    if not p.is_file():
+        return None
+    try:
+        text = p.read_text(encoding="utf-8")
+    except Exception:
+        return None
+    if not text.strip():
+        return None
+    return FEEDBACK_LOG_PREAMBLE + "\n" + text
 
 
 class ContextResolver:
@@ -74,6 +117,8 @@ class ContextResolver:
         2 = volatile (workspace/tool, e.g. dir_tree).
         """
         source_type = source.get("source_type", "")
+        if "feedback_of" in source:
+            return 2  # changes on every reject round — keep out of the cache prefix
         if source_type in ("config", "repository") or "config" in source:
             return 0
         if source_type == "step" or "step" in source:
@@ -83,6 +128,8 @@ class ContextResolver:
     def _resolve_one(self, source: dict, current_config: str,
                      loop_context: dict[str, str] | None = None) -> tuple[str, str]:
         source_type = source.get("source_type", "")
+        if "feedback_of" in source:
+            return self._resolve_feedback(source, current_config)
         if source_type == "config" or "config" in source:
             return self._resolve_cross_config(source, current_config)
         if source_type == "step" or "step" in source:
@@ -206,6 +253,27 @@ class ContextResolver:
             content = self._extract_interfaces(content)
 
         label = f"Step {step_id} — {output_file}"
+        return label, content
+
+    def _resolve_feedback(self, source: dict,
+                          current_config: str) -> tuple[str, str]:
+        """``{feedback_of: "step"}`` — another step's accumulated
+        checkpoint-feedback log (same config only).
+
+        Reject feedback is otherwise injected ONLY into the rejected step's own
+        re-run, so a reviewer stays blind to what the user demanded — a
+        revision that silently reverts an earlier round's fix passes review
+        unchallenged. Wiring this source onto the reviewer closes that hole.
+        """
+        step_id = source.get("feedback_of", "")
+        cfg = current_config or "dpe_default"
+        if not step_id:
+            return "", ""
+        content = read_feedback_log(self._workspace_root / cfg, step_id)
+        if not content:
+            return "", ""
+        label = (f"⚠️ User feedback on step '{step_id}' "
+                 "(all rounds — MUST still be satisfied)")
         return label, content
 
     def _resolve_workspace(self, source: dict) -> tuple[str, str]:

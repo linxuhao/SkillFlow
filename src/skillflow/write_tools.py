@@ -349,6 +349,9 @@ def generate_write_tool_schemas(output_mode: str,
                     f"Surgically edit the EXISTING {pattern} by replacing an exact "
                     f"unique snippet — use this to fix or update part of a file "
                     f"without rewriting the whole thing (preserves the rest). "
+                    f"PREFERRED on a revision round (reviewer/user feedback on a "
+                    f"previous version): edit exactly the flagged spots — a full "
+                    f"rewrite from memory silently corrupts unflagged parts. "
                     f"Fails if the file is absent or old_str isn't found exactly once.{fmt_hint}"
                 ),
                 "parameters": edit_params,
@@ -529,14 +532,21 @@ def _unique_replace(content: str, old_str: str, new_str: str, *,
 
 
 def execute_edit(slot: str, fixed: dict, params: dict,
-                 output_dir: str, source_dir: str = "") -> dict:
+                 output_dir: str, source_dir: str = "",
+                 fallback_source_dir: str = "") -> dict:
     """Execute an edit_{slot} call: surgical str-replace on the EXISTING file.
 
-    Reads the current file from ``source_dir`` (the consolidated repo, so the
-    edit applies to accumulated cross-task state), applies a single exact
-    replacement, and writes the result into ``output_dir`` (the step's staging
-    dir) — from where normal promotion + repo_apply overwrites the repo copy.
-    Falls back to ``output_dir`` as the source when no repo dir is given.
+    Baseline resolution order:
+    1. ``source_dir`` (the consolidated repo — accumulated cross-task state);
+    2. ``output_dir`` staging (a file written earlier this same attempt);
+    3. ``fallback_source_dir`` — the step's own PROMOTED output. The caller
+       only passes this for a revision loop WITHIN the current run: step dirs
+       are shared across runs of one config, so an ungated fallback would let a
+       fresh run silently edit a PREVIOUS run's output (e.g. chapter 2's first
+       outline attempt editing chapter 1's promoted outline).
+
+    The spliced result is always written into ``output_dir`` (staging) — from
+    where normal promotion + repo_apply overwrites the repo copy.
     """
     base_name = resolve_write_target(slot, fixed, params)
     old_str = _ensure_str(params.get("old_str", ""))
@@ -549,10 +559,17 @@ def execute_edit(slot: str, fixed: dict, params: dict,
     if not src.exists():
         # fall back to staging copy (a file written earlier this same step)
         staged = Path(output_dir) / base_name
+        prior = (Path(fallback_source_dir) / base_name
+                 if fallback_source_dir else None)
         if staged.exists():
             src = staged
+        elif prior is not None and prior.exists():
+            src = prior
         else:
-            return {"error": f"edit_{slot}: cannot edit '{base_name}' — file does not exist"}
+            return {"error": (f"edit_{slot}: cannot edit '{base_name}' — no "
+                              "existing version to edit (nothing in the repo, "
+                              "staging, or this run's prior output). Use "
+                              f"create_{slot}/write_{slot} to author it first.")}
 
     content = src.read_text(encoding="utf-8")
     updated, err = _unique_replace(content, old_str, new_str,
@@ -618,12 +635,16 @@ def execute_generic_create(params: dict, output_dir: str,
 
 
 def execute_generic_edit(params: dict, output_dir: str,
-                         source_dir: str = "") -> dict:
+                         source_dir: str = "",
+                         fallback_source_dir: str = "") -> dict:
     """Execute a generic edit(file, old_str, new_str) call on an EXISTING file.
 
     Baseline is staging-first: read ``output_dir/file`` if a prior edit/create
     this same step already produced it (so repeated edits to one file compound),
-    else the consolidated repo ``source_dir/file``. Requires ``old_str`` to
+    else the consolidated repo ``source_dir/file``, else
+    ``fallback_source_dir/file`` — the step's own PROMOTED output, passed by
+    the caller only for a revision loop within the current run (see
+    execute_edit for the cross-run trap). Requires ``old_str`` to
     match exactly once; writes the whole spliced result into staging, from where
     promotion + repo_apply overwrites the repo copy. The repo is never edited in
     place — ``edit`` only reads it as a baseline.
@@ -640,13 +661,17 @@ def execute_generic_edit(params: dict, output_dir: str,
 
     staged = Path(output_dir) / rel
     repo = (Path(source_dir) / rel) if source_dir else None
+    prior = (Path(fallback_source_dir) / rel) if fallback_source_dir else None
     if staged.exists():
         src = staged
     elif repo is not None and repo.exists():
         src = repo
+    elif prior is not None and prior.exists():
+        src = prior
     else:
-        return {"error": (f"edit: cannot edit '{rel}' — file does not exist "
-                          f"(use 'create' for a new file).")}
+        return {"error": (f"edit: cannot edit '{rel}' — no existing version to "
+                          "edit (nothing in the repo, staging, or this run's "
+                          "prior output). Use 'create' for a new file.")}
 
     content = src.read_text(encoding="utf-8")
     updated, err = _unique_replace(content, old_str, new_str,

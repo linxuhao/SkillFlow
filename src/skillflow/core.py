@@ -1777,17 +1777,20 @@ class SkillFlow:
     def _feedback_log_path(self, pid: str, config_name: str, step_id: str):
         if not self._workspace:
             return None
-        return (self._workspace.get_config_path(pid, config_name)
-                / "_feedback" / f"{step_id}.md")
+        from skillflow.context import feedback_log_path
+        return feedback_log_path(
+            self._workspace.get_config_path(pid, config_name), step_id)
 
     def _read_feedback_log(self, pid: str, config_name: str, step_id: str):
-        p = self._feedback_log_path(pid, config_name, step_id)
-        if p and p.is_file():
-            try:
-                return p.read_text(encoding="utf-8")
-            except Exception:
-                return None
-        return None
+        """Full accumulated log WITH the read-contract preamble (see
+        context.FEEDBACK_LOG_PREAMBLE — quotes are the complained-about OLD
+        text, not text to reproduce). Shared with the ``{feedback_of: step}``
+        context source so both injection paths carry the same contract."""
+        if not self._workspace:
+            return None
+        from skillflow.context import read_feedback_log
+        return read_feedback_log(
+            self._workspace.get_config_path(pid, config_name), step_id)
 
     def _append_feedback_log(self, pid: str, config_name: str, step_id: str,
                              feedback, run_id: str = "") -> None:
@@ -3855,6 +3858,31 @@ class SkillFlow:
             ).fetchone()
         return row["graph_name"] if row else ""
 
+    def _edit_fallback_dir(self, run_id: str, pid: str, gname: str,
+                           step_id: str) -> str:
+        """Edit-baseline fallback for outputs that never reach the repo: the
+        step's own promoted dir — but ONLY when this RUN has already completed
+        an instance of this step (a revision loop: checkpoint reject or
+        review-fail edge). Step dirs are shared across runs of one config, so
+        without the gate a fresh run's first attempt would silently edit a
+        PREVIOUS run's promoted output (e.g. a chapter-2 outline "editing"
+        chapter 1's) instead of erroring toward create."""
+        if not (run_id and self._workspace):
+            return ""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT 1 FROM skillflow_steps WHERE run_id = ? AND "
+                    "step_id = ? AND status = 'completed' LIMIT 1",
+                    (run_id, step_id),
+                ).fetchone()
+            if row is None:
+                return ""
+            final_dir = self._workspace.get_step_dir(pid, gname, step_id)
+            return str(final_dir) if final_dir.is_dir() else ""
+        except Exception:
+            return ""  # best-effort: no fallback beats a wrong baseline
+
     # ── Host tool execution API ─────────────────────────────────────
 
     def execute_tool(self, name: str, params: dict, *,
@@ -3957,8 +3985,12 @@ class SkillFlow:
             elif name.startswith("edit_"):
                 # Edit the EXISTING file from the consolidated repo (project_root),
                 # writing the result into staging for promotion + repo_apply.
+                # For outputs that never reach the repo, the step's own promoted
+                # dir is the baseline — same-run gated (see helper).
                 return execute_edit(slot, fixed, params, str(tmp_dir),
-                                    source_dir=project_root or "")
+                                    source_dir=project_root or "",
+                                    fallback_source_dir=self._edit_fallback_dir(
+                                        run_id, pid, gname, step_id))
             else:
                 return execute_write(slot, fixed, params, str(tmp_dir))
 
@@ -3980,7 +4012,9 @@ class SkillFlow:
                                               source_dir=project_root or "")
             if name == "edit":
                 return execute_generic_edit(params, str(tmp_dir),
-                                            source_dir=project_root or "")
+                                            source_dir=project_root or "",
+                                            fallback_source_dir=self._edit_fallback_dir(
+                                                run_id, pid, gname, step_id))
             return execute_generic_write(params, str(tmp_dir))
 
         # finish_step — no-op completion signal; the host runner detects it and

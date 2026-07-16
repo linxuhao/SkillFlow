@@ -798,6 +798,13 @@ def _normalize_context_spec(spec: dict) -> dict:
             s["files"] = [s["file"]]
         elif "output" in s and "files" not in s:
             s["files"] = [s["output"]]
+    elif "feedback_of" in s:
+        # Another step's checkpoint-feedback log — prompt-inline only (a short,
+        # volatile blob; a read-tool surface for it would be noise), so it must
+        # NOT fall through to the "step" default, which would hand it to
+        # read_tools with an empty step_id.
+        s["source_type"] = "feedback"
+        s["mode"] = "inline"
     elif s.get("from") in ("workspace", "repository"):
         s["source_type"] = s["from"]
     elif "tool" in s:

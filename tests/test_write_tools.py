@@ -115,7 +115,7 @@ class TestWriteTools:
         res = execute_edit("app", {"app": "app.py"},
                            {"old_str": "a", "new_str": "b"},
                            str(tmp_path / "stage"), source_dir=str(tmp_path / "repo"))
-        assert "error" in res and "does not exist" in res["error"]
+        assert "error" in res and "no existing version to edit" in res["error"]
 
     # ── generic create(file, content) executor ───────────────────
 
@@ -188,7 +188,7 @@ class TestWriteTools:
         res = execute_generic_edit({"file": "nope.py", "old_str": "a", "new_str": "b"},
                                    str(tmp_path / "stage"),
                                    source_dir=str(tmp_path / "repo"))
-        assert "error" in res and "does not exist" in res["error"]
+        assert "error" in res and "no existing version to edit" in res["error"]
 
     def test_generic_edit_rejects_path_traversal(self, tmp_path):
         res = execute_generic_edit({"file": "../escape.py", "old_str": "a", "new_str": "b"},
@@ -427,3 +427,55 @@ class TestStructuredJsonSlots:
                             str(tmp_path))
         assert res == {"written": "research_notes.md"}
         assert "\\." in (tmp_path / "research_notes.md").read_text()
+
+
+class TestEditBaselineFallback:
+    """Edit baseline for outputs that never reach the repo: the step's own
+    promoted dir, passed as fallback_source_dir by the caller ONLY for a
+    revision loop within the current run (cross-run gating is the caller's
+    job — see core._edit_fallback_dir)."""
+
+    def test_execute_edit_falls_back_to_prior_promoted_output(self, tmp_path):
+        prior = tmp_path / "final"; prior.mkdir()
+        (prior / "app.py").write_text("v2 fixed line\nrest\n")
+        res = execute_edit("app", {"app": "app.py"},
+                           {"old_str": "v2 fixed line", "new_str": "v3 line"},
+                           str(tmp_path / "stage"),
+                           source_dir=str(tmp_path / "repo"),
+                           fallback_source_dir=str(prior))
+        assert res == {"edited": "app.py"}
+        assert (tmp_path / "stage" / "app.py").read_text() == "v3 line\nrest\n"
+        # the baseline is read-only — the promoted dir is never edited in place
+        assert (prior / "app.py").read_text() == "v2 fixed line\nrest\n"
+
+    def test_execute_edit_staging_beats_fallback(self, tmp_path):
+        # A file written earlier this same attempt is FRESHER than the
+        # previous promoted version — staging wins.
+        stage = tmp_path / "stage"; stage.mkdir()
+        (stage / "app.py").write_text("staged this attempt\n")
+        prior = tmp_path / "final"; prior.mkdir()
+        (prior / "app.py").write_text("older promoted\n")
+        res = execute_edit("app", {"app": "app.py"},
+                           {"old_str": "staged this attempt", "new_str": "x"},
+                           str(stage), source_dir=str(tmp_path / "repo"),
+                           fallback_source_dir=str(prior))
+        assert res == {"edited": "app.py"}
+        assert (stage / "app.py").read_text() == "x\n"
+
+    def test_execute_edit_no_fallback_still_errors(self, tmp_path):
+        res = execute_edit("app", {"app": "app.py"},
+                           {"old_str": "a", "new_str": "b"},
+                           str(tmp_path / "stage"),
+                           source_dir=str(tmp_path / "repo"),
+                           fallback_source_dir="")
+        assert "error" in res and "no existing version to edit" in res["error"]
+
+    def test_generic_edit_falls_back_to_prior_promoted_output(self, tmp_path):
+        prior = tmp_path / "final"; prior.mkdir()
+        (prior / "notes.md").write_text("keep\nfix me\n")
+        res = execute_generic_edit(
+            {"file": "notes.md", "old_str": "fix me", "new_str": "fixed"},
+            str(tmp_path / "stage"), source_dir="",
+            fallback_source_dir=str(prior))
+        assert res == {"edited": "notes.md"}
+        assert (tmp_path / "stage" / "notes.md").read_text() == "keep\nfixed\n"
