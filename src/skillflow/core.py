@@ -614,10 +614,14 @@ class SkillFlow:
             error_reason = run["error_reason"] or ""
             retry_step_id = self._extract_step_from_error(error_reason)
             if not retry_step_id:
-                # Fallback: use the last completed step
+                # Fallback: use the last completed step — by COMPLETION order,
+                # not id (same divergence as advance_run: a looped run's
+                # highest-id completed row can be an hours-old early step, and
+                # resuming from it replays already-passed ground).
                 last = conn.execute(
                     "SELECT step_id FROM skillflow_steps WHERE run_id = ? "
-                    "AND status = 'completed' ORDER BY id DESC LIMIT 1",
+                    "AND status = 'completed' "
+                    "ORDER BY completion_seq DESC, id DESC LIMIT 1",
                     (run_id,),
                 ).fetchone()
                 if last:
@@ -813,13 +817,37 @@ class SkillFlow:
             return [dict(r) for r in rows]
 
     def get_steps(self, run_id: str) -> list[dict]:
+        """All step instances of a run, in GRAPH declaration order.
+
+        Raw id order is creation order: loop/reject re-runs append new
+        instances of EARLY steps after the whole graph was instantiated, so a
+        UI rendering id order shows a re-run outline AFTER still-pending
+        downstream steps — the pipeline appears to run backwards. Sorting by
+        the node's declared position keeps every instance under its step
+        (multiple attempts adjacent, in id order); steps not in the graph
+        (renamed/removed mid-flight) sink to the end rather than erroring.
+        """
         with self._lock:
             rows = self._conn.execute(
                 """SELECT * FROM skillflow_steps
                    WHERE run_id = ? ORDER BY id ASC""",
                 (run_id,),
             ).fetchall()
-            return [dict(r) for r in rows]
+            steps = [dict(r) for r in rows]
+            run = self._conn.execute(
+                "SELECT graph_name FROM skillflow_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+        if not run:
+            return steps
+        try:
+            graph = self._get_resolver(run["graph_name"]).graph
+            node_pos = {node.id: i for i, node in enumerate(graph.steps)}
+        except Exception:
+            return steps  # graph gone/unloadable — creation order is still usable
+        return sorted(steps,
+                      key=lambda s: (node_pos.get(s["step_id"], len(node_pos)),
+                                     s["id"]))
 
     def get_run_by_project(self, project_id: str,
                            graph_name: str | None = None) -> dict | None:
@@ -1326,17 +1354,24 @@ class SkillFlow:
                 self._emit_lifecycle_event(token, hook_name, "completed", detail)
 
         with self._tx() as conn:
+            # completion_seq: per-run monotonic COMPLETION order. `id` is
+            # creation order — loop/reject re-runs append high-id instances,
+            # so after any loop the two orders diverge permanently and
+            # position reconstruction must sort by THIS, never by id.
             cursor = conn.execute(
                 """
                 UPDATE skillflow_steps
                 SET status = 'completed', version = version + 1,
                     outputs_json = ?, result_flags_json = ?,
+                    completion_seq = (SELECT COALESCE(MAX(completion_seq), 0) + 1
+                                      FROM skillflow_steps WHERE run_id = ?),
                     completed_at = datetime('now'), updated_at = datetime('now')
                 WHERE id = ? AND version = ?
                 """,
                 (
                     self._serialize(result.outputs),
                     self._serialize(result.flags),
+                    token.run_id,
                     token.step_instance_id, token.version,
                 ),
             )
@@ -2205,10 +2240,15 @@ class SkillFlow:
             conn.execute(
                 """
                 INSERT INTO skillflow_steps (run_id, step_id, step_config_json, status, version,
-                    inputs_json, outputs_json, result_flags_json, created_at, updated_at)
-                VALUES (?, ?, '{}', 'completed', 1, '{}', ?, ?, datetime('now'), datetime('now'))
+                    inputs_json, outputs_json, result_flags_json, completion_seq,
+                    completed_at, created_at, updated_at)
+                VALUES (?, ?, '{}', 'completed', 1, '{}', ?, ?,
+                    (SELECT COALESCE(MAX(completion_seq), 0) + 1
+                     FROM skillflow_steps WHERE run_id = ?),
+                    datetime('now'), datetime('now'), datetime('now'))
                 """,
-                (run_id, step_id, self._serialize(result), self._serialize(result)),
+                (run_id, step_id, self._serialize(result), self._serialize(result),
+                 run_id),
             )
         else:
             conn.execute(
@@ -2216,10 +2256,12 @@ class SkillFlow:
                 UPDATE skillflow_steps
                 SET status = 'completed', version = version + 1,
                     outputs_json = ?, result_flags_json = ?,
+                    completion_seq = (SELECT COALESCE(MAX(completion_seq), 0) + 1
+                                      FROM skillflow_steps WHERE run_id = ?),
                     completed_at = datetime('now'), updated_at = datetime('now')
                 WHERE id = ? AND version = ?
                 """,
-                (self._serialize(result), self._serialize(result),
+                (self._serialize(result), self._serialize(result), run_id,
                  step_row["id"], step_row["version"]),
             )
         self.notifications.publish_sync(
@@ -2429,9 +2471,11 @@ class SkillFlow:
         def _route_done():
             conn.execute(
                 "UPDATE skillflow_steps SET status = 'completed', "
+                "completion_seq = (SELECT COALESCE(MAX(completion_seq), 0) + 1 "
+                "                  FROM skillflow_steps WHERE run_id = ?), "
                 "completed_at = datetime('now'), updated_at = datetime('now') "
                 "WHERE run_id = ? AND step_id = ? AND status = 'pending'",
-                (run["id"], loop_step_id),
+                (run["id"], run["id"], loop_step_id),
             )
             for t in node.transitions:
                 if t.to and t.to != body_target:
@@ -3072,11 +3116,18 @@ class SkillFlow:
                 else:
                     return None  # no timeout, wait indefinitely
 
+            # "Which step finished LAST?" — order by completion_seq, never by
+            # id: id is creation order, and loop/reject re-runs append high-id
+            # instances of EARLY steps. Sorting by id here once sent a run that
+            # had just finished 'humanize' back to an hours-old, higher-id
+            # 'outline_review' instance and re-took ITS transition (re-staging
+            # and re-pausing an already-approved checkpoint). id DESC only
+            # breaks ties among pre-migration NULL rows.
             last = conn.execute(
                 """
                 SELECT step_id, result_flags_json FROM skillflow_steps
                 WHERE run_id = ? AND status = 'completed'
-                ORDER BY id DESC LIMIT 1
+                ORDER BY completion_seq DESC, id DESC LIMIT 1
                 """,
                 (run_id,),
             ).fetchone()
@@ -3101,8 +3152,13 @@ class SkillFlow:
                     last_node = resolver.get_node(last["step_id"])
                     # SF-23: A transition with to:null (terminal) matched —
                     # this means the pipeline should end. Check end_conditions
-                    # and complete the run instead of failing.
-                    if matched_t is not None and matched_t.to is None:
+                    # and complete the run instead of failing. A node with NO
+                    # transitions at all is terminal by the same logic (before
+                    # completion_seq, this path was masked: id-order picked a
+                    # stale earlier instance and re-resolved FROM it instead).
+                    if ((matched_t is not None and matched_t.to is None)
+                            or (last_node is not None
+                                and not last_node.transitions)):
                         ec = resolver.graph.end_conditions
                         if ec and ec.conditions:
                             end_result = self._evaluate_end_conditions(
@@ -3397,11 +3453,13 @@ class SkillFlow:
 
             resolver = self._get_resolver(run["graph_name"])
 
-            # Find the last completed checkpoint step
+            # Find the last completed checkpoint step (completion order;
+            # completed_at alone has 1s resolution so same-second completions
+            # would tie-break by nothing — completion_seq is a strict order)
             steps = conn.execute(
                 "SELECT step_id FROM skillflow_steps "
                 "WHERE run_id = ? AND status = 'completed' "
-                "ORDER BY completed_at DESC",
+                "ORDER BY completion_seq DESC, id DESC",
                 (run_id,),
             ).fetchall()
 

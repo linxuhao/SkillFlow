@@ -67,6 +67,13 @@ CREATE TABLE IF NOT EXISTS skillflow_steps (
     claimed_at              TEXT,
     claimed_by              TEXT,
     completed_at            TEXT,
+    -- Per-run monotonic COMPLETION order (1, 2, 3 … assigned when a step
+    -- instance is marked completed). `id` is CREATION order — the two diverge
+    -- permanently once a loop/reject re-run appends new instances after later
+    -- steps were instantiated. Position reconstruction ("which step finished
+    -- last?") must sort by this, never by id: sorting by id sent a live run
+    -- back to an hours-old reviewer instance and re-ran its transition.
+    completion_seq          INTEGER,
     created_at              TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (run_id) REFERENCES skillflow_runs(id)
@@ -170,4 +177,18 @@ SKILLFLOW_MIGRATIONS: list[str] = [
     # SF-24: set-based loop tracking
     "ALTER TABLE skillflow_loop_state ADD COLUMN completed_items TEXT",
     "ALTER TABLE skillflow_loop_state ADD COLUMN current_item TEXT",
+    # SF-25: per-run completion order (see SKILLFLOW_STEPS.completion_seq)
+    "ALTER TABLE skillflow_steps ADD COLUMN completion_seq INTEGER",
+    # Backfill historical rows by their best available approximation:
+    # (completed_at, id). Idempotent — the IS NULL guard makes every re-run
+    # after the first a no-op (migrations execute on each boot).
+    """UPDATE skillflow_steps SET completion_seq = (
+         SELECT COUNT(*) FROM skillflow_steps s2
+         WHERE s2.run_id = skillflow_steps.run_id
+           AND s2.status = 'completed'
+           AND (s2.completed_at < skillflow_steps.completed_at
+                OR (s2.completed_at = skillflow_steps.completed_at
+                    AND s2.id <= skillflow_steps.id))
+       )
+       WHERE status = 'completed' AND completion_seq IS NULL""",
 ]

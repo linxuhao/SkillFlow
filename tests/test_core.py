@@ -603,12 +603,18 @@ def test_edge_count_increments_on_advance(sf: SkillFlow):
     claimed3 = sf.claim_next_step(run_id)
     sf.confirm_step(claimed3.token, StepResult())
 
-    # Iteration 3: b → g → c (max_loop=2 on g→b exhausted)
+    # Iteration 3: g→b is exhausted (max_loop=2), so this claim IS c.
+    # (The old assertion `advance_run() == "c"` AFTER completing c only held
+    # because position reconstruction sorted by id and picked the stale 'b'
+    # instance, re-resolving g→c a second time — the exact bug completion_seq
+    # fixes. With the true last-completed step (c, no outgoing edges) the run
+    # simply ends.)
     sf.advance_run(run_id)
     claimed4 = sf.claim_next_step(run_id)
+    assert claimed4.step_id == "c"
     sf.confirm_step(claimed4.token, StepResult())
-    next_node = sf.advance_run(run_id)
-    assert next_node == "c"
+    assert sf.advance_run(run_id) is None
+    assert sf.get_run(run_id)["status"] == "completed"
 
 
 # ── Recovery ─────────────────────────────────────────────────────────
@@ -1781,3 +1787,110 @@ def test_edit_fallback_dir_gated_to_same_run(sf_with_workspace):
     rid2 = sf.create_run("fbk", {"project_id": "pid"})
     sf.start_run(rid2)
     assert sf._edit_fallback_dir(rid2, "pid", "fbk", "a") == ""
+
+
+def _looped_then_gate_graph(name: str) -> PipelineGraph:
+    """a → a_review (fail→a loop / pass→b) → b → g(gate) → c.
+
+    Models the live incident shape: an EARLY pair loops (appending high-id
+    instances), then a LATER step completes into a None-returning confirm
+    resolution (gate/tool target ⇒ current_node=NULL ⇒ advance_run must
+    reconstruct "which step finished last")."""
+    return PipelineGraph(name=name, begin="a", steps=[
+        StepNode(id="a", step_type="agent",
+                 transitions=[Transition(to="a_review")]),
+        StepNode(id="a_review", step_type="agent", transitions=[
+            Transition(to="b", match={"passed": True}),
+            Transition(to="a", match={"passed": False}, max_loop=3),
+        ]),
+        StepNode(id="b", step_type="agent",
+                 transitions=[Transition(to="g")]),
+        StepNode(id="g", step_type="gate", transitions=[
+            Transition(to="c", match={"passed": True}),
+        ]),
+        StepNode(id="c", step_type="agent", transitions=[Transition(to=None)]),
+    ])
+
+
+def test_advance_after_loop_resolves_by_completion_order(sf):
+    """Regression (live incident): early steps loop → their re-run instances
+    get HIGHER ids than later steps' initial instances. When a later step then
+    completes into a gate/tool edge (confirm returns None, current_node NULL),
+    advance_run must reconstruct position from COMPLETION order — sorting by
+    id picked the stale high-id reviewer row and re-took its pass-edge,
+    re-staging and re-pausing an already-approved checkpoint."""
+    sf.register_graph(_looped_then_gate_graph("looprec"))
+    rid = sf.create_run("looprec", {"project_id": "pid"})
+    sf.start_run(rid)
+
+    # a → a_review round 1: REJECT (loops back, appending high-id instances)
+    tok = sf.claim_next_step(rid)
+    assert tok.step_id == "a"
+    sf.confirm_step(tok.token, StepResult(outputs={}))
+    tok = sf.claim_next_step(rid)
+    assert tok.step_id == "a_review"
+    sf.confirm_step(tok.token, StepResult(outputs={}, flags={"passed": False}))
+
+    # a → a_review round 2: PASS → b
+    tok = sf.claim_next_step(rid)
+    assert tok.step_id == "a"
+    sf.confirm_step(tok.token, StepResult(outputs={}))
+    tok = sf.claim_next_step(rid)
+    assert tok.step_id == "a_review"
+    sf.confirm_step(tok.token, StepResult(outputs={}, flags={"passed": True}))
+
+    # b completes → next is the GATE g: confirm resolves None, current_node
+    # NULL — the incident condition (loop instances outrank b by id).
+    tok = sf.claim_next_step(rid)
+    assert tok.step_id == "b"
+    sf.confirm_step(tok.token, StepResult(outputs={}))
+
+    # advance must land on c (through the gate) — NOT re-take a_review's edge
+    nxt = sf.advance_run(rid)
+    assert nxt == "c", f"advanced to {nxt!r}; stale loop instance won position"
+    tok = sf.claim_next_step(rid)
+    assert tok.step_id == "c"
+    # and no phantom second instance of b was spawned by the stale edge
+    rows = sf.get_steps(rid)
+    assert len([s for s in rows if s["step_id"] == "b"]) == 1
+
+
+def test_get_steps_returns_graph_declaration_order(sf):
+    """Loop re-run instances must group under their node's declared position —
+    raw id order showed a re-run 'a' AFTER still-pending downstream steps, so
+    the pipeline appeared to run backwards in the UI."""
+    sf.register_graph(_looped_then_gate_graph("gsorder"))
+    rid = sf.create_run("gsorder", {"project_id": "pid"})
+    sf.start_run(rid)
+
+    tok = sf.claim_next_step(rid); sf.confirm_step(tok.token, StepResult(outputs={}))
+    tok = sf.claim_next_step(rid)
+    sf.confirm_step(tok.token, StepResult(outputs={}, flags={"passed": False}))
+    tok = sf.claim_next_step(rid); sf.confirm_step(tok.token, StepResult(outputs={}))  # a round 2
+
+    ids = [s["step_id"] for s in sf.get_steps(rid)]
+    # every 'a'/'a_review' instance precedes b/g/c; attempts stay adjacent
+    assert ids.index("b") > max(i for i, s in enumerate(ids) if s == "a")
+    assert ids.index("b") > max(i for i, s in enumerate(ids) if s == "a_review")
+    assert ids == sorted(ids, key=lambda s: ["a", "a_review", "b", "g", "c"].index(s))
+
+
+def test_completion_seq_strictly_monotonic_per_run(sf):
+    """completion_seq must be a strict 1..N order in completion sequence —
+    completed_at has 1s resolution, so same-second completions NEED this to
+    stay ordered."""
+    sf.register_graph(_looped_then_gate_graph("seqmono"))
+    rid = sf.create_run("seqmono", {"project_id": "pid"})
+    sf.start_run(rid)
+    done = []
+    for _ in range(5):  # a, a_review(fail), a, a_review(pass), b
+        tok = sf.claim_next_step(rid)
+        flags = {}
+        if tok.step_id == "a_review":
+            flags = {"passed": len(done) >= 3}
+        sf.confirm_step(tok.token, StepResult(outputs={}, flags=flags))
+        done.append(tok.step_id)
+    rows = [s for s in sf.get_steps(rid) if s["status"] == "completed"]
+    by_seq = sorted(rows, key=lambda s: s["completion_seq"])
+    assert [s["completion_seq"] for s in by_seq] == [1, 2, 3, 4, 5]
+    assert [s["step_id"] for s in by_seq] == done  # seq == true completion order
