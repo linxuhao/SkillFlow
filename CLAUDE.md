@@ -6,6 +6,7 @@ Under development, no backward compatibility is needed.
 ## Project Rules
 
 - **Zero AItelier imports.** Skillflow must never import from `core/`, `api/`, `cli/`, `aitelier/`, `models/`, or `templates/`.
+- **Docs ship WITH the behavior change, same commit.** Any change to config-visible surface (new context source / StepNode field / tool semantics / ordering guarantees) updates README's matching section, the CLAUDE.md diagrams, and — if it introduces graph syntax — a fixture in `tests/fixtures/` exercising it (auto-validated by `test_load_all_valid_fixtures`; fixtures are also the linter/converter's example corpus, so an undocumented syntax is one the converter can never generate). Versions 1.5.15–1.5.20 shipped six releases of invisible features before this rule existed; the catch-up was 9f7b096. Deliverable without the ledger entry = not done.
 - **All tools are in `src/skillflow/tools/{name}/`** with `tool.yaml` + `impl.py`. Function name must match directory name.
 - **Tests in `tests/`** (core) + `src/skillflow/plugins/*/tests/` (plugins). Run: `pytest tests/ src/skillflow/plugins/`
 - **Backward compat:** New fields on StepNode/Transition must have defaults. Old YAML without new fields must still parse.
