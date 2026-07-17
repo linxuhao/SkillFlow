@@ -932,15 +932,22 @@ class SkillFlow:
                 (run_id, run["current_node"]),
             ).fetchone()
             if not current_version:
-                # For cyclic graphs: if the step has already been executed
-                # (completed/failed), create a new instance for the next iteration
-                # For cyclic graphs: create a new instance if the step was
-                # previously completed or failed (not if it's currently claimed)
+                # Open a fresh pending instance when there is no claimable row:
+                # - cyclic re-entry (prior instance completed/failed), or
+                # - NO row at all: a node added to the graph AFTER this run was
+                #   instantiated (mid-flight graph extension). The tool-claim
+                #   path already treats no-row as "open a fresh instance"; the
+                #   agent path refusing it made every added agent node
+                #   unclaimable in existing runs (claim → None forever, run
+                #   wedged at current_node with the scheduler ticking in vain).
+                # Never when a row is currently claimed (a concurrent driver
+                # owns it).
                 existing = conn.execute(
-                    "SELECT id, status FROM skillflow_steps WHERE run_id = ? AND step_id = ?",
+                    "SELECT id, status FROM skillflow_steps WHERE run_id = ? AND step_id = ? "
+                    "ORDER BY id DESC LIMIT 1",
                     (run_id, run["current_node"]),
                 ).fetchone()
-                if existing and existing["status"] in ("completed", "failed"):
+                if existing is None or existing["status"] in ("completed", "failed"):
                     node = resolver.get_node(run["current_node"])
                     if node:
                         conn.execute(

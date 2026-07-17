@@ -1894,3 +1894,30 @@ def test_completion_seq_strictly_monotonic_per_run(sf):
     by_seq = sorted(rows, key=lambda s: s["completion_seq"])
     assert [s["completion_seq"] for s in by_seq] == [1, 2, 3, 4, 5]
     assert [s["step_id"] for s in by_seq] == done  # seq == true completion order
+
+
+def test_node_added_mid_flight_is_claimable(sf):
+    """A node added to the graph AFTER a run was instantiated has no step row.
+    claim_next_step must open a fresh pending instance for it — the old agent
+    path only did so for completed/failed rows (cyclic re-entry) and raised
+    _TxRollback on no-row, so the run wedged at current_node forever while the
+    scheduler ticked in vain (live: humanize_review added mid-flight)."""
+    sf.register_graph(PipelineGraph(name="midext", begin="a", steps=[
+        StepNode(id="a", step_type="agent", transitions=[Transition(to=None)]),
+    ]))
+    rid = sf.create_run("midext", {"project_id": "pid"})
+    sf.start_run(rid)
+    tok = sf.claim_next_step(rid)
+    sf.confirm_step(tok.token, StepResult(outputs={}))
+
+    # graph gains a new node mid-flight; the run gets pointed at it
+    sf.register_graph(PipelineGraph(name="midext", begin="a", steps=[
+        StepNode(id="a", step_type="agent", transitions=[Transition(to="b")]),
+        StepNode(id="b", step_type="agent", transitions=[Transition(to=None)]),
+    ]))
+    with sf._tx() as conn:
+        conn.execute(
+            "UPDATE skillflow_runs SET current_node = 'b' WHERE id = ?", (rid,))
+
+    tok = sf.claim_next_step(rid)
+    assert tok is not None and tok.step_id == "b"
