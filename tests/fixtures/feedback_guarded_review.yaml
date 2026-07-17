@@ -1,0 +1,79 @@
+# Review-before-checkpoint with guarded user feedback — the pattern all the
+# 1.5.15–1.5.20 features serve, in one graph:
+#
+#   draft → review(Red, sees the user's feedback log via feedback_of)
+#         → gate(TOOL step + checkpoint, reached only on Red-pass;
+#                reject routes back to draft via checkpoint_reject_to)
+#         → done
+#
+# - The human is asked once Red is clean, not on every autonomous revision.
+# - Reject feedback ACCUMULATES at {config}/_feedback/draft.md; the draft
+#   re-run gets every round (with the read contract), and the reviewer sees
+#   the same log through {feedback_of: draft} — a revision that silently
+#   reverts an earlier round's fix gets rejected instead of passing blind.
+# - Revision re-runs can `edit_note` against the promoted previous version
+#   (same-run gated edit baseline) instead of rewriting from memory.
+name: "feedback_guarded_review"
+description: "Draft → Red (feedback-guarded) → human gate; reject loops to draft"
+
+begin: "draft"
+
+steps:
+  - id: "draft"
+    step_type: "agent"
+    context:
+      - source: { step: "draft" }              # previous version (revision loops)
+      - source: { step: "review" }             # Red's objections (empty first round)
+    output:
+      mode: "content"
+      fixed:
+        note: "note.md"
+    validation:
+      - files: ["note.md"]
+        tool: "file_exists"
+    transitions:
+      - to: "review"
+
+  - id: "review"
+    step_type: "agent"
+    context:
+      - source: { step: "draft" }
+      - source: { feedback_of: "draft" }       # user's reject rounds — guard them
+    output:
+      mode: "content"
+      fixed:
+        verdict: { file: "verdict.json", on_exists: "new", format: '{"passed": bool, "feedback": str}' }
+    validation:
+      - files: ["verdict.json"]
+        tool: "json_schema"
+        inline_schema:
+          type: object
+          required: [passed]
+          properties:
+            passed: { type: boolean }
+            feedback: { type: string }
+    transitions:
+      - to: "gate"
+        match: { from_file: "verdict.json", field: "passed", value: true }
+      - to: "draft"
+        match: { from_file: "verdict.json", field: "passed", value: false }
+        max_loop: 3
+
+  - id: "gate"                                  # tool step + checkpoint (1.5.15)
+    step_type: "tool"
+    tool_name: "file_exists"
+    tool_params:
+      files: ["note.md"]
+    checkpoint: true
+    checkpoint_label: "Approve the Red-cleared draft (reject + feedback → redraft)"
+    checkpoint_reject_to: "draft"
+    transitions:
+      - to: null
+        match: { from: "checkpoint", value: "approved" }
+
+end_conditions:
+  combinator: or
+  conditions:
+    - type: node_reached
+      node: "gate"
+      result: "completed"

@@ -13,7 +13,8 @@ Two ways agents plug in: **embed** skillflow in a host app so it *drives* real a
 Most agent frameworks let the LLM improvise control flow, tool use, and file access — which is exactly why their runs can't be reproduced, audited, or trusted. Skillflow inverts that: **the LLM is a constrained, contract-bound function; the engine is the runtime.**
 
 - **Deterministic traversal** — the pipeline is a YAML DAG walked by the engine. Loops, gates, retries, and recovery are the engine's job, not the model's. Same config, same path.
-- **Capability-gated I/O (least privilege)** — a step sees only the context it declares, and for each declared output the engine *generates a dedicated write tool* (`write_<slot>` / `create_<slot>` / `append_<slot>`). An agent literally **cannot read or write a file outside its contract** — the tool to do so doesn't exist in its schema. *Brain to brain, tools to tools.* (It's also why cheap models suffice: small, focused, role-scoped context.)
+- **Capability-gated I/O (least privilege)** — a step sees only the context it declares, and for each declared output the engine *generates a dedicated write tool* (`write_<slot>` / `create_<slot>` / `edit_<slot>` / `append_<slot>`). An agent literally **cannot read or write a file outside its contract** — the tool to do so doesn't exist in its schema. *Brain to brain, tools to tools.* (It's also why cheap models suffice: small, focused, role-scoped context.)
+  `edit_*` is the PREFERRED revision path: it splices an exact unique replacement over a baseline and carries everything else through verbatim (a full rewrite from memory silently corrupts unflagged parts). Baseline resolution: the consolidated repo → this attempt's staging → the step's own promoted output, the last one gated to *revision loops within the same run* (step dirs are shared across runs of one config — without the gate, a fresh run's first attempt would silently edit a previous run's output).
 - **Human-in-the-loop by design** — approve / reject-with-feedback checkpoints are first-class nodes, not bolted on.
 - **Immutable audit trace** — every step, prompt, response, tool call, and verdict is appended to a trace that is *never deleted*, keyed by `step_instance_id`. "Why did this run do X?" is one query.
 - **Config- and provider-agnostic** — a pipeline can be anything; nothing is hardcoded to a use case or a model.
@@ -217,15 +218,35 @@ context:
   - source: { config: "meta", output: "brief.md" }                  # any step of another config
   - source: { config: "meta", step: "finalize", output: "x.json" }  # a SPECIFIC step's output
   - source: { tool: "dir_tree" }
+  - source: { from: "repository", mode: "tool" }                    # read tools over the CODE repo
+  - source: { from: "repository", path: "docs/spec.md" }            # inline-inject one repo file/subtree
+  - source: { feedback_of: "draft" }                                # another step's checkpoint-feedback log
 ```
 
 A cross-config source without `step` scans the other config's step dirs for the
 file; adding `step` reads that one step's output (use it when only a specific
 producing step is authoritative).
 
+`from: repository` resolves the **code repository** (`workspace.get_project_code_path`)
+in every mode. Inline injection requires a `path:` — a pathless inline source is
+refused (a real repo is megabytes; injecting all of it into the prompt is never
+what you want). Use `mode: "tool"` to expose the repo as a browsable read
+surface instead.
+
+`feedback_of` injects the named step's **accumulated checkpoint-feedback log**
+(all reject rounds, prefixed with a read contract — see Checkpoints below).
+Wire it onto a reviewer so a revision that silently reverts an earlier round's
+fix gets caught instead of passing review unchallenged. Volatile tier: it is
+emitted last and never poisons the prompt-cache prefix.
+
 ## Checkpoints
 
-Agent steps can pause for human approval (`tests/fixtures/checkpoint_cycle.yaml`). On reject, the feedback is injected (via the `_feedback` channel) so the re-run knows *why* it was rejected:
+Agent **and tool** steps can pause for human approval (`tests/fixtures/checkpoint_cycle.yaml`).
+A checkpoint on a tool step enables the *review-before-checkpoint* pattern: a cheap
+staging tool re-materializes the artifacts to approve, and the human is only asked
+once the automated reviewer has passed — not on every autonomous revision loop.
+
+On reject, the feedback is injected so the re-run knows *why* it was rejected:
 
 ```python
 # Redo the rejected step itself
@@ -236,7 +257,19 @@ sf.reject_checkpoint(run_id, "draft", "Add more detail to the analysis")
 sf.reject_checkpoint(run_id, "final_review", "Goals not met", redirect_to="plan")
 ```
 
-`redirect_to` makes rejection a human-driven loopback: it sets the run's current node to the target step and injects the feedback there. Over the CLI this is `--redirect-to <step>`. A checkpoint can also be rejected *after* a downstream failure (the only invariant is that the checkpoint step is `completed`), so you can reopen earlier work to recover.
+`redirect_to` makes rejection a human-driven loopback: it sets the run's current node to the target step and injects the feedback there. Over the CLI this is `--redirect-to <step>`. Graphs can pin the target declaratively with `checkpoint_reject_to: "<step>"` on the checkpoint node. A checkpoint can also be rejected *after* a downstream failure (the only invariant is that the checkpoint step is `completed`), so you can reopen earlier work to recover.
+
+**Feedback accumulates.** Every reject round is APPENDED to a per-step log at
+`{config}/_feedback/{step}.md` (beside the step dir — step dirs are wiped on
+re-run), git-versioned when artifact history is on. The re-run's prompt gets the
+FULL history, not just the latest round, prefixed with a read contract: rounds
+are cumulative (fixing round 3 must not undo round 1), quoted passages are the
+complained-about OLD text (never text to reproduce), and feedback is a
+constraint on the artifact (satisfied by what the artifact IS — never by
+restating it, and never by asserting the absence of something to prove
+compliance). Each clause exists because a live run violated it. The log is
+scoped per project+config: a fresh project starts clean; re-running the same
+project inherits its rounds.
 
 ## Output Validation
 
@@ -300,6 +333,20 @@ itself end a run: with no resolvable target the run is marked **failed** ("no
 matching transition"). To finish cleanly, give the terminal step `to: null` **and**
 a `node_reached` end condition for that node (the pattern above). This applies to
 `tool` and `gate` steps too, not just `agent` steps.
+
+## Execution Order vs Creation Order
+
+Step instance `id` is CREATION order: `start_run` instantiates every node up
+front, and loop/reject re-runs append new high-id instances of EARLY steps —
+after any loop, id order and execution order diverge permanently. Everything
+that needs "what happened last" uses **`completion_seq`** instead: a per-run
+monotonic counter assigned in the same transaction that marks an instance
+completed (`completed_at` alone can't do this — 1-second resolution ties).
+`advance_run`'s position reconstruction, `reactivate_run`'s resume point, and
+`resume_from_checkpoint` all order by it; sorting by id here once sent a live
+run backwards into an hours-old reviewer instance. `get_steps()` returns GRAPH
+declaration order (instances grouped under their node, attempts adjacent) so a
+UI never renders a loop re-run *after* still-pending downstream steps.
 
 ## Stale Claim Recovery
 

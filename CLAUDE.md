@@ -1,6 +1,6 @@
 # CLAUDE.md — Skillflow
 
-Skillflow is a config-agnostic LLM pipeline graph executor. It is a pure Python library with minimal dependencies (PyYAML, ruff). Published on PyPI as `skillflow-py` (currently 1.1.3).
+Skillflow is a config-agnostic LLM pipeline graph executor. It is a pure Python library with minimal dependencies (PyYAML, ruff). Published on PyPI as `skillflow-py` (check `pyproject.toml` for the current version — bump + publish on every behavior change; the main host consumes it from PyPI, not from this checkout).
 Under development, no backward compatibility is needed.
 
 ## Project Rules
@@ -49,16 +49,21 @@ ToolLoader (multi-source)
 ContextResolver → assemble prompt context from:
   ├── {config, output}  (cross-config)
   ├── {step, output, mode}  (same-config)
+  ├── {from: repository, path|mode: tool}  (CODE repo — inline needs path:, pathless inline refused)
+  ├── {feedback_of: step}  (accumulated checkpoint-feedback log + read contract; volatile tier)
   └── {tool}  (dynamic call)
+  # constructed with code_root=get_project_code_path so repository/context-tools
+  # see the same tree the read tools serve (NOT workspace/"project")
 
 StepValidator → run validation specs: [{files, tool, inline_schema}]
-WriteTools → generate constrained write_* tools from output.fixed
+WriteTools → generate constrained write_*/create_*/edit_* tools from output.fixed
+  # edit baseline: repo → staging → own promoted dir (same-run gated)
 ```
 
 ## Key Data Structures
 
 - `Transition(to, match, max_loop, label, feedback)` — directed edge
-- `StepNode(id, step_type, transitions, checkpoint, config, tool_name, tool_params, agent_config, context, output_mode, output_fixed, validation)` — graph node
+- `StepNode(id, step_type, transitions, checkpoint, checkpoint_reject_to, config, tool_name, tool_params, agent_config, context, output_mode, output_fixed, validation)` — graph node (checkpoints work on tool steps too)
 - `ClaimToken(step_id, run_id, step_instance_id, version, claimed_at)` — frozen claim
 - `ClaimedStep(token, step_config, run_context, inputs, validation_error)` — ready to execute
 - `StepResult(outputs, flags)` — execution result (flags used for transition matching)
