@@ -74,9 +74,18 @@ def read_feedback_log(config_dir: Path, step_id: str) -> str | None:
 class ContextResolver:
     """Resolves context sources into assembled content."""
 
-    def __init__(self, workspace_root: Path, tool_loader=None):
+    def __init__(self, workspace_root: Path, tool_loader=None,
+                 code_root: Path | str | None = None):
         self._workspace_root = Path(workspace_root)
         self._tool_loader = tool_loader
+        # The CODE repository root (workspace.get_project_code_path). Before
+        # this existed, the inline branch of `from: repository` (and context-
+        # source tools' project_root) silently used workspace_root/"project" —
+        # a near-empty brief dir — while the read-tool branch of the SAME spec
+        # used the real code repo. Falls back to the old path so a resolver
+        # constructed without it keeps its (degenerate) behavior.
+        self._code_root = Path(code_root) if code_root \
+            else self._workspace_root / "project"
 
     def resolve(self, specs: list[dict],
                 current_config: str = "",
@@ -316,16 +325,28 @@ class ContextResolver:
         return "", ""
 
     def _resolve_repository(self, source: dict) -> tuple[str, str]:
-        """Resolve from: repository source — read from code repository root.
+        """Resolve from: repository source — read from the CODE repository root
+        (same root the read-tool branch of this spec uses).
 
         For mode=tool, returns empty (repos are large, tool-only).
-        For mode=inline/both, concatenates matching files.
+        For mode=inline/both WITH a path, injects that file/subtree.
+        For inline WITHOUT a path — refused. That would concatenate the whole
+        repo into the prompt (a real repo is megabytes; the one host that hit
+        this ballooned a prompt to ~4 MB). It only ever appeared to work
+        because the old code read workspace_root/"project", a near-empty dir.
+        Use `mode: tool` for a browsable read surface, or name a `path:`.
         """
         if source.get("mode") == "tool":
             return "", ""  # tool-only, no inline injection
 
         rel_path = source.get("path", "")
-        abs_path = self._workspace_root / "project" / rel_path
+        if not rel_path:
+            logging.getLogger("skillflow.context").warning(
+                "from:repository with inline mode and no path: refusing to "
+                "inject the whole repo into the prompt — use mode: \"tool\" "
+                "for read tools, or set path: to a specific file/dir")
+            return "", ""
+        abs_path = self._code_root / rel_path
         if not abs_path.exists():
             return "", ""
         if abs_path.is_file():
@@ -359,9 +380,12 @@ class ContextResolver:
 
         try:
             fn = self._tool_loader.load_fn(tool_name)
+            # project_root = the real code repo (same root tool STEPS get),
+            # not the workspace's brief dir — a context-source tool like
+            # dir_tree must describe the same tree the read tools serve.
             result = fn(
                 workspace_root=str(self._workspace_root),
-                project_root=str(self._workspace_root / "project"),
+                project_root=str(self._code_root),
             )
             if isinstance(result, dict):
                 content = result.get("tree", result.get("content", str(result)))

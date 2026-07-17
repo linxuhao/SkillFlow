@@ -1076,7 +1076,13 @@ class SkillFlow:
                     config_path = self._workspace.get_project_path(
                         run["project_id"]
                     )
-                    resolver = ContextResolver(config_path, self._tool_loader)
+                    # code_root: the real code repo, so `from: repository`
+                    # inline reads and context-source tools see the SAME tree
+                    # the read tools serve (not the workspace's brief dir).
+                    resolver = ContextResolver(
+                        config_path, self._tool_loader,
+                        code_root=self._workspace.get_project_code_path(
+                            run["project_id"]))
                     resolved = resolver.resolve(
                         node.context,
                         current_config=run["graph_name"],

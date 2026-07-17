@@ -197,3 +197,62 @@ class TestFeedbackOfSource:
         # feedback changes every reject round — it must sort to the volatile
         # tail so it can't poison the prompt-cache prefix
         assert "feedback" in labels[-1].lower()
+
+
+class TestRepositoryRootConsistency:
+    """`from: repository` must mean the CODE repo in every mode. The inline
+    branch used to read workspace_root/"project" (a near-empty brief dir)
+    while the read-tool branch of the SAME spec used the real code repo."""
+
+    def test_inline_with_path_reads_code_root(self, workspace, tmp_path):
+        code = tmp_path / "repo"
+        (code / "novel").mkdir(parents=True)
+        (code / "novel" / "state.md").write_text("初始状态", encoding="utf-8")
+        # decoy at the OLD (wrong) root — must NOT be read
+        decoy = workspace / "project" / "novel"
+        decoy.mkdir(parents=True)
+        (decoy / "state.md").write_text("WRONG ROOT", encoding="utf-8")
+
+        from skillflow.graph import _normalize_context_spec
+        resolver = ContextResolver(workspace, code_root=code)
+        result = resolver.resolve(
+            [_normalize_context_spec({"from": "repository", "path": "novel/state.md"})],
+            current_config="dpe_default")
+        assert len(result) == 1
+        content = list(result.values())[0]
+        assert "初始状态" in content and "WRONG ROOT" not in content
+
+    def test_inline_without_path_refuses_whole_repo_dump(self, workspace, tmp_path):
+        # a populated repo that would previously be concatenated wholesale
+        code = tmp_path / "repo"
+        code.mkdir()
+        for i in range(3):
+            (code / f"f{i}.py").write_text("x" * 1000)
+        from skillflow.graph import _normalize_context_spec
+        resolver = ContextResolver(workspace, code_root=code)
+        result = resolver.resolve([_normalize_context_spec({"from": "repository"})],
+                                  current_config="dpe_default")
+        assert result == {}  # refused, not a 3KB (or 4MB) paste
+
+    def test_mode_tool_still_injects_nothing(self, workspace, tmp_path):
+        code = tmp_path / "repo"
+        code.mkdir()
+        (code / "a.md").write_text("data")
+        from skillflow.graph import _normalize_context_spec
+        resolver = ContextResolver(workspace, code_root=code)
+        result = resolver.resolve(
+            [_normalize_context_spec({"from": "repository", "mode": "tool"})],
+            current_config="dpe_default")
+        assert result == {}
+
+    def test_default_code_root_preserves_legacy_path(self, workspace):
+        # constructed WITHOUT code_root → old behavior (workspace/"project")
+        legacy = workspace / "project"
+        legacy.mkdir(parents=True, exist_ok=True)
+        (legacy / "brief.md").write_text("legacy brief", encoding="utf-8")
+        from skillflow.graph import _normalize_context_spec
+        resolver = ContextResolver(workspace)
+        result = resolver.resolve(
+            [_normalize_context_spec({"from": "repository", "path": "brief.md"})],
+            current_config="dpe_default")
+        assert "legacy brief" in (list(result.values()) or [""])[0]
