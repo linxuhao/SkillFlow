@@ -485,8 +485,68 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
             out["source"] = tag
             out["path"] = path
             return out
+
+    # ── Forgiving resolution. A live agent glued a repo-ledger path onto a
+    # step source — read(path="novel/chapters/ch0003/chapter_draft.md",
+    # source="step:draft") — while the file sat at the layer root as
+    # chapter_draft.md; the bare "File not found" was a dead end and the step
+    # proceeded blind. Deterministic recovery, no guessing:
+    #   exactly ONE file with the requested basename in the searched layers
+    #     → serve it, reporting the corrected path (resolved_from);
+    #   several → error listing the candidates to pick from;
+    #   none    → error listing what IS there (bounded per layer), so the
+    #             next call can be right instead of abandoned.
+    base = Path(path).name
+    matches, seen_rel = [], set()
+    if base:
+        for tag, root in layers:
+            d = Path(root)
+            if not d.is_dir():
+                continue
+            for f in sorted(d.rglob(base)):
+                if not (f.is_file() and f.name == base):
+                    continue
+                rel = str(f.relative_to(d))
+                if _is_blocked_path(rel):
+                    continue
+                if rel in seen_rel:
+                    continue  # shadowed copy in a lower layer, not ambiguity
+                seen_rel.add(rel)
+                matches.append((tag, rel, f))
+    if len(matches) == 1:
+        tag, rel, f = matches[0]
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            return {"error": str(e)}
+        out = _page_lines(text, start_line, end_line)
+        out["source"] = tag
+        out["path"] = rel
+        out["resolved_from"] = path  # the requested path was wrong; this is where it really lives
+        return out
+    if matches:
+        return {"error": f"File not found: {path}",
+                "candidates": [{"path": rel, "source": tag}
+                               for tag, rel, _ in matches[:10]],
+                "hint": "several files share that basename — re-call read "
+                        "with one of these exact paths"}
+    available = []
+    for tag, root in layers:
+        d = Path(root)
+        if not d.is_dir():
+            continue
+        names = []
+        for f in sorted(d.rglob("*")):
+            if f.is_file() and f.name != ".gitkeep" \
+                    and not _is_blocked_path(str(f.relative_to(d))):
+                names.append(str(f.relative_to(d)))
+                if len(names) >= 10:
+                    break
+        if names:
+            available.append({"source": tag, "files": names})
     return {"error": f"File not found: {path}",
-            "searched": [t for t, _ in layers]}
+            "searched": [t for t, _ in layers],
+            "available": available}
 
 
 def unified_search(smap, pattern, source=None, glob=None, context_lines=0,

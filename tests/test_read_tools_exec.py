@@ -295,3 +295,53 @@ class TestStagingIncludedByPath:
         (staging / "a.py").write_text("edited\n")
         r = fns["read"]("a.py")
         assert "edited" in r["content"] and r["source"] == "staging"
+
+
+class TestForgivingResolution:
+    """A wrong path must not be a dead end (live incident: the humanizer glued
+    a repo-ledger path onto a step source, got a bare 'File not found', probed
+    the wrong source once, gave up). Deterministic recovery only."""
+
+    def test_unique_basename_resolves_with_corrected_path(self, tmp_path):
+        _mk_step(tmp_path, {"chapter_draft.md": "正文全文"})
+        r = _step_fns(tmp_path)["read"](
+            "novel/chapters/ch0003/chapter_draft.md", source="step:2")
+        assert "error" not in r
+        assert "正文全文" in r["content"]
+        assert r["path"] == "chapter_draft.md"                       # corrected
+        assert r["resolved_from"] == "novel/chapters/ch0003/chapter_draft.md"
+
+    def test_unique_basename_resolves_in_subdir_too(self, tmp_path):
+        _mk_step(tmp_path, {"docs/spec.md": "深埋的文件"})
+        r = _step_fns(tmp_path)["read"]("spec.md", source="step:2")
+        assert "error" not in r and r["path"] == "docs/spec.md"
+
+    def test_ambiguous_basename_lists_candidates(self, tmp_path):
+        _mk_step(tmp_path, {"a/report.md": "A", "b/report.md": "B"})
+        r = _step_fns(tmp_path)["read"]("wrong/report.md", source="step:2")
+        assert "error" in r
+        cands = {c["path"] for c in r["candidates"]}
+        assert cands == {"a/report.md", "b/report.md"}
+        assert "exact paths" in r["hint"]
+
+    def test_shadowed_same_relpath_is_not_ambiguity(self, tmp_path):
+        # working tree = staging over repo; the SAME rel path in both layers is
+        # shadowing (higher layer wins), not ambiguity — must still resolve.
+        stage = tmp_path / "stage"; stage.mkdir()
+        (stage / "note.md").write_text("staged")
+        repo = tmp_path / "repo"; repo.mkdir()
+        (repo / "note.md").write_text("repo")
+        fns = make_read_tool_fns([{"source_type": "repository", "mode": "tool"}],
+                                 str(tmp_path), "dpe_default",
+                                 code_root=str(repo), step_tmp_dir=str(stage))
+        r = fns["read"]("somewhere/else/note.md")
+        assert "error" not in r
+        assert r["content"].endswith("staged") or "staged" in r["content"]
+        assert r["resolved_from"] == "somewhere/else/note.md"
+
+    def test_no_match_lists_available_files(self, tmp_path):
+        _mk_step(tmp_path, {"a.txt": "x", "b.txt": "y"})
+        r = _step_fns(tmp_path)["read"]("ghost.md", source="step:2")
+        assert "error" in r
+        avail = {f for entry in r["available"] for f in entry["files"]}
+        assert {"a.txt", "b.txt"} <= avail

@@ -239,6 +239,24 @@ Wire it onto a reviewer so a revision that silently reverts an earlier round's
 fix gets caught instead of passing review unchallenged. Volatile tier: it is
 emitted last and never poisons the prompt-cache prefix.
 
+## The Read Surface (read / search / list)
+
+Context specs with `mode: "tool"`/`"both"` also generate a unified read surface:
+three tools (`read`, `search`, `list`) over the step's declared sources, each
+addressable via `source:` (`"step:2"`, `"repo"`, `"self"`, …; omitted = the
+working tree, staging-first so an agent sees its own just-written edits).
+`read` pages by 0-based `start_line`/`end_line`, so a truncated injection is
+recoverable rather than terminal.
+
+**A wrong path is not a dead end.** Agents routinely address one namespace with
+another's path (a live one asked a step source for `novel/chapters/ch0003/
+chapter_draft.md` when the step held `chapter_draft.md` at its root — then
+gave up and worked blind). `read` recovers deterministically: if exactly ONE
+file in the searched layers has the requested basename, it is served with the
+corrected path in `resolved_from`; several → the error lists the candidates;
+none → the error lists what each layer actually contains (bounded). Every
+failure tells the agent what to call next.
+
 ## Checkpoints
 
 Agent **and tool** steps can pause for human approval (`tests/fixtures/checkpoint_cycle.yaml`).
