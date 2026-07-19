@@ -1,0 +1,19 @@
+name: skillflow_docs_read
+description: >
+  Read a skillflow documentation topic (from skillflow_docs_list) WITH LINE NUMBERS.
+  Give start_line/end_line (1-based, inclusive) to read the exact region around a
+  skillflow_docs_search hit — the line numbers line up. Omit the range to read from
+  the top (windowed). `schema-source` (graph.py) is the authoritative field list.
+parameters:
+  topic:
+    type: string
+    description: "A topic key from skillflow_docs_list (e.g. 'schema-source', 'graph-design')."
+    required: true
+  start_line:
+    type: integer
+    description: "1-based first line to read (e.g. a search hit's line minus a few)."
+    required: false
+  end_line:
+    type: integer
+    description: "1-based last line to read (inclusive)."
+    required: false

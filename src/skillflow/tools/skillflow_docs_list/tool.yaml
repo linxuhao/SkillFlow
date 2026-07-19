@@ -1,0 +1,6 @@
+name: skillflow_docs_list
+description: >
+  List skillflow's own documentation topics (bundled docs + the authoritative config
+  schema source, graph.py). Start here when designing/editing a skillflow graph and
+  unsure of any structure, then skillflow_docs_search / skillflow_docs_read.
+parameters: {}

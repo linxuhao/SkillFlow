@@ -1,0 +1,12 @@
+name: skillflow_docs_search
+description: >
+  Grep skillflow's own docs + schema source for a term; returns matching snippets
+  WITH LINE NUMBERS (topic + line + context). Look up any skillflow config field,
+  step type, lifecycle hook, context mode, validation tool, path variable,
+  end-condition type, or loop mechanic — the real spec, not a guess. Then
+  skillflow_docs_read(topic, start_line, end_line) around a hit for full context.
+parameters:
+  query:
+    type: string
+    description: "What to look up, e.g. 'lifecycle', 'context mode', 'max_loop', 'credit'."
+    required: true
