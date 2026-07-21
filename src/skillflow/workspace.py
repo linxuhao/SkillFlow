@@ -7,8 +7,18 @@ config-specific subdirectories. Host applications configure the base path.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
+
+
+def _sanitize_item(item: str) -> str:
+    """Filesystem-safe folder name for a loop item key (a task id / claim id /
+    slug). Collapses anything not alnum/._- to '_' and caps length, so an item
+    value can never escape the step dir or collide with sibling control dirs."""
+    s = re.sub(r"[^A-Za-z0-9._-]+", "_", str(item)).strip("._-")[:120]
+    return s or "item"
+
 
 
 class WorkspaceManager:
@@ -95,16 +105,31 @@ class WorkspaceManager:
     # ── New: per-step atomic directories ───────────────────────────────
 
     def get_step_tmp_dir(self, project_id: str, config_name: str,
-                         step_id: str) -> Path:
-        """Agent writes here during execution. Invisible to context resolver."""
+                         step_id: str, item: str | None = None) -> Path:
+        """Agent writes here during execution. Invisible to context resolver.
+
+        ``item`` mirrors :meth:`get_step_dir`: a loop-body step stages into
+        ``{step}.tmp/{item}/`` so the promotion target ``{step}/{item}/`` is a
+        clean rename. Non-loop steps are unchanged.
+        """
         p = self.get_config_path(project_id, config_name) / f"{step_id}.tmp"
+        if item:
+            p = p / _sanitize_item(item)
         p.mkdir(parents=True, exist_ok=True)
         return p
 
     def get_step_dir(self, project_id: str, config_name: str,
-                     step_id: str) -> Path:
-        """Atomic rename target. Context resolver reads from here."""
+                     step_id: str, item: str | None = None) -> Path:
+        """Atomic rename target. Context resolver reads from here.
+
+        For a loop-body step, pass ``item`` (the loop's current item) to get the
+        per-item folder ``{step}/{item}/`` so each iteration's output survives
+        instead of the shared ``{step}/`` being replaced every iteration. Non-loop
+        steps pass ``item=None`` → unchanged ``{step}/``.
+        """
         p = self.get_config_path(project_id, config_name) / step_id
+        if item:
+            p = p / _sanitize_item(item)
         return p  # created by _step_commit, not here
 
 

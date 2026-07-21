@@ -223,6 +223,16 @@ class ContextResolver:
         # New path: workspace/{project}/{config}/{step_id}/
         step_dir = self._workspace_root / cfg / step_id
 
+        # Loop-body producer routing (mirror read_tools.resolve_context_paths):
+        # scope:task (default) reads THIS item's {step}/{item}/ folder; scope:all
+        # leaves {step}/ so the rglob below concatenates every item.
+        _lbs = (loop_context or {}).get("_loop_body_steps") or ()
+        if step_id in _lbs and source.get("scope", "task") != "all":
+            _it = (loop_context or {}).get("_current_item")
+            if _it:
+                from skillflow.workspace import _sanitize_item
+                step_dir = step_dir / _sanitize_item(_it)
+
         if not step_dir.exists() or not step_dir.is_dir():
             return "", ""
 

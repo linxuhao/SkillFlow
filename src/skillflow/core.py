@@ -1068,6 +1068,18 @@ class SkillFlow:
                     val = self._serialize(item) if not isinstance(item, str) else item
                     loop_context[f"[{key}]"] = val
                     loop_context[key] = val
+                    # Per-item read routing (underscore keys are ignored by the
+                    # $var interpolation + the [..]-only prompt injection above):
+                    # a source reading a loop-body producer resolves to that
+                    # producer's {step}/{item}/ folder in scope:task (default),
+                    # or {step}/ (all items) in scope:all.
+                    loop_context["_current_item"] = val
+            body_steps: set[str] = set()
+            for _s in resolver.graph.steps:
+                if _s.step_type == "loop":
+                    body_steps |= self._loop_body_nodes(resolver, _s.id)
+            if body_steps:
+                loop_context["_loop_body_steps"] = body_steps
 
             # Resolve context specs from the graph step node (loop vars available as $var)
             if self._workspace and node.context:
@@ -1735,30 +1747,41 @@ class SkillFlow:
         return result
 
     def _step_commit(self, token: ClaimToken) -> dict:
-        """Built-in: atomic rename tmp_dir → step_dir."""
+        """Built-in: atomic rename tmp_dir → step_dir.
+
+        A loop-body step promotes into a PER-ITEM folder ``{step}/{item}/`` so each
+        iteration's output survives (the shared ``{step}/`` was replaced every
+        iteration → an aggregator saw only the last item). Only THIS item's folder
+        is removed on re-run, so sibling items are preserved. Non-loop steps keep
+        the plain ``{step}/`` — byte-identical to before.
+        """
         if not self._workspace:
             return {"passed": True}
         pid = self._get_project_id(token.run_id)
         gname = self._get_graph_name(token.run_id)
+        resolver = self._get_resolver_for_run(token.run_id)
+        item = self._loop_item_for_step(token.run_id, resolver, token.step_id)
         tmp_dir = self._workspace.get_step_tmp_dir(pid, gname, token.step_id)
-        step_dir = self._workspace.get_step_dir(pid, gname, token.step_id)
+        step_dir = self._workspace.get_step_dir(pid, gname, token.step_id, item=item)
 
         if not tmp_dir.exists() or not any(tmp_dir.iterdir()):
             return {"passed": True, "files": []}
 
         import shutil
-        # Collect files before moving
+        # Collect files before moving; a loop-body step reports the item-prefixed
+        # path so the write feedback / trace shows exactly where it landed.
+        prefix = f"{item}/" if item else ""
         moved_files = []
-        for item in sorted(tmp_dir.rglob("*")):
-            if item.is_file():
-                rel = item.relative_to(tmp_dir)
-                moved_files.append(str(rel))
+        for f in sorted(tmp_dir.rglob("*")):
+            if f.is_file():
+                moved_files.append(prefix + str(f.relative_to(tmp_dir)))
 
-        # Atomic: remove old step dir, rename tmp → step. The prior {step}/ was
+        # Atomic: remove old {step}[/item] dir, rename tmp → it. The prior dir was
         # already committed to the artifact-history git by its own _step_commit,
         # so this rmtree loses no history when artifact_history is on.
         if step_dir.exists():
             shutil.rmtree(str(step_dir))
+        step_dir.parent.mkdir(parents=True, exist_ok=True)
         os.rename(str(tmp_dir), str(step_dir))
 
         if self._artifact_history:
@@ -2379,6 +2402,54 @@ class SkillFlow:
                     stack.append(t.to)
         return body_nodes
 
+    def _loop_item_for_step(self, run_id: str, resolver, step_id: str,
+                            conn=None) -> str | None:
+        """Current loop item if ``step_id`` is a body step of an ACTIVE loop, else
+        None. Used to key a body step's output dir per-item (``{step}/{item}/``) so
+        each iteration's output SURVIVES — the shared ``{step}/`` was replaced every
+        iteration, so an aggregator (read with ``scope: all``) saw only the last
+        item. Topological (reuses ``_loop_body_nodes``); config-agnostic.
+        """
+        loop_id = None
+        for s in resolver.graph.steps:
+            if s.step_type == "loop" and step_id in self._loop_body_nodes(resolver, s.id):
+                loop_id = s.id
+                break
+        if not loop_id:
+            return None
+        sql = ("SELECT current_item FROM skillflow_loop_state "
+               "WHERE run_id = ? AND loop_step_id = ?")
+        if conn is not None:
+            row = conn.execute(sql, (run_id, loop_id)).fetchone()
+        else:
+            with self._lock:
+                row = self._conn.execute(sql, (run_id, loop_id)).fetchone()
+        return (row["current_item"] if row else None) or None
+
+    def _enrich_write_path(self, run_id: str, step_id: str, result):
+        """Add a workspace-relative ``path`` to a write-tool result so the agent
+        (and the trace) sees WHERE the file actually landed —
+        ``{step}[/{item}]/{file}`` — the location later steps read it from. Once
+        write-location and read-location diverge (per-item folders, staging→
+        promotion, repo vs step dir), an opaque ``{"written": "x.json"}`` hides a
+        persist-here/load-there mismatch; this makes it visible.
+        """
+        if not isinstance(result, dict) or result.get("error"):
+            return result
+        name = (result.get("written") or result.get("edited")
+                or result.get("created"))
+        if not name:
+            return result
+        try:
+            resolver = self._get_resolver_for_run(run_id)
+            item = self._loop_item_for_step(run_id, resolver, step_id)
+        except Exception:
+            item = None
+        result["path"] = (f"{step_id}/{item}/{name}" if item
+                          else f"{step_id}/{name}")
+        result.setdefault("note", "staged; readable by later steps at this path")
+        return result
+
     def _reset_loop_body_edge_counts(self, conn, run_id, resolver,
                                      loop_step_id, body_target):
         """Clear edge counts for the loop body so each iteration gets a fresh
@@ -2592,7 +2663,7 @@ class SkillFlow:
             (run_id,),
         ).fetchone()
         fr = self._make_file_reader(
-            run["project_id"], run["graph_name"], step_id
+            run["project_id"], run["graph_name"], step_id, run_id=run_id
         ) if run else None
 
         # Read current edge counts to enforce max_loop.  We also increment
@@ -2667,15 +2738,27 @@ class SkillFlow:
         return None
 
     def _make_file_reader(self, project_id: str, graph_name: str,
-                          step_id: str) -> callable | None:
+                          step_id: str, run_id: str = "") -> callable | None:
         """Return a callable for resolving from_file match conditions.
 
-        Reads from the step's promoted output directory ({step_id}/)
-        where _step_commit has atomically moved validated outputs.
+        Reads from the step's promoted output directory ({step_id}/) where
+        _step_commit has atomically moved validated outputs. For a loop-body step
+        (whose output is per-item at {step_id}/{item}/) the CURRENT item's folder
+        is read — so a transition matching a looped reviewer's `review_verdict.json`
+        finds this iteration's verdict, not a sibling's. (RLock is reentrant, so
+        the loop-state lookup is safe even inside a transaction.)
         """
         if not self._workspace:
             return None
-        step_dir = self._workspace.get_step_dir(project_id, graph_name, step_id)
+        item = None
+        if run_id:
+            try:
+                resolver = self._get_resolver(graph_name)
+                item = self._loop_item_for_step(run_id, resolver, step_id)
+            except Exception:
+                item = None
+        step_dir = self._workspace.get_step_dir(project_id, graph_name, step_id,
+                                                item=item)
         def read(path: str) -> str:
             f = step_dir / path
             if not f.exists():
@@ -2696,7 +2779,8 @@ class SkillFlow:
             self._confirm_tool_in_tx(conn, run_id, step_id, tool_result)
             step_flags = tool_result
             fr = self._make_file_reader(
-                run_row["project_id"], run_row["graph_name"], step_id)
+                run_row["project_id"], run_row["graph_name"], step_id,
+                run_id=run_id)
             edge_counts = self._read_edge_counts(conn, run_id)
             try:
                 _t, target = resolver.resolve_transition(
@@ -3148,7 +3232,7 @@ class SkillFlow:
             edges_taken: list[tuple[str, str]] = []
             fr = self._make_file_reader(
                 run["project_id"], run["graph_name"],
-                last["step_id"] if last else "")
+                last["step_id"] if last else "", run_id=run_id)
             if last is None:
                 next_node = resolver.begin_node()
             else:
@@ -4052,18 +4136,19 @@ class SkillFlow:
                                                execute_edit)
             slot = name[name.index("_") + 1:]  # everything after first _
             if name.startswith("create_"):
-                return execute_create(slot, fixed, params, str(tmp_dir))
+                res = execute_create(slot, fixed, params, str(tmp_dir))
             elif name.startswith("edit_"):
                 # Edit the EXISTING file from the consolidated repo (project_root),
                 # writing the result into staging for promotion + repo_apply.
                 # For outputs that never reach the repo, the step's own promoted
                 # dir is the baseline — same-run gated (see helper).
-                return execute_edit(slot, fixed, params, str(tmp_dir),
-                                    source_dir=project_root or "",
-                                    fallback_source_dir=self._edit_fallback_dir(
-                                        run_id, pid, gname, step_id))
+                res = execute_edit(slot, fixed, params, str(tmp_dir),
+                                   source_dir=project_root or "",
+                                   fallback_source_dir=self._edit_fallback_dir(
+                                       run_id, pid, gname, step_id))
             else:
-                return execute_write(slot, fixed, params, str(tmp_dir))
+                res = execute_write(slot, fixed, params, str(tmp_dir))
+            return self._enrich_write_path(run_id, step_id, res)
 
         # Generic write-mode tools (mode: write, no fixed slots): create new
         # files / edit existing ones surgically. edit reads its baseline from
@@ -4079,14 +4164,16 @@ class SkillFlow:
                                                execute_generic_edit,
                                                execute_generic_write)
             if name == "create":
-                return execute_generic_create(params, str(tmp_dir),
-                                              source_dir=project_root or "")
-            if name == "edit":
-                return execute_generic_edit(params, str(tmp_dir),
-                                            source_dir=project_root or "",
-                                            fallback_source_dir=self._edit_fallback_dir(
-                                                run_id, pid, gname, step_id))
-            return execute_generic_write(params, str(tmp_dir))
+                res = execute_generic_create(params, str(tmp_dir),
+                                             source_dir=project_root or "")
+            elif name == "edit":
+                res = execute_generic_edit(params, str(tmp_dir),
+                                           source_dir=project_root or "",
+                                           fallback_source_dir=self._edit_fallback_dir(
+                                               run_id, pid, gname, step_id))
+            else:
+                res = execute_generic_write(params, str(tmp_dir))
+            return self._enrich_write_path(run_id, step_id, res)
 
         # finish_step — no-op completion signal; the host runner detects it and
         # breaks the tool-calling loop after the current turn completes

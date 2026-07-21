@@ -104,6 +104,17 @@ def resolve_context_paths(
         step_id = spec.get("step_id", "")
         cfg = current_config or "dpe_default"
         step_dir = ws / cfg / step_id
+        # A loop-body producer's output is per-item at {step}/{item}/. Default
+        # (scope:task) reads THIS item's folder — correct for an in-loop step
+        # reading an upstream in-loop step (e.g. DPE t_impl→t_plan, same task).
+        # scope:all leaves step_dir = {step}/, whose per-item subdirs the read
+        # surface rglobs — for an aggregator that wants every item.
+        if (loop_context and step_id in (loop_context.get("_loop_body_steps") or ())
+                and spec.get("scope", "task") != "all"):
+            _it = loop_context.get("_current_item")
+            if _it:
+                from skillflow.workspace import _sanitize_item
+                step_dir = step_dir / _sanitize_item(_it)
         if not step_dir.is_dir():
             return []
         files = spec.get("files", [])
