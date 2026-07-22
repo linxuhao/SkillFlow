@@ -314,3 +314,299 @@ def test_fanout_scope_fixture_registers():
     agg2 = next(s for s in g2.steps if s.id == "aggregate")
     assert agg2.context[0]["scope"] == "all"
     assert loop_body_map(g.steps)["fan_loop"] == frozenset({"extract", "review"})
+
+
+# ── Gap-fill regression tests (one per confirmed review finding) ──────────
+
+def test_context_inline_named_file_aggregates_all_items(tmp_path):
+    """Finding 4, context.py half: an outside reader's inline source naming a
+    file must concatenate every item's copy, not flat-miss to empty context."""
+    from skillflow.context import ContextResolver
+    _seed_two_items(tmp_path)
+    cr = ContextResolver(Path(tmp_path))
+    lc = _lc(reader_loop="", items={"loopA": "claim_1"})   # outside reader
+    label, content = cr._resolve_step_output(
+        {"step": "verify", "file": "v.json"}, "cfg", loop_context=lc)
+    assert '{"claim":0}' in content and '{"claim":1}' in content
+    assert "claim_0" in content and "claim_1" in content   # per-item headers
+
+
+def _drive_reject_once(sf, graph, files_for, reject_file):
+    """Drive a fanout graph whose reviewer rejects the first round (so the maker
+    re-claims the SAME item with a promoted prior output). Returns run id and a
+    flag-flipper the caller controls via files written per claim."""
+    sf.register_graph(graph)
+    rid = sf.get_or_create_run("g", "projr", {"project_id": "projr"})
+    sf.start_run(rid)
+    return rid
+
+
+def test_edit_fallback_and_self_read_see_prior_item_output(sf_with_workspace):
+    """Finding 5: a loop-body maker re-running after a review reject must find
+    its own PRIOR promoted output at {step}/{item}/ — edit baseline + step_dir."""
+    from skillflow.core import StepResult
+    sf = sf_with_workspace
+    for role in ("planner", "maker", "reviewer"):
+        sf.register_agent_config(role, model="mock", tools=[])
+    graph = _graph([
+        {"id": "plan", "step_type": "agent", "agent_config": "planner",
+         "output": {"mode": "write"}, "transitions": [{"to": "loop"}]},
+        {"id": "loop", "step_type": "loop",
+         "loop": {"source": {"step": "plan", "file": "items.json",
+                             "field": "execution_order"}, "item_as": "item",
+                  "max_iterations": 5},
+         "transitions": [{"to": "impl", "max_loop": 5}, {"to": "done"}]},
+        {"id": "impl", "step_type": "agent", "agent_config": "maker",
+         "output": {"mode": "write"}, "transitions": [{"to": "review"}]},
+        {"id": "review", "step_type": "agent", "agent_config": "reviewer",
+         "output": {"mode": "write"},
+         "transitions": [
+             {"to": "loop", "match": {"from_file": "verdict.json", "field": "passed",
+                                      "value": True}, "max_loop": 5},
+             {"to": "impl", "match": {"from_file": "verdict.json", "field": "passed",
+                                      "value": False}, "max_loop": 3}]},
+        {"id": "done", "step_type": "gate", "transitions": [{"to": None}]},
+    ])
+    sf.register_graph(graph)
+    rid = sf.get_or_create_run("g", "projr", {"project_id": "projr"})
+    sf.start_run(rid)
+    pid, gname = "projr", "g"
+    verdicts = iter([False, True, True])   # round 1 rejected → impl re-runs
+
+    for _ in range(40):
+        if sf.get_run(rid)["status"] in ("completed", "failed"):
+            break
+        sf.advance_run(rid)
+        if sf.get_run(rid)["status"] == "paused":
+            sf.resume_run(rid)
+            continue
+        claimed = sf.claim_next_step(rid)
+        if claimed is None:
+            continue
+        _tmp = sf._workspace.get_step_tmp_dir(pid, gname, claimed.step_id)
+        if claimed.step_id == "plan":
+            (_tmp / "items.json").write_text('{"execution_order": [["alpha"]]}')
+        elif claimed.step_id == "impl":
+            # SECOND claim of impl (the reject re-run): its prior promoted output
+            # must be visible as edit baseline + step_dir fallback, per-item.
+            prior = sf._workspace.get_step_dir(pid, gname, "impl", item="alpha")
+            if prior.is_dir():
+                fb = sf._edit_fallback_dir(rid, pid, gname, "impl")
+                assert fb.endswith("impl/alpha"), f"edit fallback not item-aware: {fb}"
+                assert (Path(fb) / "draft.md").exists()
+            (_tmp / "draft.md").write_text("v2")
+        elif claimed.step_id == "review":
+            import json as _json
+            (_tmp / "verdict.json").write_text(
+                _json.dumps({"passed": next(verdicts)}))
+        sf.confirm_step(claimed.token, StepResult(outputs={}, flags={}))
+
+    assert sf.get_run(rid)["status"] == "completed"
+    # the re-run replaced only alpha's folder; final content is round 2's
+    assert (sf._workspace.get_step_dir(pid, gname, "impl", item="alpha")
+            / "draft.md").read_text() == "v2"
+
+
+def test_two_loops_get_their_own_items(sf_with_workspace):
+    """Finding 6: per-loop item lookups — while loop B runs, its body steps must
+    key by B's item, never leak drained loop A's last item."""
+    from skillflow.core import StepResult
+    sf = sf_with_workspace
+    for role in ("planner", "wa", "wb"):
+        sf.register_agent_config(role, model="mock", tools=[])
+    graph = _graph([
+        {"id": "plan", "step_type": "agent", "agent_config": "planner",
+         "output": {"mode": "write"}, "transitions": [{"to": "loopA"}]},
+        {"id": "loopA", "step_type": "loop",
+         "loop": {"source": {"step": "plan", "file": "a.json",
+                             "field": "execution_order"}, "item_as": "ita",
+                  "max_iterations": 5},
+         "transitions": [{"to": "bodyA", "max_loop": 5}, {"to": "loopB"}]},
+        {"id": "bodyA", "step_type": "agent", "agent_config": "wa",
+         "output": {"mode": "write"}, "transitions": [{"to": "loopA", "max_loop": 5}]},
+        {"id": "loopB", "step_type": "loop",
+         "loop": {"source": {"step": "plan", "file": "b.json",
+                             "field": "execution_order"}, "item_as": "itb",
+                  "max_iterations": 5},
+         "transitions": [{"to": "bodyB", "max_loop": 5}, {"to": "done"}]},
+        {"id": "bodyB", "step_type": "agent", "agent_config": "wb",
+         "output": {"mode": "write"}, "transitions": [{"to": "loopB", "max_loop": 5}]},
+        {"id": "done", "step_type": "gate", "transitions": [{"to": None}]},
+    ])
+    sf.register_graph(graph)
+    rid = sf.get_or_create_run("g", "proj2l", {"project_id": "proj2l"})
+    sf.start_run(rid)
+    pid, gname = "proj2l", "g"
+    resolver = sf._get_resolver("g")
+    checked_b = False
+
+    for _ in range(40):
+        if sf.get_run(rid)["status"] in ("completed", "failed"):
+            break
+        sf.advance_run(rid)
+        if sf.get_run(rid)["status"] == "paused":
+            sf.resume_run(rid)
+            continue
+        claimed = sf.claim_next_step(rid)
+        if claimed is None:
+            continue
+        _tmp = sf._workspace.get_step_tmp_dir(pid, gname, claimed.step_id)
+        if claimed.step_id == "plan":
+            (_tmp / "a.json").write_text('{"execution_order": [["a1"]]}')
+            (_tmp / "b.json").write_text('{"execution_order": [["b1"]]}')
+        else:
+            (_tmp / "out.md").write_text(claimed.step_id)
+        if claimed.step_id == "bodyB":
+            # loop A is drained (its state row persists with current_item=a1) —
+            # bodyB must key by loop B's item, bodyA's lookup stays A's.
+            assert sf._loop_item_for_step(rid, resolver, "bodyB") == "b1"
+            assert sf._loop_item_for_step(rid, resolver, "bodyA") == "a1"
+            # legacy $var injection carries the READER's loop key only
+            rc = claimed.inputs.get("_resolved_context", {})
+            assert rc.get("[itb]") == "b1"
+            assert "[ita]" not in rc
+            checked_b = True
+        sf.confirm_step(claimed.token, StepResult(outputs={}, flags={}))
+
+    assert checked_b and sf.get_run(rid)["status"] == "completed"
+    assert (sf._workspace.get_step_dir(pid, gname, "bodyA", item="a1") / "out.md").exists()
+    assert (sf._workspace.get_step_dir(pid, gname, "bodyB", item="b1") / "out.md").exists()
+
+
+def test_cjk_items_promote_distinct_and_paths_report_sanitized(sf_with_workspace):
+    """Findings 2+7 e2e: CJK items get DISTINCT folders (no rmtree collision) and
+    reported paths (moved_files, write feedback) use the on-disk sanitized name."""
+    from skillflow.core import StepResult
+    sf = sf_with_workspace
+    for role in ("planner", "verifier"):
+        sf.register_agent_config(role, model="mock", tools=[])
+    graph = _graph([
+        {"id": "plan", "step_type": "agent", "agent_config": "planner",
+         "output": {"mode": "write"}, "transitions": [{"to": "loop"}]},
+        {"id": "loop", "step_type": "loop",
+         "loop": {"source": {"step": "plan", "file": "items.json",
+                             "field": "execution_order"}, "item_as": "item",
+                  "max_iterations": 5},
+         "transitions": [{"to": "verify", "max_loop": 5}, {"to": "done"}]},
+        {"id": "verify", "step_type": "agent", "agent_config": "verifier",
+         "output": {"mode": "write"}, "transitions": [{"to": "loop", "max_loop": 5}]},
+        {"id": "done", "step_type": "gate", "transitions": [{"to": None}]},
+    ])
+    sf.register_graph(graph)
+    rid = sf.get_or_create_run("g", "projc", {"project_id": "projc"})
+    sf.start_run(rid)
+    pid, gname = "projc", "g"
+    import json as _json
+    enriched_paths = []
+
+    for _ in range(30):
+        if sf.get_run(rid)["status"] in ("completed", "failed"):
+            break
+        sf.advance_run(rid)
+        if sf.get_run(rid)["status"] == "paused":
+            sf.resume_run(rid)
+            continue
+        claimed = sf.claim_next_step(rid)
+        if claimed is None:
+            continue
+        _tmp = sf._workspace.get_step_tmp_dir(pid, gname, claimed.step_id)
+        if claimed.step_id == "plan":
+            (_tmp / "items.json").write_text(_json.dumps(
+                {"execution_order": [["中文任务", "另一个"]]}, ensure_ascii=False))
+        else:
+            (_tmp / "v.json").write_text("x")
+            # Finding 7: the write-feedback path must advertise the sanitized
+            # folder (the one that will exist), not the raw CJK item.
+            r = sf._enrich_write_path(rid, "verify", {"written": "v.json"})
+            enriched_paths.append(r["path"])
+        sf.confirm_step(claimed.token, StepResult(outputs={}, flags={}))
+
+    assert sf.get_run(rid)["status"] == "completed"
+    verify_dir = sf._workspace.get_step_dir(pid, gname, "verify")
+    folders = sorted(p.name for p in verify_dir.iterdir() if p.is_dir())
+    assert len(folders) == 2, f"CJK items collided: {folders}"   # both survive
+    for p in enriched_paths:
+        # advertised path exists relative to the config dir after promotion
+        assert (sf._workspace.get_config_path(pid, gname) / p).exists() or \
+               any(p.startswith(f"verify/{f}") for f in folders)
+    for f in folders:
+        assert (verify_dir / f / "v.json").exists()
+
+
+def test_flat_pre_upgrade_leftovers_cleaned_at_promotion(sf_with_workspace):
+    """Finding 8a: stale FLAT files under {step}/ (pre-1.5.23 layout) are removed
+    when a per-item promotion lands, so all-items readers can't double-read."""
+    from skillflow.core import StepResult
+    sf = sf_with_workspace
+    for role in ("planner", "verifier"):
+        sf.register_agent_config(role, model="mock", tools=[])
+    graph = _graph([
+        {"id": "plan", "step_type": "agent", "agent_config": "planner",
+         "output": {"mode": "write"}, "transitions": [{"to": "loop"}]},
+        {"id": "loop", "step_type": "loop",
+         "loop": {"source": {"step": "plan", "file": "items.json",
+                             "field": "execution_order"}, "item_as": "item",
+                  "max_iterations": 5},
+         "transitions": [{"to": "verify", "max_loop": 5}, {"to": "done"}]},
+        {"id": "verify", "step_type": "agent", "agent_config": "verifier",
+         "output": {"mode": "write"}, "transitions": [{"to": "loop", "max_loop": 5}]},
+        {"id": "done", "step_type": "gate", "transitions": [{"to": None}]},
+    ])
+    sf.register_graph(graph)
+    rid = sf.get_or_create_run("g", "projf", {"project_id": "projf"})
+    sf.start_run(rid)
+    pid, gname = "projf", "g"
+    # simulate a pre-upgrade flat leftover
+    stale_dir = sf._workspace.get_step_dir(pid, gname, "verify")
+    stale_dir.mkdir(parents=True, exist_ok=True)
+    (stale_dir / "old_flat.json").write_text("stale")
+
+    from skillflow.core import StepResult
+    for _ in range(30):
+        if sf.get_run(rid)["status"] in ("completed", "failed"):
+            break
+        sf.advance_run(rid)
+        if sf.get_run(rid)["status"] == "paused":
+            sf.resume_run(rid)
+            continue
+        claimed = sf.claim_next_step(rid)
+        if claimed is None:
+            continue
+        _tmp = sf._workspace.get_step_tmp_dir(pid, gname, claimed.step_id)
+        if claimed.step_id == "plan":
+            (_tmp / "items.json").write_text('{"execution_order": [["only"]]}')
+        else:
+            (_tmp / "v.json").write_text("x")
+        sf.confirm_step(claimed.token, StepResult(outputs={}, flags={}))
+
+    assert not (stale_dir / "old_flat.json").exists(), "flat leftover not GC'd"
+    assert (stale_dir / "only" / "v.json").exists()
+
+
+def test_dropped_manifest_items_are_gcd(sf_with_workspace):
+    """Finding 8b: per-item folders of items dropped from a regenerated manifest
+    are removed (direct unit of _gc_dropped_item_dirs)."""
+    sf = sf_with_workspace
+    for role in ("planner", "verifier"):
+        sf.register_agent_config(role, model="mock", tools=[])
+    graph = _graph([
+        {"id": "plan", "step_type": "agent", "agent_config": "planner",
+         "output": {"mode": "write"}, "transitions": [{"to": "loop"}]},
+        {"id": "loop", "step_type": "loop",
+         "loop": {"source": {"step": "plan", "file": "items.json",
+                             "field": "execution_order"}, "item_as": "item",
+                  "max_iterations": 5},
+         "transitions": [{"to": "verify", "max_loop": 5}, {"to": "done"}]},
+        {"id": "verify", "step_type": "agent", "agent_config": "verifier",
+         "output": {"mode": "write"}, "transitions": [{"to": "loop", "max_loop": 5}]},
+        {"id": "done", "step_type": "gate", "transitions": [{"to": None}]},
+    ])
+    sf.register_graph(graph)
+    pid, gname = "projg", "g"
+    d = sf._workspace.get_step_dir(pid, gname, "verify")
+    for it in ("keep_me", "drop_me"):
+        (d / it).mkdir(parents=True, exist_ok=True)
+        (d / it / "v.json").write_text("x")
+    sf._gc_dropped_item_dirs(pid, gname, "loop", ["keep_me", "new_one"])
+    assert (d / "keep_me" / "v.json").exists()
+    assert not (d / "drop_me").exists()
