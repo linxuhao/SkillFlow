@@ -1054,32 +1054,52 @@ class SkillFlow:
             if agent_cfg:
                 inputs_with_tools["_agent_config"] = agent_cfg.to_dict()
 
-            # Extract loop item context FIRST so context resolution can reference it
-            loop_context: dict[str, str] = {}
-            loop_row = conn.execute(
-                "SELECT current_item, item_context_key "
-                "FROM skillflow_loop_state WHERE run_id = ?",
-                (run_id,),
-            ).fetchone()
-            if loop_row:
-                item = loop_row["current_item"]
-                key = loop_row["item_context_key"] or "loop_item"
-                if item:
-                    val = self._serialize(item) if not isinstance(item, str) else item
-                    loop_context[f"[{key}]"] = val
-                    loop_context[key] = val
-                    # Per-item read routing (underscore keys are ignored by the
-                    # $var interpolation + the [..]-only prompt injection above):
-                    # a source reading a loop-body producer resolves to that
-                    # producer's {step}/{item}/ folder in scope:task (default),
-                    # or {step}/ (all items) in scope:all.
-                    loop_context["_current_item"] = val
-            body_steps: set[str] = set()
-            for _s in resolver.graph.steps:
-                if _s.step_type == "loop":
-                    body_steps |= self._loop_body_nodes(resolver, _s.id)
-            if body_steps:
-                loop_context["_loop_body_steps"] = body_steps
+            # Extract loop item context FIRST so context resolution can reference
+            # it. JSON-safe, per-loop, reader-aware routing info (underscore keys
+            # are ignored by $var interpolation and the [..]-only prompt injection):
+            #   _loop_of:     {step_id: loop_id} for every loop-body step (cached
+            #                 reach-back topology — drain/give-up targets are NOT body)
+            #   _reader_loop: the claimed step's own loop id ("" when not in a loop)
+            #   _loop_items:  {loop_id: current raw item} per loop-state row
+            # Read routing (workspace.route_step_read_dir): a source reading a
+            # loop-body producer resolves to {step}/{item}/ ONLY when the reader is
+            # in the SAME loop (its current item); any outside reader gets the
+            # {step}/ parent (all items) — a drained loop's stale current_item can
+            # never leak into an aggregator.
+            loop_context: dict = {}
+            # Routing map covers AGENT body steps only — the per-item producers.
+            # Tool body steps write flat (no promotion) and stay flat-read.
+            _loop_of = {}
+            for _lid, _body in resolver.loop_bodies().items():
+                for _n in _body:
+                    _bn = resolver.get_node(_n)
+                    if _bn is not None and _bn.step_type == "agent":
+                        _loop_of.setdefault(_n, _lid)
+            if _loop_of:
+                loop_context["_loop_of"] = _loop_of
+                loop_context["_reader_loop"] = _loop_of.get(node.id, "")
+                _rows = conn.execute(
+                    "SELECT loop_step_id, current_item, item_context_key "
+                    "FROM skillflow_loop_state WHERE run_id = ?",
+                    (run_id,),
+                ).fetchall()
+                _items: dict[str, str] = {}
+                for _r in _rows:
+                    _it = _r["current_item"]
+                    if _it:
+                        _items[_r["loop_step_id"]] = (
+                            self._serialize(_it) if not isinstance(_it, str) else _it)
+                if _items:
+                    loop_context["_loop_items"] = _items
+                # Legacy $var interpolation keys — from the READER's own loop only
+                # (the old unfiltered fetchone could inject ANOTHER loop's item in
+                # a multi-loop graph).
+                _rl = loop_context["_reader_loop"]
+                if _rl and _rl in _items:
+                    _krow = next((r for r in _rows if r["loop_step_id"] == _rl), None)
+                    _key = (_krow["item_context_key"] if _krow else "") or "loop_item"
+                    loop_context[f"[{_key}]"] = _items[_rl]
+                    loop_context[_key] = _items[_rl]
 
             # Resolve context specs from the graph step node (loop vars available as $var)
             if self._workspace and node.context:
@@ -1158,8 +1178,15 @@ class SkillFlow:
                     # fn builders (avoids re-resolving every context spec twice).
                     _step_tmp = str(self._workspace.get_step_tmp_dir(
                         run["project_id"], run["graph_name"], node.id))
+                    # Own promoted layer: per-item for a loop-body step, so the
+                    # 'self'/'promoted' read tier sees THIS item's prior round
+                    # (not the flat parent listing every sibling item).
+                    _own_lid = loop_context.get("_reader_loop") if loop_context else ""
+                    _own_item = ((loop_context.get("_loop_items") or {}).get(_own_lid)
+                                 if _own_lid else None)
                     _step_dir = str(self._workspace.get_step_dir(
-                        run["project_id"], run["graph_name"], node.id))
+                        run["project_id"], run["graph_name"], node.id,
+                        item=_own_item))
                     _smap = build_source_map(
                         node.context,
                         workspace_root=ws_root,
@@ -1645,8 +1672,19 @@ class SkillFlow:
                 (token.run_id,),
             ).fetchone()
             if row:
+                # A loop-body step's output was just promoted to {step}/{item}/ —
+                # $STEP_DIR must point THERE for on_deliver hooks (repo_apply /
+                # repo_delete), or the repo would receive item-named subfolders
+                # and _deletions.json would never be found.
+                try:
+                    _item = self._loop_item_for_step(
+                        token.run_id, self._get_resolver(row["graph_name"]),
+                        token.step_id)
+                except Exception:
+                    _item = None
                 params = self._workspace.resolve_variables(
-                    row["project_id"], row["graph_name"], token.step_id, params
+                    row["project_id"], row["graph_name"], token.step_id, params,
+                    item=_item,
                 )
                 params.setdefault("workspace_root",
                                   str(self._workspace.get_project_path(row["project_id"])))
@@ -1679,11 +1717,14 @@ class SkillFlow:
                     if row["graph_name"]:
                         params.setdefault("config_name", row["graph_name"])
                     try:
-                        lr = self._conn.execute(
-                            "SELECT current_item FROM skillflow_loop_state "
-                            "WHERE run_id = ? LIMIT 1", (token.run_id,)).fetchone()
-                        if lr and lr["current_item"]:
-                            params.setdefault("task_name", lr["current_item"])
+                        # Filtered by THIS step's own loop (any step type) — the
+                        # old unfiltered LIMIT 1 could hand another loop's item
+                        # to a multi-loop graph's hook.
+                        _res = self._get_resolver(row["graph_name"])
+                        _lid = _res.loop_of(token.step_id)
+                        _it = self._current_item_of_loop(token.run_id, _lid) if _lid else None
+                        if _it:
+                            params.setdefault("task_name", _it)
                     except Exception:
                         pass
                 # Filter kwargs to only what the function accepts
@@ -1768,9 +1809,12 @@ class SkillFlow:
             return {"passed": True, "files": []}
 
         import shutil
+        from skillflow.workspace import _sanitize_item
         # Collect files before moving; a loop-body step reports the item-prefixed
-        # path so the write feedback / trace shows exactly where it landed.
-        prefix = f"{item}/" if item else ""
+        # path so the write feedback / trace shows exactly where it landed. The
+        # prefix uses the SANITIZED folder name — the path that actually exists
+        # on disk (the raw item may contain '/'/CJK/etc. and never names a folder).
+        prefix = f"{_sanitize_item(item)}/" if item else ""
         moved_files = []
         for f in sorted(tmp_dir.rglob("*")):
             if f.is_file():
@@ -1782,6 +1826,18 @@ class SkillFlow:
         if step_dir.exists():
             shutil.rmtree(str(step_dir))
         step_dir.parent.mkdir(parents=True, exist_ok=True)
+        if item:
+            # GC pre-per-item leftovers: files sitting FLAT in {step}/ came from a
+            # promotion before this step was item-keyed (old layout wiped the whole
+            # dir each round, so flat files are always stale). Left in place they'd
+            # be double-read by every all-items aggregation. Item FOLDERS are kept —
+            # sibling items' outputs are exactly what per-item promotion preserves.
+            for stale in step_dir.parent.iterdir() if step_dir.parent.is_dir() else ():
+                if stale.is_file():
+                    try:
+                        stale.unlink()
+                    except OSError:
+                        pass
         os.rename(str(tmp_dir), str(step_dir))
 
         if self._artifact_history:
@@ -2199,14 +2255,14 @@ class SkillFlow:
                 if row and row["project_id"]:
                     pid = row["project_id"]
                     kwargs.setdefault("project_id", pid)
-                    # Look up current task name from loop state (for commit messages)
+                    # Look up current task name from loop state (for commit
+                    # messages / register_tool). Filtered by THIS tool step's own
+                    # loop — the old unfiltered LIMIT 1 was multi-loop-ambiguous.
                     try:
-                        lr = self._conn.execute(
-                            "SELECT current_item FROM skillflow_loop_state WHERE run_id = ? LIMIT 1",
-                            (run_id,),
-                        ).fetchone()
-                        if lr and lr["current_item"]:
-                            kwargs.setdefault("task_name", lr["current_item"])
+                        _lid = self._get_resolver(graph_name).loop_of(tool_node.id)
+                        _it = self._current_item_of_loop(run_id, _lid) if _lid else None
+                        if _it:
+                            kwargs.setdefault("task_name", _it)
                     except Exception:
                         pass
                     kwargs = self._workspace.resolve_variables(
@@ -2374,57 +2430,66 @@ class SkillFlow:
         return items, False
 
     def _loop_body_nodes(self, resolver, loop_step_id) -> set[str]:
-        """The set of node ids that form a loop's body: reachable from the
-        loop's body transition, following transitions, excluding the loop node
-        itself. Purely topological — derived from the graph, no config-specific
-        names — so it stays config-agnostic.
+        """The set of node ids that form a loop's body. Delegates to the
+        resolver's cached reach-back topology (graph.loop_body_map): a body node
+        must be reachable from the loop's body entry AND able to reach back to
+        the loop — give-up/drain targets are NOT body (they run once, post-loop).
         """
-        node = resolver.get_node(loop_step_id)
-        if not node:
-            return set()
-        body_target = None
-        for t in node.transitions:
-            if t.to:
-                body_target = t.to
-                break
-        body_nodes: set[str] = set()
-        stack = [body_target]
-        while stack:
-            nid = stack.pop()
-            if not nid or nid in body_nodes or nid == loop_step_id:
-                continue
-            body_nodes.add(nid)
-            n = resolver.get_node(nid)
-            if not n:
-                continue
-            for t in n.transitions:
-                if t.to and t.to != loop_step_id:
-                    stack.append(t.to)
-        return body_nodes
+        return set(resolver.loop_bodies().get(loop_step_id, ()))
 
-    def _loop_item_for_step(self, run_id: str, resolver, step_id: str,
-                            conn=None) -> str | None:
-        """Current loop item if ``step_id`` is a body step of an ACTIVE loop, else
+    def _current_item_of_loop(self, run_id: str, loop_id: str) -> str | None:
+        """The named loop's current item (filtered — multi-loop graphs never leak
+        another loop's item). RLock is reentrant: safe inside a transaction."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT current_item FROM skillflow_loop_state "
+                "WHERE run_id = ? AND loop_step_id = ?",
+                (run_id, loop_id)).fetchone()
+        return (row["current_item"] if row else None) or None
+
+    def _loop_item_for_step(self, run_id: str, resolver, step_id: str) -> str | None:
+        """Current loop item if ``step_id`` is an AGENT body step of a loop, else
         None. Used to key a body step's output dir per-item (``{step}/{item}/``) so
         each iteration's output SURVIVES — the shared ``{step}/`` was replaced every
-        iteration, so an aggregator (read with ``scope: all``) saw only the last
-        item. Topological (reuses ``_loop_body_nodes``); config-agnostic.
+        iteration, so an aggregator saw only the last item.
+
+        AGENT-only on purpose: only agent steps go through tmp→promotion, so only
+        they get per-item folders. A loop-body TOOL step writes flat via $STEP_DIR
+        with no promotion — keying its reads/transition-matching per-item would
+        point at folders that never exist. Tool body steps keep the pre-1.5.23
+        flat, overwritten-per-iteration semantics. O(1) via the resolver's cached
+        step→loop map.
         """
-        loop_id = None
-        for s in resolver.graph.steps:
-            if s.step_type == "loop" and step_id in self._loop_body_nodes(resolver, s.id):
-                loop_id = s.id
-                break
+        loop_id = resolver.loop_of(step_id)
         if not loop_id:
             return None
-        sql = ("SELECT current_item FROM skillflow_loop_state "
-               "WHERE run_id = ? AND loop_step_id = ?")
-        if conn is not None:
-            row = conn.execute(sql, (run_id, loop_id)).fetchone()
-        else:
-            with self._lock:
-                row = self._conn.execute(sql, (run_id, loop_id)).fetchone()
-        return (row["current_item"] if row else None) or None
+        node = resolver.get_node(step_id)
+        if not node or node.step_type != "agent":
+            return None
+        return self._current_item_of_loop(run_id, loop_id)
+
+    def _gc_dropped_item_dirs(self, pid: str, gname: str, loop_step_id: str,
+                              items: list) -> None:
+        """Remove this loop's AGENT body steps' per-item folders whose item is no
+        longer in the manifest (best-effort; artifact history keeps every promoted
+        iteration recoverable). Called only when the manifest actually changed."""
+        import shutil
+        from skillflow.workspace import _sanitize_item
+        try:
+            resolver = self._get_resolver(gname)
+        except Exception:
+            return
+        keep = {_sanitize_item(i) for i in items}
+        for sid in resolver.loop_bodies().get(loop_step_id, ()):
+            n = resolver.get_node(sid)
+            if not n or n.step_type != "agent":
+                continue
+            d = self._workspace.get_step_dir(pid, gname, sid)
+            if not d.is_dir():
+                continue
+            for sub in d.iterdir():
+                if sub.is_dir() and sub.name not in keep:
+                    shutil.rmtree(str(sub), ignore_errors=True)
 
     def _enrich_write_path(self, run_id: str, step_id: str, result):
         """Add a workspace-relative ``path`` to a write-tool result so the agent
@@ -2445,8 +2510,13 @@ class SkillFlow:
             item = self._loop_item_for_step(run_id, resolver, step_id)
         except Exception:
             item = None
-        result["path"] = (f"{step_id}/{item}/{name}" if item
-                          else f"{step_id}/{name}")
+        if item:
+            # Report the SANITIZED folder — the path that actually exists (the
+            # raw item may contain '/'/CJK/etc. and never names a folder).
+            from skillflow.workspace import _sanitize_item
+            result["path"] = f"{step_id}/{_sanitize_item(item)}/{name}"
+        else:
+            result["path"] = f"{step_id}/{name}"
         result.setdefault("note", "staged; readable by later steps at this path")
         return result
 
@@ -2589,6 +2659,19 @@ class SkillFlow:
         # reflects only the active manifest (prevents the len(completed) overcount
         # and the scheduler's idx-out-of-range).
         completed &= set(items)
+        # Disk GC mirroring that DB reconciliation: when the manifest CHANGED (a
+        # goal-loop round regenerated it), remove body steps' per-item folders for
+        # items no longer in it — otherwise an all-items aggregation keeps
+        # reporting on dropped items forever (per-item promotion removed the old
+        # wipe-the-whole-dir GC).
+        if row is not None and self._workspace and row["items_json"]:
+            try:
+                _old = set(self._deserialize(row["items_json"]) or [])
+            except Exception:
+                _old = set()
+            if _old and _old - set(items):
+                self._gc_dropped_item_dirs(run["project_id"], run["graph_name"],
+                                           loop_step_id, items)
 
         if row is None:
             if not items:
@@ -4033,7 +4116,15 @@ class SkillFlow:
                 ).fetchone()
             if row is None:
                 return ""
-            final_dir = self._workspace.get_step_dir(pid, gname, step_id)
+            # A loop-body step's promoted baseline lives at {step}/{item}/ — the
+            # flat parent would pass is_dir() (it holds sibling item folders) but
+            # contain none of THIS item's files, breaking revision-round edits.
+            try:
+                item = self._loop_item_for_step(
+                    run_id, self._get_resolver(gname), step_id)
+            except Exception:
+                item = None
+            final_dir = self._workspace.get_step_dir(pid, gname, step_id, item=item)
             return str(final_dir) if final_dir.is_dir() else ""
         except Exception:
             return ""  # best-effort: no fallback beats a wrong baseline
@@ -4199,10 +4290,20 @@ class SkillFlow:
                 if run_id and step_id and self._workspace:
                     pid = self._get_project_id(run_id)
                     gname = self._get_graph_name(run_id)
+                    # step_dir = this step's own PRIOR promoted output; for a
+                    # loop-body step that is the per-item folder (SF-10 fallback
+                    # reads must see the previous round of THIS item, not the
+                    # flat parent full of sibling items).
+                    try:
+                        _item = self._loop_item_for_step(
+                            run_id, self._get_resolver(gname), step_id)
+                    except Exception:
+                        _item = None
                     kwargs.setdefault("step_tmp_dir",
                                       str(self._workspace.get_step_tmp_dir(pid, gname, step_id)))
                     kwargs.setdefault("step_dir",
-                                      str(self._workspace.get_step_dir(pid, gname, step_id)))
+                                      str(self._workspace.get_step_dir(pid, gname, step_id,
+                                                                       item=_item)))
             except Exception:
                 # Without these, read_file loses the staging/step dirs and can't
                 # see files the agent just wrote (breaks staging-first reads).

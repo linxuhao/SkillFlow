@@ -13,11 +13,47 @@ from pathlib import Path
 
 
 def _sanitize_item(item: str) -> str:
-    """Filesystem-safe folder name for a loop item key (a task id / claim id /
-    slug). Collapses anything not alnum/._- to '_' and caps length, so an item
-    value can never escape the step dir or collide with sibling control dirs."""
-    s = re.sub(r"[^A-Za-z0-9._-]+", "_", str(item)).strip("._-")[:120]
-    return s or "item"
+    """Filesystem-safe, COLLISION-FREE folder name for a loop item key.
+
+    Collapses anything not alnum/._- to '_' and caps length so an item value can
+    never escape the step dir. When that transform is LOSSY (the sanitized text
+    differs from the raw item, e.g. 'api/auth', 'Task A: setup', or any CJK item
+    name), a short hash of the raw value is appended — distinct raw items always
+    map to distinct folders. Without it, 'api/auth' collided with 'api_auth' and
+    ALL pure-CJK names collapsed to 'item', so the second item's promotion
+    rmtree'd the first item's output.
+    """
+    raw = str(item)
+    s = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._-")[:100]
+    if s == raw:
+        return s
+    import hashlib
+    suffix = hashlib.sha1(raw.encode("utf-8", "surrogatepass")).hexdigest()[:8]
+    return f"{s}-{suffix}" if s else f"item-{suffix}"
+
+
+def route_step_read_dir(step_dir: Path, producer_id: str, scope: str,
+                        loop_context: dict | None) -> Path:
+    """THE single routing rule for reading a step's promoted output.
+
+    A loop-body producer's output lives per-item at ``{step}/{item}/``. A reader
+    in the SAME loop (same item in flight) gets that item's folder — unless it
+    asked for ``scope: all``. Every other reader (outside any loop, or in a
+    different loop) gets the ``{step}/`` parent, i.e. ALL items — a drained
+    loop's stale ``current_item`` must never route an aggregator to one item.
+    Non-loop producers are untouched. Used by read_tools, context resolution,
+    and any other consumer; do not reimplement this rule inline.
+    """
+    lc = loop_context or {}
+    producer_loop = (lc.get("_loop_of") or {}).get(producer_id)
+    if not producer_loop or scope == "all":
+        return step_dir
+    if lc.get("_reader_loop") != producer_loop:
+        return step_dir  # outside reader → all items
+    item = (lc.get("_loop_items") or {}).get(producer_loop)
+    if not item:
+        return step_dir
+    return step_dir / _sanitize_item(item)
 
 
 
@@ -105,16 +141,14 @@ class WorkspaceManager:
     # ── New: per-step atomic directories ───────────────────────────────
 
     def get_step_tmp_dir(self, project_id: str, config_name: str,
-                         step_id: str, item: str | None = None) -> Path:
+                         step_id: str) -> Path:
         """Agent writes here during execution. Invisible to context resolver.
 
-        ``item`` mirrors :meth:`get_step_dir`: a loop-body step stages into
-        ``{step}.tmp/{item}/`` so the promotion target ``{step}/{item}/`` is a
-        clean rename. Non-loop steps are unchanged.
+        Staging is FLAT even for loop-body steps: one iteration stages at a time,
+        and promotion renames the whole ``.tmp`` onto the per-item target
+        ``{step}/{item}/`` (see ``get_step_dir``'s ``item`` param).
         """
         p = self.get_config_path(project_id, config_name) / f"{step_id}.tmp"
-        if item:
-            p = p / _sanitize_item(item)
         p.mkdir(parents=True, exist_ok=True)
         return p
 
@@ -166,8 +200,16 @@ class WorkspaceManager:
     # ── Resolve step variables ──────────────────────────────────────
 
     def resolve_variables(self, project_id: str, config_name: str,
-                          step_id: str, params: dict) -> dict:
-        """Resolve ``$STEP_TMP_DIR``, ``$STEP_DIR`` etc. in param values."""
+                          step_id: str, params: dict,
+                          item: str | None = None) -> dict:
+        """Resolve ``$STEP_TMP_DIR``, ``$STEP_DIR`` etc. in param values.
+
+        ``item``: the step's current loop item, when it is a loop-body step —
+        $STEP_DIR then points at the per-item promotion target ``{step}/{item}/``
+        (where the files ACTUALLY are). Without it, lifecycle hooks like
+        ``repo_apply(source_dir=$STEP_DIR)`` read the flat parent and would
+        commit item-named subfolders into the repo.
+        """
         resolved = {}
         for key, value in params.items():
             if isinstance(value, str):
@@ -175,12 +217,14 @@ class WorkspaceManager:
                          .replace("$STEP_TMP_DIR",
                                   str(self.get_step_tmp_dir(project_id, config_name, step_id)))
                          .replace("$STEP_DIR",
-                                  str(self.get_step_dir(project_id, config_name, step_id)))
+                                  str(self.get_step_dir(project_id, config_name, step_id,
+                                                        item=item)))
                          # backward compat aliases
                          .replace("$STEP_DRAFT_DIR",
                                   str(self.get_step_tmp_dir(project_id, config_name, step_id)))
                          .replace("$STEP_FINAL_DIR",
-                                  str(self.get_step_dir(project_id, config_name, step_id)))
+                                  str(self.get_step_dir(project_id, config_name, step_id,
+                                                        item=item)))
                          .replace("$TASK_DIR",
                                   str(self.get_tasks_dir(project_id)))
                          .replace("$CONFIG_DIR",

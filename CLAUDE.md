@@ -49,7 +49,9 @@ ToolLoader (multi-source)
 
 ContextResolver → assemble prompt context from:
   ├── {config, output}  (cross-config)
-  ├── {step, output, mode}  (same-config)
+  ├── {step, output, mode, scope}  (same-config; scope=task|all routes a LOOP-BODY
+  │     producer's per-item output {step}/{item}/ — same-loop reader gets its own
+  │     item, outside reader/scope:all gets every item; see workspace.route_step_read_dir)
   ├── {from: repository, path|mode: tool}  (CODE repo — inline needs path:, pathless inline refused)
   ├── {feedback_of: step}  (accumulated checkpoint-feedback log + read contract; volatile tier)
   └── {tool}  (dynamic call)

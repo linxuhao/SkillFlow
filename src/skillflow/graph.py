@@ -430,6 +430,59 @@ class PipelineGraph:
 # ── GraphResolver ────────────────────────────────────────────────────
 
 
+def loop_body_map(steps) -> dict[str, frozenset]:
+    """``{loop_id: frozenset(body step ids)}`` for every ``step_type: loop`` node.
+
+    A node is in loop L's body iff it is reachable from L's body entry (L's first
+    transition with a target) without passing through L **and can reach back to
+    L** — i.e. it lies on a cycle through L. The reach-back condition matters:
+    forward-only reachability over-includes post-loop nodes that a body step
+    reaches via a give-up/drain edge (e.g. ``verify --max_loop spent--> summarize``),
+    which would wrongly key their output per-item and wrongly route their reads
+    to the current item. Pure topology; single source of truth for the engine's
+    per-item output keying, read routing, and any external linter.
+    """
+    by_id = {s.id: s for s in steps}
+    out: dict[str, frozenset] = {}
+    for s in steps:
+        if s.step_type != "loop":
+            continue
+        entry = next((t.to for t in s.transitions if t.to), None)
+        # Forward reachability from the body entry, never passing through L.
+        fwd: set[str] = set()
+        stack = [entry]
+        while stack:
+            nid = stack.pop()
+            if not nid or nid in fwd or nid == s.id:
+                continue
+            fwd.add(nid)
+            n = by_id.get(nid)
+            if n:
+                stack.extend(t.to for t in n.transitions if t.to and t.to != s.id)
+        # Keep only nodes that can reach BACK to L (walk predecessor edges from
+        # the nodes that transition straight to L).
+        preds: dict[str, set[str]] = {nid: set() for nid in fwd}
+        back_stack: list[str] = []
+        for nid in fwd:
+            n = by_id.get(nid)
+            if not n:
+                continue
+            for t in n.transitions:
+                if t.to == s.id:
+                    back_stack.append(nid)
+                elif t.to in preds:
+                    preds[t.to].add(nid)
+        body: set[str] = set()
+        while back_stack:
+            nid = back_stack.pop()
+            if nid in body:
+                continue
+            body.add(nid)
+            back_stack.extend(preds.get(nid, ()))
+        out[s.id] = frozenset(body)
+    return out
+
+
 class GraphResolver:
     """Validates a PipelineGraph and resolves next nodes during traversal.
 
@@ -442,6 +495,23 @@ class GraphResolver:
         self._adj: dict[str, list[Transition]] = {}
         for s in graph.steps:
             self._adj[s.id] = s.transitions
+        # Loop topology, computed once (graph-static): which steps form each
+        # loop's body, and the inverse step→loop map. Hot paths (promotion,
+        # write feedback, transition readers, claim context) consult these
+        # instead of re-walking the graph.
+        self._loop_bodies: dict[str, frozenset] = loop_body_map(graph.steps)
+        self._loop_of: dict[str, str] = {}
+        for lid, body in self._loop_bodies.items():
+            for nid in body:
+                self._loop_of.setdefault(nid, lid)
+
+    def loop_bodies(self) -> dict[str, frozenset]:
+        """``{loop_id: frozenset(body step ids)}`` (cached, reach-back semantics)."""
+        return self._loop_bodies
+
+    def loop_of(self, step_id: str) -> str | None:
+        """The loop whose body ``step_id`` belongs to, or None (cached)."""
+        return self._loop_of.get(step_id)
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -769,14 +839,23 @@ def _normalize_context_spec(spec: dict) -> dict:
         {step: "1", file: "sota.md"}       → specific file (legacy key)
         {step: "1", files: ["sota.md"]}    → filtered files
         {step: "1", mode: "tool"}          → tool-only
+        {step: "v", scope: "all"}          → ALL items of a loop-body producer
         {config: "other", output: "x.md"}             → scan all steps
         {config: "other", step: "s", output: "x.md"}  → specific step
         {from: "workspace", path: "project/brief.md"}
         {from: "repository", path: "src/", mode: "tool"}
         {tool: "dir_tree"}                 → dynamic tool call (inline only)
 
+    ``scope`` (loop fan-out reads): a loop-body AGENT step's output is stored
+    per-item at ``{step}/{item}/``. ``scope: task`` (the default) reads the
+    reader's own current item when the reader is inside the SAME loop; a reader
+    OUTSIDE the producer's loop always reads all items. ``scope: all`` forces
+    the all-items view (an aggregator after the loop should declare it for
+    clarity even though it is also the outside-reader default). Invalid values
+    fail at graph registration.
+
     Returns a new dict with defaults filled:
-        source_type, mode, files, path, step_id, config_name
+        source_type, mode, files, path, step_id, config_name, scope
     """
     # Unwrap {source: {...}} convention
     inner = spec.get("source", spec)
@@ -827,6 +906,18 @@ def _normalize_context_spec(spec: dict) -> dict:
     # run when this source resolves to no content. Readable whether written on the
     # `source:` wrapper or as its sibling.
     s["required"] = bool(s.get("required") or spec.get("required", False))
+    # `scope` — how a source reading a LOOP-BODY producer resolves (per-item
+    # output lives at {step}/{item}/): "task" (default) = the reader's own
+    # current item when the reader is in the SAME loop; "all" = every item
+    # (the {step}/ parent). Readers outside the producer's loop always get all
+    # items regardless. Normalize + validate here so a typo ('scope: al') fails
+    # loudly at registration instead of silently meaning task.
+    raw_scope = str(s.get("scope", spec.get("scope", "task")) or "task").lower()
+    if raw_scope not in ("task", "all"):
+        raise ValueError(
+            f"context source {s.get('step_id') or s.get('config_name') or s}: "
+            f"invalid scope '{raw_scope}' — must be 'task' or 'all'")
+    s["scope"] = raw_scope
     return s
 
 

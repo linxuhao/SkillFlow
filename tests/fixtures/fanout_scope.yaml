@@ -1,0 +1,71 @@
+# Fan-out over a manifest with per-item outputs + an all-items aggregator.
+# Demonstrates the `scope` context field: the loop-body producer (extract)
+# writes {extract}/{item}/ per item; the in-loop reviewer reads its OWN item
+# (default scope: task); the post-loop aggregator reads EVERY item (scope: all).
+name: fanout_scope
+description: "Fan-out loop with per-item outputs and an all-items aggregator"
+begin: plan
+end_conditions:
+  combinator: or
+  conditions:
+    - type: node_reached
+      node: done
+      result: completed
+    - type: max_total_steps
+      limit: 60
+steps:
+  - id: plan
+    step_type: agent
+    agent_config: echo_agent
+    output: { mode: write }          # writes items.json {"execution_order": [[...]]}
+    transitions:
+      - to: fan_loop
+
+  - id: fan_loop
+    step_type: loop
+    loop:
+      source: { step: plan, file: items.json, field: execution_order }
+      item_as: item
+      max_iterations: 10
+    transitions:
+      - to: extract
+        max_loop: 10
+      - to: aggregate                # manifest drained → aggregate all items
+
+  - id: extract                      # loop-body producer: output goes per-item
+    step_type: agent
+    agent_config: echo_agent
+    output: { mode: write }
+    transitions:
+      - to: review
+
+  - id: review                       # in-loop reader: own item (scope: task default)
+    step_type: agent
+    agent_config: echo_agent
+    context:
+      - source: { step: extract }
+    output:
+      mode: content
+      fixed:
+        verdict: { file: review_verdict.json, on_exists: new, format: '{"passed": bool, "feedback": str}' }
+    transitions:
+      - to: fan_loop
+        match: { from_file: review_verdict.json, field: passed, value: true }
+        max_loop: 10
+      - to: extract
+        match: { from_file: review_verdict.json, field: passed, value: false }
+        max_loop: 3
+
+  - id: aggregate                    # post-loop aggregator: EVERY item's files
+    step_type: agent
+    agent_config: echo_agent
+    context:
+      - source: { step: extract, scope: all }
+    output: { mode: write }
+    transitions:
+      - to: done
+
+  - id: done
+    step_type: gate
+    transitions:
+      - to: null

@@ -21,6 +21,8 @@ import os
 import re
 from pathlib import Path
 
+from skillflow.workspace import route_step_read_dir
+
 
 # Default line window for generated readers when no range is given. Replaces the
 # old whole-file dump so agents are never silently blind to a large file's tail;
@@ -103,23 +105,21 @@ def resolve_context_paths(
     if source_type == "step":
         step_id = spec.get("step_id", "")
         cfg = current_config or "dpe_default"
-        step_dir = ws / cfg / step_id
-        # A loop-body producer's output is per-item at {step}/{item}/. Default
-        # (scope:task) reads THIS item's folder — correct for an in-loop step
-        # reading an upstream in-loop step (e.g. DPE t_impl→t_plan, same task).
-        # scope:all leaves step_dir = {step}/, whose per-item subdirs the read
-        # surface rglobs — for an aggregator that wants every item.
-        if (loop_context and step_id in (loop_context.get("_loop_body_steps") or ())
-                and spec.get("scope", "task") != "all"):
-            _it = loop_context.get("_current_item")
-            if _it:
-                from skillflow.workspace import _sanitize_item
-                step_dir = step_dir / _sanitize_item(_it)
+        base_dir = ws / cfg / step_id
+        # Per-item routing lives in ONE place: same-loop readers get this item's
+        # {step}/{item}/; everyone else (aggregators, other loops) gets {step}/.
+        step_dir = route_step_read_dir(base_dir, step_id,
+                                       spec.get("scope", "task"), loop_context)
         if not step_dir.is_dir():
             return []
+        # When routed to the PARENT of a per-item producer, a file selector must
+        # search each item folder — the files live at {step}/{item}/f, and a flat
+        # join would silently miss them all (the aggregation-with-file-selector
+        # hole). Flat matches are still honored for pre-per-item layouts.
+        all_items_mode = (step_dir == base_dir and loop_context
+                          and step_id in (loop_context.get("_loop_of") or {}))
         files = spec.get("files", [])
         if files:
-            # Single file: return the specific file paths
             result = []
             for f in files:
                 # Resolve $var references first (e.g. $current_task → backend_sessions_api)
@@ -127,7 +127,11 @@ def resolve_context_paths(
                 fp = step_dir / resolved_f
                 if fp.is_file():
                     result.append(str(fp))
-                elif "$" in f:
+                elif all_items_mode:
+                    import glob as _glob
+                    per_item = sorted(_glob.glob(str(step_dir / "*" / resolved_f)))
+                    result.extend(per_item)
+                if not result and "$" in f:
                     # Unresolved $var — try glob match (e.g. tasks/$current_task.json)
                     import glob as _glob
                     pattern = str(step_dir / re.sub(r'\$\w+', '*', f))

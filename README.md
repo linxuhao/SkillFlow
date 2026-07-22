@@ -221,11 +221,25 @@ context:
   - source: { from: "repository", mode: "tool" }                    # read tools over the CODE repo
   - source: { from: "repository", path: "docs/spec.md" }            # inline-inject one repo file/subtree
   - source: { feedback_of: "draft" }                                # another step's checkpoint-feedback log
+  - source: { step: "verify", scope: "all" }                        # ALL items of a loop-body producer
 ```
 
 A cross-config source without `step` scans the other config's step dirs for the
 file; adding `step` reads that one step's output (use it when only a specific
 producing step is authoritative).
+
+**Loop fan-out reads (`scope`)**: a loop-body *agent* step's output is stored
+per item at `{step}/{item}/` (each iteration survives promotion; only that
+item's folder is replaced on a redo). How a source over such a producer
+resolves depends on where the reader sits: a reader in the **same loop** gets
+its own current item's folder (`scope: task`, the default); a reader **outside
+the producer's loop** — an aggregator after the loop — always gets all items
+(the `{step}/` parent), and should declare `scope: all` for clarity. With
+`scope: all`, a `file:` selector matches per item (`{step}/*/file`). `scope`
+values are validated at graph registration. Loop-body **tool** steps are not
+per-item — they write flat via `$STEP_DIR` and are overwritten each iteration.
+Lifecycle hooks of a body step (`on_deliver: repo_apply` etc.) resolve
+`$STEP_DIR` to the per-item folder — the dir the files were just promoted to.
 
 `from: repository` resolves the **code repository** (`workspace.get_project_code_path`)
 in every mode. Inline injection requires a `path:` — a pathless inline source is

@@ -221,17 +221,19 @@ class ContextResolver:
             output_file = re.sub(r'\$(\w+)', _sub, output_file)
 
         # New path: workspace/{project}/{config}/{step_id}/
-        step_dir = self._workspace_root / cfg / step_id
+        base_dir = self._workspace_root / cfg / step_id
 
-        # Loop-body producer routing (mirror read_tools.resolve_context_paths):
-        # scope:task (default) reads THIS item's {step}/{item}/ folder; scope:all
-        # leaves {step}/ so the rglob below concatenates every item.
-        _lbs = (loop_context or {}).get("_loop_body_steps") or ()
-        if step_id in _lbs and source.get("scope", "task") != "all":
-            _it = (loop_context or {}).get("_current_item")
-            if _it:
-                from skillflow.workspace import _sanitize_item
-                step_dir = step_dir / _sanitize_item(_it)
+        # Per-item routing lives in ONE place (workspace.route_step_read_dir):
+        # a same-loop reader gets this item's {step}/{item}/; every other reader
+        # (aggregators, other loops) gets the {step}/ parent — all items.
+        from skillflow.workspace import route_step_read_dir
+        step_dir = route_step_read_dir(base_dir, step_id,
+                                       source.get("scope", "task"), loop_context)
+        # Routed to the parent of a per-item producer → file selectors must also
+        # search each {item}/ subfolder (flat lookups still honored for
+        # pre-per-item layouts).
+        all_items_mode = (step_dir == base_dir and loop_context
+                          and step_id in (loop_context.get("_loop_of") or {}))
 
         if not step_dir.exists() or not step_dir.is_dir():
             return "", ""
@@ -255,19 +257,36 @@ class ContextResolver:
         # Specific file: glob for patterns like "tasks/*.json"
         if "*" in output_file:
             parts = []
-            for f in sorted(step_dir.glob(output_file)):
+            matches = sorted(step_dir.glob(output_file))
+            if all_items_mode:
+                matches = sorted(set(matches) | set(step_dir.glob(f"*/{output_file}")))
+            for f in matches:
                 if f.is_file():
                     try:
                         content = f.read_text(encoding="utf-8", errors="replace")
                     except Exception:
                         continue
-                    parts.append(f"### {f.name}\n{content}")
+                    parts.append(f"### {f.relative_to(step_dir)}\n{content}")
             if not parts:
                 return "", ""
             label = f"Step {step_id} — {output_file}"
             return label, "\n\n".join(parts)
 
         file_path = step_dir / output_file
+        if not file_path.exists() and all_items_mode:
+            # Aggregate the named file across every item folder.
+            per_item = sorted(step_dir.glob(f"*/{output_file}"))
+            parts = []
+            for f in per_item:
+                if f.is_file():
+                    try:
+                        c = f.read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        continue
+                    parts.append(f"### {f.relative_to(step_dir)}\n{c}")
+            if parts:
+                return f"Step {step_id} — {output_file} (all items)", "\n\n".join(parts)
+            return "", ""
         if not file_path.exists():
             return "", ""
 
