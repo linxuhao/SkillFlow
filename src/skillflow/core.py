@@ -150,6 +150,9 @@ class SkillFlow:
         # neither the pipeline author nor the agent picks them (least privilege).
         #   name -> {"tools": [str, ...], "context_provider": callable|None}
         self._capabilities: dict[str, dict] = {}
+        # run_id -> graph_name is immutable for a run; memoized so the hot paths
+        # (notably the per-tool-call capability lookup) skip a locked DB query.
+        self._graph_name_cache: dict[str, str] = {}
         self._lock = threading.RLock()
         self._tool_loader = tool_loader
         # Durable run trace. Per-run seq is computed atomically inside each
@@ -4165,11 +4168,17 @@ class SkillFlow:
         return self._get_project_id(run_id)
 
     def _get_graph_name(self, run_id: str) -> str:
+        cached = self._graph_name_cache.get(run_id)
+        if cached is not None:
+            return cached
         with self._lock:
             row = self._conn.execute(
                 "SELECT graph_name FROM skillflow_runs WHERE id = ?", (run_id,)
             ).fetchone()
-        return row["graph_name"] if row else ""
+        name = row["graph_name"] if row else ""
+        if name:                       # cache only a resolved name (a not-yet-
+            self._graph_name_cache[run_id] = name   # visible run is re-queried)
+        return name
 
     def _edit_fallback_dir(self, run_id: str, pid: str, gname: str,
                            step_id: str) -> str:
