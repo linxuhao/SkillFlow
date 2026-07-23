@@ -137,3 +137,33 @@ def test_no_capability_means_no_injected_state_dir(tmp_path):
     sf.start_run(run_id)
     _drive_to_tool(sf, run_id, captured)
     assert "state_dir" not in captured
+
+
+def test_capability_injects_state_dir_into_context_source_tool(tmp_path):
+    """A `{source: {tool: X}}` context tool runs on behalf of its reading step,
+    so it must receive that step's capability context too (the 4th tool path)."""
+    captured = {}
+    tools = MockToolLoader()
+    tools.register("loader", lambda **k: (captured.update(k) or {"content": "data"}))
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=tools,
+                   workspace_base=str(tmp_path / "ws"))
+    sf.register_agent_config("dec")
+    sf.register_capability(
+        "stateful",
+        context_provider=lambda cfg: {"state_dir": str(sf._workspace.state_dir(cfg))})
+    g = PipelineGraph(
+        name="ctxtool", begin="decide",
+        steps=[
+            StepNode(id="decide", step_type="agent", agent_config="dec",
+                     capability="stateful",
+                     context=[{"source": {"tool": "loader"}}],
+                     transitions=[Transition(to="done")]),
+            StepNode(id="done", step_type="gate", transitions=[]),
+        ],
+        end_conditions=_end())
+    sf.register_graph(g)
+    run_id = sf.create_run("ctxtool", {"project_id": "p"})
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    sf.claim_next_step(run_id)          # claim resolves context → invokes loader
+    assert captured.get("state_dir") == str(sf._workspace.state_dir("ctxtool")), captured

@@ -75,9 +75,16 @@ class ContextResolver:
     """Resolves context sources into assembled content."""
 
     def __init__(self, workspace_root: Path, tool_loader=None,
-                 code_root: Path | str | None = None):
+                 code_root: Path | str | None = None,
+                 extra_tool_kwargs: dict | None = None):
         self._workspace_root = Path(workspace_root)
         self._tool_loader = tool_loader
+        # Capability context of the READING step: a context-source tool
+        # (`{source: {tool: X}}`) is invoked on behalf of the step whose context
+        # this is, so it must receive that step's `capability` kwargs (e.g. a
+        # durable state_dir) like every other tool path. Signature-filtered at
+        # the call so a tool that doesn't declare them is unaffected.
+        self._extra_tool_kwargs = dict(extra_tool_kwargs or {})
         # The CODE repository root (workspace.get_project_code_path). Before
         # this existed, the inline branch of `from: repository` (and context-
         # source tools' project_root) silently used workspace_root/"project" —
@@ -412,10 +419,21 @@ class ContextResolver:
             # project_root = the real code repo (same root tool STEPS get),
             # not the workspace's brief dir — a context-source tool like
             # dir_tree must describe the same tree the read tools serve.
-            result = fn(
-                workspace_root=str(self._workspace_root),
-                project_root=str(self._code_root),
-            )
+            call_kwargs = {
+                "workspace_root": str(self._workspace_root),
+                "project_root": str(self._code_root),
+            }
+            # Add the reading step's capability context (e.g. state_dir), then
+            # drop any kwarg the tool doesn't accept (unless it takes **kwargs).
+            for _k, _v in self._extra_tool_kwargs.items():
+                call_kwargs.setdefault(_k, _v)
+            import inspect as _inspect
+            _sig = _inspect.signature(fn)
+            if not any(_p.kind == _inspect.Parameter.VAR_KEYWORD
+                       for _p in _sig.parameters.values()):
+                call_kwargs = {k: v for k, v in call_kwargs.items()
+                               if k in _sig.parameters}
+            result = fn(**call_kwargs)
             if isinstance(result, dict):
                 content = result.get("tree", result.get("content", str(result)))
             else:

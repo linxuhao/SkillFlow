@@ -1180,7 +1180,11 @@ class SkillFlow:
                     resolver = ContextResolver(
                         config_path, self._tool_loader,
                         code_root=self._workspace.get_project_code_path(
-                            run["project_id"]))
+                            run["project_id"]),
+                        # a `{source: {tool: X}}` context tool runs on behalf of
+                        # THIS step → hand it the step's capability context too.
+                        extra_tool_kwargs=self._capability_context(
+                            node, run["graph_name"]))
                     resolved = resolver.resolve(
                         node.context,
                         current_config=run["graph_name"],
