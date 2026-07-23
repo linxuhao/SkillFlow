@@ -144,6 +144,12 @@ class SkillFlow:
         # keeps manifests/prompt-fragments). See register_overlay/compose_config.
         self._overlays: dict[str, dict] = {}
         self._resolvers: dict[str, GraphResolver] = {}
+        # Capability registry: a step's `capability` keyword → a curated
+        # toolset + a context provider the FRAMEWORK injects (folders, dirs).
+        # Lets the host provision tools/state locations by declared purpose so
+        # neither the pipeline author nor the agent picks them (least privilege).
+        #   name -> {"tools": [str, ...], "context_provider": callable|None}
+        self._capabilities: dict[str, dict] = {}
         self._lock = threading.RLock()
         self._tool_loader = tool_loader
         # Durable run trace. Per-run seq is computed atomically inside each
@@ -478,6 +484,52 @@ class SkillFlow:
         self.agent_registry.register_dict(name, d)
         if self._tool_loader:
             self.agent_registry.resolve_tool_schemas(self._tool_loader)
+
+    # ── Capability registry ─────────────────────────────────────────
+    def register_capability(self, name: str, *, tools=(),
+                            context_provider=None) -> None:
+        """Register a capability: a step keyword the FRAMEWORK expands into a
+        curated toolset + injected context.
+
+        A step declares ``capability: <name>``. At execution the engine then
+        - grants an AGENT step every tool in ``tools`` (merged into its tool
+          schemas), and
+        - injects ``context_provider(config_name)`` — a dict of extra kwargs —
+          into every tool call the step makes (both a ``tool`` step and an
+          agent-invoked tool). Use it to hand a tool a framework-selected
+          directory (a durable ``state_dir``, a ``tools_dir``) so the tool never
+          picks its own path.
+
+        ``context_provider`` is ``callable(config_name: str) -> dict`` (the host
+        typically closes over the workspace). ``tools`` is a list of tool names.
+        Either may be omitted.
+        """
+        self._capabilities[name] = {
+            "tools": list(tools or ()),
+            "context_provider": context_provider,
+        }
+
+    def _capability_of(self, node) -> dict | None:
+        cap = getattr(node, "capability", "") or ""
+        return self._capabilities.get(cap) if cap else None
+
+    def _capability_context(self, node, config_name: str) -> dict:
+        """Extra kwargs a step's capability injects into its tool calls."""
+        cap = self._capability_of(node)
+        if not cap:
+            return {}
+        provider = cap.get("context_provider")
+        if not provider:
+            return {}
+        try:
+            out = provider(config_name) or {}
+            return dict(out) if isinstance(out, dict) else {}
+        except Exception:
+            import logging
+            logging.getLogger("skillflow").warning(
+                "capability context_provider for step %s failed",
+                getattr(node, "id", "?"), exc_info=True)
+            return {}
 
     def _check_agent_configs(self, graph: PipelineGraph) -> list[str]:
         """Return names of agent_configs referenced in graph but not registered."""
@@ -1048,6 +1100,20 @@ class SkillFlow:
                 agent_cfg = self.agent_registry.get(node.agent_config)
                 if agent_cfg and agent_cfg.tool_schemas:
                     tool_schemas = agent_cfg.tool_schemas
+            # Capability toolset: a step's `capability` grants extra framework
+            # tools (e.g. tool_creation → write/test/register_tool). Merge their
+            # schemas WITHOUT mutating the shared agent config cache (copy first,
+            # else the grant leaks into every other step using this role).
+            _cap = self._capability_of(node)
+            if _cap and _cap.get("tools") and self._tool_loader:
+                tool_schemas = dict(tool_schemas)
+                for _tn in _cap["tools"]:
+                    if _tn in tool_schemas:
+                        continue
+                    try:
+                        tool_schemas[_tn] = self._tool_loader.load_schema(_tn)
+                    except Exception:
+                        pass  # missing tool — registry/lint catches it
             inputs_with_tools = dict(inputs)
             if tool_schemas:
                 inputs_with_tools["_tool_schemas"] = tool_schemas
@@ -2246,6 +2312,11 @@ class SkillFlow:
         kwargs.setdefault("config_name", graph_name)
         kwargs.setdefault("step_name", tool_node.tool_name or tool_node.agent_config or tool_node.id)
         kwargs.setdefault("step_type", tool_node.step_type)
+        # Capability context: a `capability` keyword on this tool step hands the
+        # tool framework-selected values (e.g. a durable state_dir) so the tool
+        # never picks its own path. setdefault → explicit tool_params still win.
+        for _ck, _cv in self._capability_context(tool_node, graph_name).items():
+            kwargs.setdefault(_ck, _cv)
         # Resolve $STEP_DRAFT_DIR etc. via workspace
         if self._workspace and run_id:
             try:
@@ -4281,6 +4352,19 @@ class SkillFlow:
         # tools that don't declare these params are unaffected.
         kwargs.setdefault("step_id", step_id or "")
         kwargs.setdefault("run_id", run_id or "")
+        # Capability context (agent-invoked tool): the agent's STEP may carry a
+        # `capability` that hands its tools framework-selected values (e.g. a
+        # durable state_dir, a tools_dir for register_tool). Same injection as
+        # the tool-node path so an agent-invoked tool is provisioned identically.
+        if run_id and step_id:
+            try:
+                _cgn = self._get_graph_name(run_id)
+                _cnode = self._get_resolver(_cgn).get_node(step_id)
+                if _cnode is not None:
+                    for _ck, _cv in self._capability_context(_cnode, _cgn).items():
+                        kwargs.setdefault(_ck, _cv)
+            except Exception:
+                pass
         # SF-10: pass step staging/output dirs so read_file (and similar tools)
         # can find files the agent just wrote (in .tmp) or files from previous
         # retries (in the step's final dir). write_* tools write to .tmp; without

@@ -108,6 +108,29 @@ class WorkspaceManager:
         p.mkdir(parents=True, exist_ok=True)
         return p
 
+    def state_dir(self, config_name: str, item: str | None = None) -> Path:
+        """Durable, cross-run state directory for a pipeline CONFIG.
+
+        Unlike per-project/per-run step dirs, this SURVIVES across separate runs
+        of the same config — the sanctioned home for a stateful tool's persisted
+        data (e.g. positions carried day to day, an accumulating memo). It lives
+        beside the workspaces root (``<base_path>/../pipeline_state/<config>``),
+        so a host that mounts its data root gets durability for free. A tool is
+        HANDED this path by the framework (via a capability's context) and writes
+        RELATIVE to it — it never computes its own storage location (least
+        privilege; an app-picked ``Path.home()`` escapes the jail and, in a
+        container, the mount).
+        """
+        root = (self.base_path.parent / "pipeline_state").resolve()
+        p = (root / _sanitize_item(config_name))
+        if item:
+            p = p / _sanitize_item(item)
+        p = p.resolve()
+        if not str(p).startswith(str(root)):
+            raise PermissionError(f"state_dir traversal denied: {config_name}/{item}")
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
     def get_project_brief_dir(self, project_id: str) -> Path:
         p = self.get_project_path(project_id) / "project"
         p.mkdir(parents=True, exist_ok=True)

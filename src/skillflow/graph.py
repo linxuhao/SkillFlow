@@ -114,6 +114,7 @@ class StepNode:
     tool_name: str = ""
     tool_params: dict = field(default_factory=dict)
     agent_config: str = ""
+    capability: str = ""  # v2: framework-provisioned toolset + injected context (host capability registry)
     context: list[dict] = field(default_factory=list)
     output_mode: str = ""
     output_fixed: dict = field(default_factory=dict)
@@ -290,6 +291,7 @@ class PipelineGraph:
                     tool_name=s.get("tool_name", ""),
                     tool_params=s.get("tool_params", {}),
                     agent_config=s.get("agent_config", ""),
+                    capability=s.get("capability", ""),
                     context=s.get("context", []),
                     output_mode=(s.get("output") or {}).get("mode", "") or s.get("output_mode", ""),
                     output_fixed=(s.get("output") or {}).get("fixed", {}),
