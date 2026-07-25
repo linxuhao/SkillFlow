@@ -35,6 +35,24 @@ def test_state_dir_rejects_traversal(tmp_path):
     assert str(ws.state_dir("../../etc").resolve()).startswith(str(root))
 
 
+def test_state_dir_create_false_does_not_provision(tmp_path):
+    """A read-only caller (catalog listing) must be able to resolve the path
+    WITHOUT creating it — a GET that mkdirs makes reads side-effecting and
+    litters the state root with empty dirs for configs that never wrote."""
+    ws = WorkspaceManager(base_path=str(tmp_path / "workspaces"))
+    d = ws.state_dir("gen_never_ran", create=False)
+    assert not d.exists(), "create=False must not provision the directory"
+    # same path as the creating call, so callers agree on location
+    assert d == ws.state_dir("gen_never_ran")
+    assert d.is_dir()          # the default call DID provision it
+
+
+def test_state_dir_create_false_still_jails(tmp_path):
+    ws = WorkspaceManager(base_path=str(tmp_path / "workspaces"))
+    root = (tmp_path / "pipeline_state").resolve()
+    assert ws.state_dir("../../etc", create=False).is_relative_to(root)
+
+
 # -- engine graphs --------------------------------------------------------
 def _end(done="done"):
     return EndConditions(combinator="or", conditions=[

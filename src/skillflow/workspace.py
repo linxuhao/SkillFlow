@@ -108,7 +108,8 @@ class WorkspaceManager:
         p.mkdir(parents=True, exist_ok=True)
         return p
 
-    def state_dir(self, config_name: str, item: str | None = None) -> Path:
+    def state_dir(self, config_name: str, item: str | None = None,
+                  create: bool = True) -> Path:
         """Durable, cross-run state directory for a pipeline CONFIG.
 
         Unlike per-project/per-run step dirs, this SURVIVES across separate runs
@@ -120,15 +121,22 @@ class WorkspaceManager:
         RELATIVE to it — it never computes its own storage location (least
         privilege; an app-picked ``Path.home()`` escapes the jail and, in a
         container, the mount).
+
+        ``create=False`` resolves the path WITHOUT provisioning it — for
+        read-only callers (a catalog listing, an "does this config have state?"
+        check). A plain GET that provisions a directory makes reads
+        side-effecting and litters the state root with empty dirs for configs
+        that never wrote anything.
         """
         root = (self.base_path.parent / "pipeline_state").resolve()
         p = (root / _sanitize_item(config_name))
         if item:
             p = p / _sanitize_item(item)
         p = p.resolve()
-        if not str(p).startswith(str(root)):
+        if not p.is_relative_to(root):
             raise PermissionError(f"state_dir traversal denied: {config_name}/{item}")
-        p.mkdir(parents=True, exist_ok=True)
+        if create:
+            p.mkdir(parents=True, exist_ok=True)
         return p
 
     def get_project_brief_dir(self, project_id: str) -> Path:
