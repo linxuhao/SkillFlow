@@ -59,11 +59,41 @@ def _parse_yaml_issues(exc: Exception, path: str) -> list[LintIssue]:
     return issues
 
 
-def lint_config(path: str | Path) -> list[LintIssue]:
+def _unknown_tool_issues(graph, tool_loader) -> list[LintIssue]:
+    """Every ``tool_name`` in the graph must resolve.
+
+    Structural validation cannot do this — it only sees the YAML — so a graph naming a
+    tool that does not exist lints clean and fails at run time. skillflow owns the tool
+    registry (native and custom), so existence is its question to answer. Whether a
+    given step SHOULD have a given tool is the config author's business and is not
+    checked here.
+    """
+    if tool_loader is None:
+        return []
+    issues = []
+    for node in getattr(graph, "steps", []):
+        name = getattr(node, "tool_name", "")
+        if not name:
+            continue
+        try:
+            tool_loader.load_schema(name)
+        except Exception:
+            issues.append(LintIssue(
+                severity="error",
+                message=f"Step '{node.id}': tool '{name}' is not in the tool registry",
+                suggestion="Check the tool name, or register the tool before linting",
+            ))
+    return issues
+
+
+def lint_config(path: str | Path, tool_loader=None) -> list[LintIssue]:
     """Validate a skillflow YAML file.
 
     Args:
         path: Path to a skillflow pipeline YAML file.
+        tool_loader: Optional ToolLoader. When given, every ``tool_name`` in the
+            graph is resolved against it — structural validation alone cannot tell
+            a real tool from an invented one.
 
     Returns:
         List of LintIssue objects. Empty list means the config is valid.
@@ -91,14 +121,15 @@ def lint_config(path: str | Path) -> list[LintIssue]:
         LintIssue(severity="error", message=msg,
                   suggestion=_suggest(msg))
         for msg in issues
-    ]
+    ] + _unknown_tool_issues(graph, tool_loader)
 
 
-def lint_content(yaml_text: str) -> list[LintIssue]:
+def lint_content(yaml_text: str, tool_loader=None) -> list[LintIssue]:
     """Validate a raw YAML string as a skillflow pipeline config.
 
     Args:
         yaml_text: Raw YAML content.
+        tool_loader: Optional ToolLoader — see :func:`lint_config`.
 
     Returns:
         List of LintIssue objects.
@@ -119,7 +150,7 @@ def lint_content(yaml_text: str) -> list[LintIssue]:
         LintIssue(severity="error", message=msg,
                   suggestion=_suggest(msg))
         for msg in issues
-    ]
+    ] + _unknown_tool_issues(graph, tool_loader)
 
 
 def _suggest(msg: str) -> str:
@@ -152,11 +183,14 @@ def skillflow_lint(**kwargs) -> dict:
     """
     path = kwargs.get("path", "")
     content = kwargs.get("content", "")
+    # A host that passes its live loader gets tool-existence checking too; without one
+    # the lint stays purely structural, exactly as before.
+    tool_loader = kwargs.get("tool_loader")
 
     if path:
-        issues = lint_config(path)
+        issues = lint_config(path, tool_loader=tool_loader)
     elif content:
-        issues = lint_content(content)
+        issues = lint_content(content, tool_loader=tool_loader)
     else:
         return {
             "passed": False,

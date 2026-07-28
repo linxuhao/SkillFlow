@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import calendar
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -122,6 +123,44 @@ class StepRunner(Protocol):
     async def execute(self, step: ClaimedStep) -> StepResult: ...
 
 
+def _describe_tool_failure(tool_result: dict) -> str:
+    """What to put in the maker's feedback banner when a tool gate rejects.
+
+    The banner is the most prominent thing in the retried step's prompt — it is
+    headed "MUST ADDRESS before resubmitting". It used to read, verbatim,
+    "Tool failed" for any tool that reports its outcome WITHOUT an `error` key.
+    `run_tests` is exactly that shape: it returns `{"written": ..., "passed":
+    false}` and puts the pytest output in the report file. So a maker looping back
+    from a failed test gate was told, in the loudest place available, nothing at
+    all — and, worse, was told a TOOL had failed when what had failed was the
+    TESTS. Observed for three consecutive fix rounds before the loop exhausted.
+
+    Prefer `error`; otherwise say which fields the tool did report, and point at
+    the artifact, so the banner sends the agent to the detail instead of competing
+    with it.
+    """
+    if not isinstance(tool_result, dict):
+        return "Tool failed"
+    err = tool_result.get("error")
+    if isinstance(err, str) and err.strip():
+        return err
+    parts = []
+    for key in ("summary", "message", "reason", "detail"):
+        val = tool_result.get(key)
+        if isinstance(val, str) and val.strip():
+            parts.append(val.strip())
+            break
+    written = tool_result.get("written")
+    facts = ", ".join(f"{k}={tool_result[k]!r}" for k in sorted(tool_result)
+                      if k not in ("error", "summary", "message", "reason", "detail")
+                      and not isinstance(tool_result[k], (dict, list)))
+    if facts:
+        parts.append(f"The gate returned {facts}.")
+    if isinstance(written, str) and written.strip():
+        parts.append(f"The full detail is in '{written}' — read it before retrying.")
+    return " ".join(parts) if parts else "Tool failed"
+
+
 class SkillFlow:
     """Transactional graph orchestrator with embedded SQLite."""
 
@@ -150,6 +189,10 @@ class SkillFlow:
         # neither the pipeline author nor the agent picks them (least privilege).
         #   name -> {"tools": [str, ...], "context_provider": callable|None}
         self._capabilities: dict[str, dict] = {}
+        # Tool names that failed to resolve, keyed by who asked for them
+        # ("capability:tool_creation"). The agent-config half lives in
+        # AgentRegistry.unknown_tools(); `unresolved_tools()` merges both.
+        self._unresolved_tools: dict[str, set] = {}
         # run_id -> graph_name is immutable for a run; memoized so the hot paths
         # (notably the per-tool-call capability lookup) skip a locked DB query.
         self._graph_name_cache: dict[str, str] = {}
@@ -511,6 +554,49 @@ class SkillFlow:
             "tools": list(tools or ()),
             "context_provider": context_provider,
         }
+
+    def _resolve_tool_schema(self, name: str, *, owner: str):
+        """Turn a tool NAME into a schema, RECORDING a miss instead of hiding it.
+
+        Every path that resolves a tool name goes through here. That is the point:
+        the same swallow was written twice, in two different places, with the same
+        false comment — "graph validation will catch it". It does not. `graph.validate()`
+        sees only the YAML, so it cannot see an agent config's `tools:` list, and it
+        cannot see a capability's grant at all. A role granted `write_file` registered
+        clean, ran without it, produced nothing and reported success; a capability whose
+        tool is missing grants nothing just as quietly.
+
+        Returns None on a miss rather than raising: hosts legitimately register agents
+        and capabilities before tools, and the record clears itself on the next resolve.
+        """
+        if not self._tool_loader:
+            return None
+        try:
+            schema = self._tool_loader.load_schema(name)
+        except Exception:
+            missing = self._unresolved_tools.setdefault(owner, set())
+            if name not in missing:
+                missing.add(name)
+                logging.getLogger("skillflow").warning(
+                    "%s declares tool %r, which does not resolve — it is silently "
+                    "unavailable to that step", owner, name)
+            return None
+        self._unresolved_tools.get(owner, set()).discard(name)
+        return schema
+
+    def unresolved_tools(self) -> dict[str, list[str]]:
+        """``{owner: [tool names that do not resolve]}`` across EVERY grant path.
+
+        Owners are ``agent_config:<name>`` and ``capability:<name>``. A host can
+        surface this after registration; otherwise a missing tool shows up only as a
+        step that mysteriously produces nothing.
+        """
+        out = {f"agent_config:{k}": v
+               for k, v in self.agent_registry.unknown_tools().items()}
+        for owner, names in self._unresolved_tools.items():
+            if names:
+                out[owner] = sorted(names)
+        return out
 
     def _capability_of(self, node) -> dict | None:
         cap = getattr(node, "capability", "") or ""
@@ -998,20 +1084,35 @@ class SkillFlow:
                 # Never when a row is currently claimed (a concurrent driver
                 # owns it).
                 existing = conn.execute(
-                    "SELECT id, status FROM skillflow_steps WHERE run_id = ? AND step_id = ? "
+                    "SELECT id, status, inputs_json FROM skillflow_steps "
+                    "WHERE run_id = ? AND step_id = ? "
                     "ORDER BY id DESC LIMIT 1",
                     (run_id, run["current_node"]),
                 ).fetchone()
                 if existing is None or existing["status"] in ("completed", "failed"):
                     node = resolver.get_node(run["current_node"])
                     if node:
+                        # Carry `_feedback` onto the fresh instance. A loop-back
+                        # writes it to the instance that just finished (see
+                        # _inject_feedback_in_tx); without this the re-run starts
+                        # from a blank inputs_json and the maker never learns why it
+                        # was sent back. Only `_feedback` — `_validation_error`
+                        # belongs to one instance's own retry cycle, and resurrecting
+                        # it here would report an error the re-run has not made yet.
+                        carried = {}
+                        if existing is not None:
+                            prev = self._deserialize(existing["inputs_json"])
+                            if isinstance(prev, dict) and "_feedback" in prev:
+                                carried["_feedback"] = prev["_feedback"]
                         conn.execute(
                             """
                             INSERT INTO skillflow_steps
-                                (run_id, step_id, step_config_json, max_retries, status, created_at, updated_at)
-                            VALUES (?, ?, ?, ?, 'pending', datetime('now'), datetime('now'))
+                                (run_id, step_id, step_config_json, max_retries, status,
+                                 inputs_json, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, 'pending', ?, datetime('now'), datetime('now'))
                             """,
-                            (run_id, run["current_node"], self._serialize(node.config), node.max_retries),
+                            (run_id, run["current_node"], self._serialize(node.config),
+                             node.max_retries, self._serialize(carried)),
                         )
                         current_version = conn.execute(
                             "SELECT version FROM skillflow_steps WHERE run_id = ? AND step_id = ? AND status = 'pending'",
@@ -1056,10 +1157,18 @@ class SkillFlow:
             error_context = None
             validation_error = None
             feedback = None
+            # Read from the instance JUST CLAIMED, not "some row with this step_id".
+            # A step that runs more than once — every maker in a Green/Red loop after
+            # its first rejection — has several instances, and this query used to have
+            # no ORDER BY or LIMIT, so fetchone() returned the OLDEST one: the very
+            # rows `_handle_validation_failure` and `_inject_feedback_in_tx` write to
+            # are the newest. Observed: a step with validation_retry_count=3 re-ran
+            # four times with a byte-identical prompt, never once told what was wrong,
+            # while a single-instance step in the same run got its feedback fine.
             existing = conn.execute(
-                "SELECT inputs_json FROM skillflow_steps WHERE run_id = ? AND step_id = ?",
-                (run_id, run["current_node"]),
-            ).fetchone()
+                "SELECT inputs_json FROM skillflow_steps WHERE id = ?",
+                (step_row["id"],),
+            ).fetchone() if step_row else None
             if existing:
                 existing_inputs = self._deserialize(existing["inputs_json"])
                 if "_error" in existing_inputs:
@@ -1110,13 +1219,14 @@ class SkillFlow:
             _cap = self._capability_of(node)
             if _cap and _cap.get("tools") and self._tool_loader:
                 tool_schemas = dict(tool_schemas)
+                _cap_name = getattr(node, "capability", "") or "?"
                 for _tn in _cap["tools"]:
                     if _tn in tool_schemas:
                         continue
-                    try:
-                        tool_schemas[_tn] = self._tool_loader.load_schema(_tn)
-                    except Exception:
-                        pass  # missing tool — registry/lint catches it
+                    _schema = self._resolve_tool_schema(
+                        _tn, owner=f"capability:{_cap_name}")
+                    if _schema is not None:
+                        tool_schemas[_tn] = _schema
             inputs_with_tools = dict(inputs)
             if tool_schemas:
                 inputs_with_tools["_tool_schemas"] = tool_schemas
@@ -1474,6 +1584,20 @@ class SkillFlow:
                 files = hook_result.get("files")
                 if isinstance(files, list):
                     detail = f"{len(files)} file(s)"
+                    # A free-form write step that promoted NOTHING is almost always a
+                    # maker that described its files instead of writing them — and it
+                    # used to complete green, hand an empty result downstream, and be
+                    # discovered only by a reviewer whose bounded reject loop then
+                    # burned out. Observed four rounds running, with "0 file(s)" sitting
+                    # right here in the trace the whole time. Surface it as a flag the
+                    # graph CAN route on, and say so in the log.
+                    if node is not None and getattr(node, "output_mode", "") == "write":
+                        result.flags.setdefault("wrote_files", bool(files))
+                        if not files:
+                            logging.getLogger("skillflow").warning(
+                                "step %r (run %s) declares `output.mode: write` but "
+                                "promoted no files — the step will complete with an "
+                                "empty output", token.step_id, token.run_id)
                 elif hook_result.get("committed"):
                     detail = "committed"
                 self._emit_lifecycle_event(token, hook_name, "completed", detail)
@@ -2445,13 +2569,28 @@ class SkillFlow:
 
     def _inject_feedback_in_tx(self, conn, run_id: str, target_step_id: str,
                                feedback: dict) -> None:
-        """Inject feedback into a pending step's inputs for the target."""
+        """Inject feedback into the target step's NEWEST instance.
+
+        This used to require ``status = 'pending'``, which silently dropped the
+        feedback on the case that needs it most: a BACKWARD loop-back (a tool gate
+        routing to a maker that already ran). That maker's instance is `completed`
+        and its next one does not exist yet — the claim path inserts it afterwards —
+        so the UPDATE matched zero rows and the maker re-ran blind. Observed on a
+        pipeline_forge run: seven emit attempts producing three identical gate
+        failures, and not one of the maker's four step instances carrying `_feedback`.
+
+        Targeting the newest instance always hits a row (``create_run`` pre-creates
+        one per step) and pairs with the carry-forward in the claim path, which hands
+        ``_feedback`` to the fresh instance created for the re-run.
+        """
         conn.execute(
             """
             UPDATE skillflow_steps
             SET inputs_json = json_set(inputs_json, '$._feedback', ?),
                 updated_at = datetime('now')
-            WHERE run_id = ? AND step_id = ? AND status = 'pending'
+            WHERE id = (SELECT id FROM skillflow_steps
+                        WHERE run_id = ? AND step_id = ?
+                        ORDER BY id DESC LIMIT 1)
             """,
             (self._serialize(feedback), run_id, target_step_id),
         )
@@ -2950,8 +3089,8 @@ class SkillFlow:
                 self._fail_run_in_tx(conn, run_id, "Cycle limit exceeded")
                 return None
             if _t and _t.feedback and _t.to:
-                error_str = tool_result.get("error", "Tool failed")
-                self._inject_feedback_in_tx(conn, run_id, _t.to, error_str)
+                self._inject_feedback_in_tx(
+                    conn, run_id, _t.to, _describe_tool_failure(tool_result))
             if target:
                 # Count this traversal so max_loop is enforced on a TOOL step's
                 # OUTGOING edge, exactly as advance_run's main path does for
@@ -4410,12 +4549,42 @@ class SkillFlow:
                     exc_info=True)
         # Filter kwargs to only what the function accepts
         import inspect as _inspect
+        sig = None
+        dropped: list[str] = []
         try:
             sig = _inspect.signature(fn)
+            # Only the CALLER's own arguments count as dropped. The engine
+            # setdefault()s workspace_root/project_root/step_id/run_id onto every
+            # call, and most tools declare none of them — counting those would both
+            # blame the agent for arguments it never sent and make the rebinding
+            # below (which needs exactly one unrecognised name) never fire.
+            dropped = [k for k in (params or {}) if k not in sig.parameters]
             kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
         except (ValueError, TypeError):
             pass
-        result = fn(**kwargs)
+        if sig is not None:
+            kwargs, dropped = _rebind_unambiguous_param(sig, kwargs, dropped, params or {})
+        try:
+            result = fn(**kwargs)
+        except Exception as e:
+            # A tool that RETURNS {"error": ...} is fed back to the agent and is
+            # survivable; a tool that RAISES used to propagate all the way to a
+            # failed run. So an agent that mistyped one argument name could not
+            # recover from its own typo — the typo never came back to it. Observed:
+            # `read_file() missing 1 required positional argument: 'path'` killed a
+            # whole test-drive. Turn it into a tool result the ReAct loop can act on,
+            # and name the real parameters so the next turn gets them right.
+            msg = f"{name}() failed: {type(e).__name__}: {e}"
+            if sig is not None:
+                expected = ", ".join(
+                    p for p in sig.parameters
+                    if p not in ("workspace_root", "project_root", "step_id", "run_id",
+                                 "kwargs", "args"))
+                msg += f". Accepted parameters: {expected}"
+            if dropped:
+                msg += (f". These arguments were not recognised and were ignored: "
+                        f"{', '.join(sorted(dropped))}")
+            return {"error": msg}
         return result if isinstance(result, dict) else {"output": result}
 
     def _read_edge_counts(self, conn: sqlite3.Connection, run_id: str) -> dict[tuple[str, str], int]:
@@ -4521,6 +4690,36 @@ class SkillFlow:
             {"run_id": run_id, "reason": reason},
             run_id=run_id,
         )
+
+
+def _rebind_unambiguous_param(sig, kwargs: dict, dropped: list,
+                              original: dict) -> tuple[dict, list]:
+    """Bind a single unrecognised argument to a single missing required one.
+
+    The registry names "the file to operate on" six different ways — `path`
+    (read_file, forge_lint, list_tree), `file` (write, pytest), `files`, `filename`,
+    `file_path`, `graph_path`. The two most-used tools disagree, so an agent that
+    just called `write(file=…)` and then reads the file back with
+    `read_file(file=…)` is following the most recent example it saw. The signature
+    filter then DROPS `file` and the call fails on a missing `path` — the filter
+    turns a recoverable "unexpected keyword" into a hard "missing argument".
+
+    When exactly one argument was dropped and exactly one required parameter is
+    unfilled, the intended mapping is not a guess: there is only one of each. Bind
+    them. With more than one on either side it IS a guess, so leave it alone and let
+    the caller report the accepted parameter names instead.
+    """
+    if len(dropped) != 1:
+        return kwargs, dropped
+    import inspect as _inspect
+    missing = [n for n, p in sig.parameters.items()
+               if p.default is _inspect.Parameter.empty
+               and p.kind in (_inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                              _inspect.Parameter.KEYWORD_ONLY)
+               and n not in kwargs]
+    if len(missing) != 1:
+        return kwargs, dropped
+    return {**kwargs, missing[0]: original[dropped[0]]}, []
 
 
 def _flags_match(match: dict, flags: dict) -> bool:

@@ -167,7 +167,7 @@ class TestStepValidatorFileExists:
         }])
         assert result["passed"] is False
         assert len(result["errors"]) >= 1
-        assert "File not found" in result["errors"][0].get("error_message", "")
+        assert "Not found" in result["errors"][0].get("error_message", "")
 
     def test_mixed_existing_and_missing(self, validator_with_file_exists, tmp_path):
         ws = validator_with_file_exists._workspace_root

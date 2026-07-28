@@ -17,8 +17,11 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger("skillflow.agent_registry")
 
 
 @dataclass
@@ -36,6 +39,8 @@ class AgentConfig:
     config: dict[str, Any] = field(default_factory=dict)
     # Resolved tool schemas (populated when tool_loader is available)
     tool_schemas: dict[str, dict] = field(default_factory=dict)
+    # Declared tools that did not resolve — silently unavailable to this agent.
+    unknown_tools: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -112,13 +117,43 @@ class AgentRegistry:
         For each tool name in each agent config, loads the tool
         schema from the ToolLoader and caches it in tool_schemas.
         """
-        for cfg in self._configs.values():
+        for name, cfg in self._configs.items():
             cfg.tool_schemas = {}
+            missing: list[str] = []
             for tool_name in cfg.tools:
                 try:
                     cfg.tool_schemas[tool_name] = tool_loader.load_schema(tool_name)
                 except ImportError:
-                    pass  # tool not found — graph validation will catch
+                    # `load_schema` IS the existence check, and this used to discard
+                    # the answer on the claim that "graph validation will catch" it.
+                    # It does not: graph.validate() sees only the YAML, and an agent's
+                    # tool list is not in the graph. A role granted `write_file` /
+                    # `create_file` / `edit_file` therefore registered clean, ran
+                    # without them, produced nothing, and still reported success.
+                    # Record instead of swallow. Do NOT raise: this method re-resolves
+                    # EVERY config on each register_agent_config* call, so a host that
+                    # registers agents before tools would otherwise break — the list
+                    # simply clears itself once the tool appears.
+                    missing.append(tool_name)
+            # Warn only when the picture CHANGES for this config. This method
+            # re-resolves every registered config on every register_agent_config*
+            # call, so an unconditional warning is quadratic: registering 10 roles
+            # of which 5 are bad emitted ~90 identical lines and buried the run log.
+            if missing and missing != cfg.unknown_tools:
+                logger.warning(
+                    "agent config %r declares tools that do not resolve: %s — "
+                    "they are silently unavailable to that agent", name, missing)
+            cfg.unknown_tools = missing
+
+    def unknown_tools(self) -> dict[str, list[str]]:
+        """``{agent_config: [tool names that do not resolve]}``.
+
+        Populated by ``resolve_tool_schemas``. A host can surface this after
+        registration — the tools are silently unavailable to those agents, which
+        otherwise shows up only as an agent that mysteriously produces nothing.
+        """
+        return {name: list(cfg.unknown_tools)
+                for name, cfg in self._configs.items() if cfg.unknown_tools}
 
     # ── Serialization ─────────────────────────────────────────
 
