@@ -209,6 +209,19 @@ transitions:
 
 This powers both **inner review loops** (e.g. `review → implement`, `max_loop: 3`) and **goal loops** (a final verifier routing back to planning until goals are met). See `tests/fixtures/review_loop.yaml` and `tests/fixtures/dpe_full.yaml`.
 
+### Why a run died there
+
+Exhausting a `max_loop` is a legitimate terminal — a review loop that never converges is *supposed* to stop. But the failure is a routing decision, and a routing decision reports the edge (`Cycle limit exceeded`, `No matching transition from 'X' with flags {...}`) while the reason sits in the file the edges route on. So when a run ends on an exhausted or unmatched transition, skillflow re-reads the `from_file` targets of that node's transitions and inserts the first human-readable field it finds — `feedback`, `error`, `errors`, `reason`, `violations`, `summary`, `message`, `detail` — into the run's `error_reason`, ahead of the edge detail:
+
+```
+Cycle limit exceeded — continuity_report.json violations: 字数超限: 5662 字（上限 4500） (edges: All
+transitions from 'continuity_check' are exhausted: 'continuity_check' -> 'chapter_writer' (max_loop=3 reached))
+```
+
+The reason comes first because hosts truncate this string for status displays. A field whose JSON value is `null` is skipped, not printed as `"None"` — `{"passed": false, "error": null, "violations": [...]}` reports the violations. Bounded (at most 3 files, 300 characters, one line) and never fatal: an unreadable or unparseable routing file just leaves the message as it was. Applies to agent, tool, and gate nodes.
+
+A gate resolves `from_file` edges against the last completed step's output — including when a tick finds the run already parked on the gate (after a restart, say). Before 1.5.30 that second path passed no reader, so the same gate routed one way mid-tick and dead-ended on `no matching transition` when it was reached pre-resolved.
+
 ## Context Injection
 
 ```yaml

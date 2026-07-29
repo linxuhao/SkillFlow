@@ -40,6 +40,11 @@ SkillFlow (orchestrator)  ← SQLite (WAL mode)
   ├── advance_run()      → resolve gates, auto-execute tools
   │   ├── recover_stale_claims() (built-in)
   │   └── feedback loopback (inject tool error into step inputs)
+  ├── _routing_reason_suffix() → on a terminal routing failure (cycle limit /
+  │     no matching transition, agent+tool+gate, incl. the pre-resolved gate
+  │     path), re-read the edges' from_file targets and put their human-readable
+  │     field in error_reason BEFORE the edge detail (hosts truncate for status
+  │     chips). null fields skipped. Bounded (3 files / 300 chars), never raises.
   ├── reject_checkpoint() → reset to pending
   └── drain_outbox()     → event stream
 

@@ -161,6 +161,80 @@ def _describe_tool_failure(tool_result: dict) -> str:
     return " ".join(parts) if parts else "Tool failed"
 
 
+_ROUTING_REASON_FIELDS = ("feedback", "error", "errors", "reason",
+                          "violations", "summary", "message", "detail")
+_ROUTING_REASON_MAX_FILES = 3
+_ROUTING_REASON_MAX_CHARS = 300
+
+
+def _readable_reason_value(value) -> str:
+    """Flatten a JSON value into one line a human can read."""
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, (list, tuple)):
+        text = "; ".join(_readable_reason_value(v) for v in value
+                         if v not in (None, "", [], {}))
+    elif isinstance(value, dict):
+        text = "; ".join(f"{k}: {_readable_reason_value(v)}"
+                         for k, v in value.items())
+    else:
+        text = str(value)
+    return " ".join(text.split())
+
+
+def _routing_reason(node, file_reader) -> str:
+    """Why the edges did not route, read out of the files they route ON.
+
+    A run that dies on an exhausted `max_loop` or an unmatched transition
+    reports the EDGE ("Cycle limit exceeded") while the REASON is sitting in
+    the very file the matcher just read — `match: {from_file:
+    continuity_report.json, field: passed}` failed because that file says
+    `{"passed": false, "violations": ["字数超限: 5662 字（上限 4500）"]}`. The
+    engine had the fact and discarded it; the user saw only the edge.
+
+    Re-read the `from_file` targets of this node's transitions and pull out
+    the first human-readable field. Bounded (at most 3 files, truncated) and
+    total: a diagnostic must never turn a clean failure into a crash.
+    """
+    if node is None or file_reader is None:
+        return ""
+    try:
+        from skillflow.graph import _parse_json_extract_last
+        paths: list[str] = []
+        for t in getattr(node, "transitions", None) or []:
+            path = (t.match or {}).get("from_file")
+            if path and path not in paths:
+                paths.append(path)
+        parts: list[str] = []
+        for path in paths[:_ROUTING_REASON_MAX_FILES]:
+            try:
+                data = _parse_json_extract_last(file_reader(path))
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            for field in _ROUTING_REASON_FIELDS:
+                value = data.get(field)
+                if value is None:
+                    # JSON `null` is how a checker says "no error" — rendering it
+                    # would print the literal "None" AND stop the search, hiding
+                    # the `violations` two keys down. That is this very defect in
+                    # miniature: {"passed": false, "error": null, "violations": [...]}.
+                    continue
+                text = _readable_reason_value(value)
+                if text:
+                    parts.append(f"{path} {field}: {text}")
+                    break
+        if not parts:
+            return ""
+        detail = " | ".join(parts)
+        if len(detail) > _ROUTING_REASON_MAX_CHARS:
+            detail = detail[:_ROUTING_REASON_MAX_CHARS - 1] + "…"
+        return detail
+    except Exception:
+        return ""
+
+
 class SkillFlow:
     """Transactional graph orchestrator with embedded SQLite."""
 
@@ -1639,7 +1713,16 @@ class SkillFlow:
                     conn, token.run_id, token.step_id, result.flags, resolver
                 )
             except CycleLimitExceeded as e:
-                self._fail_run_in_tx(conn, token.run_id, f"Cycle limit exceeded: {e}")
+                # Reason FIRST, exhausted edges after: hosts truncate this
+                # string for status chips (the one that prompted this change
+                # cuts at 160), and the edge list alone runs ~150 chars on real
+                # step ids — a reason appended after it is out of sight again.
+                self._fail_run_in_tx(
+                    conn, token.run_id,
+                    "Cycle limit exceeded"
+                    + self._routing_reason_suffix(
+                        conn, token.run_id, token.step_id, resolver)
+                    + f" (edges: {e})")
                 # Step completed but the run is now failed — still emit the
                 # step_completed event so the host sees the terminal state.
                 self.notifications.publish_sync(
@@ -3037,6 +3120,33 @@ class SkillFlow:
             )
         return None
 
+    def _routing_reason_suffix(self, conn, run_id: str, step_id: str,
+                               resolver, file_reader=None) -> str:
+        """Suffix for a terminal routing failure: the reason, not just the edge.
+
+        Appended to "Cycle limit exceeded" / "No matching transition …" so the
+        error_reason carries what the routing file says instead of leaving it
+        in the workspace for nobody to find. Returns "" when there is nothing
+        to add, and never raises.
+        """
+        try:
+            node = resolver.get_node(step_id)
+            if node is None:
+                return ""
+            if file_reader is None:
+                run = conn.execute(
+                    "SELECT project_id, graph_name FROM skillflow_runs WHERE id = ?",
+                    (run_id,),
+                ).fetchone()
+                if not run:
+                    return ""
+                file_reader = self._make_file_reader(
+                    run["project_id"], run["graph_name"], step_id, run_id=run_id)
+            detail = _routing_reason(node, file_reader)
+            return f" — {detail}" if detail else ""
+        except Exception:
+            return ""
+
     def _make_file_reader(self, project_id: str, graph_name: str,
                           step_id: str, run_id: str = "") -> callable | None:
         """Return a callable for resolving from_file match conditions.
@@ -3086,7 +3196,11 @@ class SkillFlow:
                 _t, target = resolver.resolve_transition(
                     step_id, step_flags, edge_counts, file_reader=fr)
             except CycleLimitExceeded:
-                self._fail_run_in_tx(conn, run_id, "Cycle limit exceeded")
+                self._fail_run_in_tx(
+                    conn, run_id,
+                    "Cycle limit exceeded"
+                    + self._routing_reason_suffix(
+                        conn, run_id, step_id, resolver, file_reader=fr))
                 return None
             if _t and _t.feedback and _t.to:
                 self._inject_feedback_in_tx(
@@ -3172,6 +3286,8 @@ class SkillFlow:
                 conn, run_id,
                 f"No matching transition from '{step_id}'"
                 f" with flags {step_flags}"
+                + self._routing_reason_suffix(
+                    conn, run_id, step_id, resolver, file_reader=fr)
             )
             return None
 
@@ -3399,20 +3515,41 @@ class SkillFlow:
                     flags: dict = {}
                     for row in all_rows:
                         flags.update(self._deserialize(row["result_flags_json"]))
+                    # A gate reached on THIS path used to resolve with no
+                    # file_reader, so a `from_file` edge could never match here
+                    # — the same gate routed one way through advance_run's main
+                    # loop and dead-ended when a tick found it pre-resolved.
+                    # Read against the last completed step, exactly as the main
+                    # loop does.
+                    gate_last = conn.execute(
+                        "SELECT step_id FROM skillflow_steps WHERE run_id = ?"
+                        " AND status = 'completed'"
+                        " ORDER BY completion_seq DESC, id DESC LIMIT 1",
+                        (run_id,),
+                    ).fetchone()
+                    gfr = self._make_file_reader(
+                        run["project_id"], run["graph_name"],
+                        gate_last["step_id"] if gate_last else "", run_id=run_id)
                     while resolver.is_gate(current) and gate_depth < 1000:
                         gate_depth += 1
                         # SF-23 (gate pre-resolved): Use resolve_transition so
                         # we can distinguish "no match" from "terminal (to: null)".
                         try:
                             gt, gtarget = resolver.resolve_transition(
-                                current, flags, edge_counts)
+                                current, flags, edge_counts, file_reader=gfr)
                         except CycleLimitExceeded:
-                            self._fail_run_in_tx(conn, run_id,
-                                                 f"Gate '{current}': cycle limit exceeded")
+                            self._fail_run_in_tx(
+                                conn, run_id,
+                                f"Gate '{current}': cycle limit exceeded"
+                                + self._routing_reason_suffix(
+                                    conn, run_id, current, resolver, file_reader=gfr))
                             return None
                         if gt is None:
-                            self._fail_run_in_tx(conn, run_id,
-                                                 f"Gate '{current}': no matching transition")
+                            self._fail_run_in_tx(
+                                conn, run_id,
+                                f"Gate '{current}': no matching transition"
+                                + self._routing_reason_suffix(
+                                    conn, run_id, current, resolver, file_reader=gfr))
                             return None
                         if gtarget is None:
                             # Terminal transition (to: null) — pipeline ends
@@ -3543,7 +3680,12 @@ class SkillFlow:
                         last["step_id"], flags, edge_counts, file_reader=fr
                     )
                 except CycleLimitExceeded:
-                    self._fail_run_in_tx(conn, run_id, "Cycle limit exceeded")
+                    self._fail_run_in_tx(
+                        conn, run_id,
+                        "Cycle limit exceeded"
+                        + self._routing_reason_suffix(
+                            conn, run_id, last["step_id"], resolver,
+                            file_reader=fr))
                     return None
                 if first_target is None:
                     last_node = resolver.get_node(last["step_id"])
@@ -3586,6 +3728,9 @@ class SkillFlow:
                         self._fail_run_in_tx(
                             conn, run_id,
                             f"No matching transition from '{last['step_id']}' with flags {flags}"
+                            + self._routing_reason_suffix(
+                                conn, run_id, last["step_id"], resolver,
+                                file_reader=fr)
                         )
                         return None
                     # Fall through — first_target set from checkpoint transition
@@ -3655,12 +3800,18 @@ class SkillFlow:
                             next_node, last_flags_for_gate, edge_counts,
                             file_reader=fr)
                     except CycleLimitExceeded:
-                        self._fail_run_in_tx(conn, run_id,
-                                             f"Gate '{next_node}': cycle limit exceeded")
+                        self._fail_run_in_tx(
+                            conn, run_id,
+                            f"Gate '{next_node}': cycle limit exceeded"
+                            + self._routing_reason_suffix(
+                                conn, run_id, next_node, resolver, file_reader=fr))
                         return None
                     if gt is None:
-                        self._fail_run_in_tx(conn, run_id,
-                                             f"Gate '{next_node}': no matching transition")
+                        self._fail_run_in_tx(
+                            conn, run_id,
+                            f"Gate '{next_node}': no matching transition"
+                            + self._routing_reason_suffix(
+                                conn, run_id, next_node, resolver, file_reader=fr))
                         return None
                     if gtarget is None:
                         # Terminal transition (to: null) — gate matched, pipeline ends
