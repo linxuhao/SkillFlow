@@ -1612,8 +1612,13 @@ class SkillFlow:
                 error_msg = "Validation failed:\n" + "\n".join(
                     e.get("error", str(e)) for e in errors
                 )
-                self._handle_validation_failure(token, error_msg)
-                return
+                if not self._handle_validation_failure(
+                        token, error_msg, promote_on_exhaustion=True):
+                    return
+                # Budget exhausted. Fall THROUGH to the lifecycle hooks so the
+                # staged output is promoted, carrying a flag the graph can route
+                # on — see _handle_validation_failure for why.
+                result.flags["validation_failed"] = True
 
         # ── Lifecycle hooks ──────────────────────────────────────────
         if node and self._workspace:
@@ -1774,13 +1779,43 @@ class SkillFlow:
                    {"flags": result.flags, "next_node": next_node},
                    step_id=token.step_id, step_instance_id=token.step_instance_id)
 
-    def _handle_validation_failure(self, token: ClaimToken, error: str) -> None:
+    def _handle_validation_failure(self, token: ClaimToken, error: str,
+                                   *, promote_on_exhaustion: bool = False) -> bool:
+        """Retry the step on a validation failure; decide what the LAST one means.
+
+        Returns True only when the retry budget is spent AND the caller asked for
+        ``promote_on_exhaustion`` — the caller must then let the step complete
+        (lifecycle hooks promote ``{step}.tmp/``) with ``validation_failed: true``
+        in its result flags. Every earlier attempt behaves exactly as before:
+        status back to 'pending' with ``_validation_error`` in the inputs.
+
+        Exhaustion used to be a permanent failure, which threw away everything the
+        step had staged — the tmp dir is never promoted, so a hundred correct files
+        die with the one file a validator objected to. Measured: a task card that
+        required reproducing a test suite VERBATIM, fixtures with deliberate syntax
+        errors included, made ``tool: lint`` unsatisfiable by construction — 16
+        attempts over 4 step instances, 145 minutes, 74 correct files written and
+        zero bytes delivered. Feeding the error back cannot help when the task
+        requires the file the linter hates.
+
+        So the engine stops making that call alone: it keeps the work, records the
+        failure (flag + trace + notification + ``last_error``), and lets the graph
+        decide. A reviewer with the task in hand can tell a defect from a required
+        fixture; a linter cannot. Nothing is swallowed — a graph that wants the old
+        hard stop matches the flag (``match: {validation_failed: true}`` to a repair
+        step, or an ``end_conditions`` ``flag_match`` to fail the run).
+
+        ``output_schema`` failures do NOT promote (caller passes the default): those
+        are malformed step OUTPUTS, which downstream context resolution reads
+        directly — there is no reviewer in between to judge them.
+        """
         self.trace(token.run_id, "step", "validation_failed", {"error": error},
                    step_id=token.step_id, step_instance_id=token.step_instance_id)
         resolver = self._get_resolver_for_run(token.run_id)
         node = resolver.get_node(token.step_id)
         if not node:
-            return
+            return False
+        promoting = False
         with self._tx() as conn:
             row = conn.execute(
                 "SELECT retry_count, validation_retry_count, max_retries FROM skillflow_steps WHERE id = ?",
@@ -1811,9 +1846,45 @@ class SkillFlow:
                     },
                     step_id=token.step_id, run_id=token.run_id,
                 )
+            elif promote_on_exhaustion:
+                # Keep the work, record the failure. No version bump — confirm_step
+                # is about to complete this same row with the token's version.
+                promoting = True
+                conn.execute(
+                    """
+                    UPDATE skillflow_steps
+                    SET last_error = ?, updated_at = datetime('now')
+                    WHERE id = ?
+                    """,
+                    (f"Output validation failed after {total_retries} retries "
+                     f"(output promoted, flagged): {error}",
+                     token.step_instance_id),
+                )
+                self.notifications.publish_sync(
+                    "step_validation_exhausted",
+                    {
+                        "run_id": token.run_id, "step_id": token.step_id,
+                        "error": error, "retry_count": total_retries,
+                        "max_retries": max_allowed, "promoted": True,
+                    },
+                    step_id=token.step_id, run_id=token.run_id,
+                )
             else:
                 # Retry budget exhausted — permanent failure
                 self._fail_step_in_tx(conn, token, f"Output validation failed: {error}", retryable=False)
+
+        if promoting:
+            # Trace AFTER the tx — self.trace commits on the same connection.
+            self.trace(token.run_id, "step", "validation_exhausted",
+                       {"error": error, "retry_count": total_retries,
+                        "promoted": True, "flags": {"validation_failed": True}},
+                       step_id=token.step_id, step_instance_id=token.step_instance_id)
+            logging.getLogger("skillflow").warning(
+                "step %r (run %s) still fails validation after %d retries — promoting "
+                "its output with flag validation_failed=true instead of discarding it; "
+                "route on that flag if this step must not proceed unchecked. %s",
+                token.step_id, token.run_id, total_retries, error)
+        return promoting
 
     def _validate_outputs(self, token: ClaimToken, node: StepNode) -> dict:
         """Run graph validation specs against draft outputs. Returns {passed, errors}."""

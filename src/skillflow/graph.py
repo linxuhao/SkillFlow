@@ -95,6 +95,11 @@ class StepNode:
         output_mode: ``"content"`` (constrained write) or ``"write"`` (free).
         output_fixed: Fixed output filename mapping (content mode).
         validation: List of validation specs (files + tool + params).
+                    A spec that still fails once the retry budget is spent does
+                    NOT kill the step: its output is promoted and the result
+                    carries ``validation_failed: true``, so a transition
+                    (``match: {validation_failed: true}``) or an ``end_conditions``
+                    ``flag_match`` decides what an unsatisfied validator means here.
     """
 
     id: str
