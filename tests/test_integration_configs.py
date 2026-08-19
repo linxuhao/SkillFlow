@@ -985,7 +985,12 @@ def test_dpe_full_task_loop_with_tasks(sf_with_workspace):
                        extra_files={"review_verdict.json": verdict_json(True)})
     sf.advance_run(run_id)  # → t_impl
 
-    _execute(sf, run_id, "t_impl")
+    # The implementer must actually write something: a t_impl that promotes
+    # nothing has nothing for its on_deliver repo_apply to deliver, and is now
+    # re-asked instead of advancing to a reviewer with nothing to review.
+    claimed = sf.claim_next_step(run_id)
+    assert claimed.step_id == "t_impl"
+    _confirm_with_file(sf, claimed, extra_files={"main.py": "x = 1\n"})
 
     sf.advance_run(run_id)
     claimed = sf.claim_next_step(run_id)

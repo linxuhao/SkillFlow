@@ -1623,7 +1623,32 @@ class SkillFlow:
         # ── Lifecycle hooks ──────────────────────────────────────────
         if node and self._workspace:
             lifecycle = self._resolve_lifecycle(node)
+            promoted = None   # what after_validate promoted; None = it didn't say
             for hook_name, hook_spec in lifecycle.items():
+                # Nothing was promoted → there is nothing to deliver, and running
+                # the deliver hooks on it is worse than not running them at all.
+                # Live, NL2Repo task `funcy`: a t_impl agent answered in 92 tokens
+                # and wrote no file, so `_step_commit` promoted nothing (it never
+                # even created {step}/{item}/) and `repo_apply` then failed on
+                # "Source dir not found" — retrying a TOOL for output only the
+                # AGENT could write — after which the step hard-failed into the
+                # graph's `_error` edge and landed an empty implementation on a
+                # reviewer with nothing to review. Re-ask the agent instead, on the
+                # step's own (shared) retry budget, exactly as a failed validator
+                # does. It also stops a re-run that wrote nothing from delivering
+                # the PREVIOUS attempt's step dir, which _step_commit leaves in
+                # place when it promotes nothing.
+                if hook_name == "on_deliver" and promoted == []:
+                    error = ("Nothing to deliver: the step promoted no files, so "
+                             "its on_deliver hooks were skipped. Write the files "
+                             "this step is required to produce.")
+                    self._emit_lifecycle_event(token, hook_name, "skipped", error)
+                    logging.getLogger("skillflow").warning(
+                        "step %r (run %s) promoted no files — on_deliver skipped, "
+                        "re-asking the step instead of delivering nothing",
+                        token.step_id, token.run_id)
+                    self._handle_validation_failure(token, error)
+                    return
                 hook_result = self._execute_lifecycle_hook(
                     token, node, hook_name, hook_spec
                 )
@@ -1663,6 +1688,8 @@ class SkillFlow:
                 files = hook_result.get("files")
                 if isinstance(files, list):
                     detail = f"{len(files)} file(s)"
+                    if hook_name == "after_validate":
+                        promoted = files
                     # A free-form write step that promoted NOTHING is almost always a
                     # maker that described its files instead of writing them — and it
                     # used to complete green, hand an empty result downstream, and be
@@ -1672,7 +1699,10 @@ class SkillFlow:
                     # graph CAN route on, and say so in the log.
                     if node is not None and getattr(node, "output_mode", "") == "write":
                         result.flags.setdefault("wrote_files", bool(files))
-                        if not files:
+                        # …unless the step also DELIVERS: an empty delivery is
+                        # re-asked above, so the step does not complete at all and
+                        # this line would be a lie about what happens next.
+                        if not files and "on_deliver" not in lifecycle:
                             logging.getLogger("skillflow").warning(
                                 "step %r (run %s) declares `output.mode: write` but "
                                 "promoted no files — the step will complete with an "
@@ -2362,6 +2392,19 @@ class SkillFlow:
         with self._tx() as conn:
             self._fail_step_in_tx(conn, token,
                 f"Lifecycle hook failed: {error}", retryable=False)
+        # The step-level failure itself left NO mark on the durable trace (no
+        # failure path traces; outbox rows are drained + deleted), so a run read
+        # as "hook failed … next step claimed" — the step silently never
+        # completing, and the `_error` edge it took, both invisible. Traced AFTER
+        # the tx: self.trace commits on the same connection.
+        try:
+            routed_to = self._get_resolver_for_run(
+                token.run_id).find_error_transition(token.step_id)
+        except Exception:
+            routed_to = None
+        self.trace(token.run_id, "step", "failed",
+                   {"error": error, "routed_to": routed_to},
+                   step_id=token.step_id, step_instance_id=token.step_instance_id)
 
     def _emit_lifecycle_event(self, token: ClaimToken, hook_name: str,
                                status: str, detail: str = ""):
