@@ -235,6 +235,56 @@ def _routing_reason(node, file_reader) -> str:
         return ""
 
 
+def _flatten_loop_items(items) -> list:
+    """Flatten a loop's item manifest to a flat list of names, at ANY depth.
+
+    The manifest's usual shape carries one level of nesting — `execution_order`
+    is a list of parallel waves — and the old flatten unwrapped exactly one
+    level. An LLM-authored manifest wrapped every wave once more
+    (``[[["a", "b"]], [["c"]]]``): one unwrap left lists in place and the
+    `set(items)` in `_resolve_loop` raised `TypeError: unhashable type: 'list'`
+    on every scheduler tick, wedging the worker for hours. Depth is not
+    something to assume, so descend until only leaves remain. Recursion is
+    bounded by json.loads, which is itself recursive and rejects anything
+    deeper than it can parse.
+
+    Order and duplicates are preserved exactly (depth-first, left to right), so
+    a manifest that iterates correctly today yields an identical sequence.
+    A non-string leaf (number, dict, null) is COERCED to text, never dropped:
+    items name directories, dropping one would silently run less work than the
+    manifest declares, and raising would re-create the very crash loop this
+    replaces. The coerced name then fails in that one body step, per item,
+    where it is visible and retryable.
+    """
+    flat: list = []
+    seen: set[int] = set()   # ids on the CURRENT path — a self-referential list
+                             # (never from JSON, but callers vary) stops here
+
+    def _walk(value) -> None:
+        if isinstance(value, list):
+            if id(value) in seen:
+                return
+            seen.add(id(value))
+            for entry in value:
+                _walk(entry)
+            seen.discard(id(value))
+            return
+        if isinstance(value, str):
+            flat.append(value)
+            return
+        try:
+            text = json.dumps(value, sort_keys=True, ensure_ascii=False)
+        except (TypeError, ValueError):
+            text = str(value)
+        logging.getLogger("skillflow").warning(
+            "loop manifest item %r is not a string; iterating it as %r",
+            value, text)
+        flat.append(text)
+
+    _walk(items)
+    return flat
+
+
 class SkillFlow:
     """Transactional graph orchestrator with embedded SQLite."""
 
@@ -2832,15 +2882,8 @@ class SkillFlow:
                 items = []
         except Exception:
             items = []
-        # Flatten if items are lists (e.g. execution_order is list of lists)
-        if items and isinstance(items[0], list):
-            flat: list = []
-            for group in items:
-                if isinstance(group, list):
-                    flat.extend(group)
-                else:
-                    flat.append(group)
-            items = flat
+        # Flatten at any depth (e.g. execution_order is a list of lists)
+        items = _flatten_loop_items(items)
         return items, False
 
     def _loop_body_nodes(self, resolver, loop_step_id) -> set[str]:
@@ -3034,7 +3077,10 @@ class SkillFlow:
         ).fetchone()
 
         if missing and row:
-            items = self._deserialize(row["items_json"]) if row["items_json"] else []
+            # Flattened on the way out too: a cache written by a pre-1.5.33
+            # engine can still hold the nested shape that crashed `set(items)`.
+            items = (_flatten_loop_items(self._deserialize(row["items_json"]))
+                     if row["items_json"] else [])
 
         def _route_done():
             conn.execute(
@@ -3080,7 +3126,8 @@ class SkillFlow:
         # wipe-the-whole-dir GC).
         if row is not None and self._workspace and row["items_json"]:
             try:
-                _old = set(self._deserialize(row["items_json"]) or [])
+                _old = set(_flatten_loop_items(
+                    self._deserialize(row["items_json"]) or []))
             except Exception:
                 _old = set()
             if _old and _old - set(items):
