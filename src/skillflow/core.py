@@ -1351,6 +1351,19 @@ class SkillFlow:
                         _tn, owner=f"capability:{_cap_name}")
                     if _schema is not None:
                         tool_schemas[_tn] = _schema
+            # Addon toolset: compose's `add_tools` op parks extra tool names in
+            # the step's opaque config. Merge them exactly like a capability
+            # grant — copy first, or the grant leaks into every other step that
+            # shares this role.
+            _extra = node.config.get("extra_tools") if isinstance(node.config, dict) else None
+            if _extra and self._tool_loader:
+                tool_schemas = dict(tool_schemas)
+                for _tn in _extra:
+                    if _tn in tool_schemas:
+                        continue
+                    _schema = self._resolve_tool_schema(_tn, owner="addon:add_tools")
+                    if _schema is not None:
+                        tool_schemas[_tn] = _schema
             inputs_with_tools = dict(inputs)
             if tool_schemas:
                 inputs_with_tools["_tool_schemas"] = tool_schemas
@@ -4833,7 +4846,14 @@ class SkillFlow:
         # can find files the agent just wrote (in .tmp) or files from previous
         # retries (in the step's final dir). write_* tools write to .tmp; without
         # these fallback paths the agent can't verify its own output within a step.
-        if name in ("read_file", "list_tree"):
+        #
+        # Offered to EVERY tool, not a name allowlist: kwargs are signature-
+        # filtered below, so a tool that doesn't declare these is unaffected, and
+        # a tool that PRODUCES a file needs the staging dir just as much as one
+        # that reads it. Writing an artefact straight into the working tree
+        # instead looks like it worked and is then deleted by the step's delivery
+        # reconciliation as "a file this step did not deliver".
+        if True:
             try:
                 if run_id and step_id and self._workspace:
                     pid = self._get_project_id(run_id)

@@ -127,6 +127,49 @@ def test_add_template_is_idempotent_and_stacks():
     assert by_id["b"]["config"]["extra_templates"] == ["a.md", "b.md"]
 
 
+def test_add_tools_grants_tools_to_step_config():
+    ov = {"name": "h", "overlay": [
+        {"add_tools": "@post_b", "tools": ["gen_image_asset", "gen_audio_asset"]},
+    ]}
+    by_id = {s["id"]: s for s in compose_graph(_base(), [ov])["steps"]}
+    assert by_id["b"]["config"]["extra_tools"] == ["gen_image_asset", "gen_audio_asset"]
+
+
+def test_add_tools_is_idempotent_and_stacks():
+    ov = {"name": "h", "overlay": [
+        {"add_tools": "b", "tools": ["a"]},
+        {"add_tools": "b", "tools": ["a", "c"]},
+    ]}
+    by_id = {s["id"]: s for s in compose_graph(_base(), [ov])["steps"]}
+    assert by_id["b"]["config"]["extra_tools"] == ["a", "c"]
+
+
+def test_add_tools_rejects_unknown_target():
+    ov = {"name": "h", "overlay": [{"add_tools": "nope", "tools": ["a"]}]}
+    with pytest.raises(ComposeError, match="add_tools target"):
+        compose_graph(_base(), [ov])
+
+
+def test_add_tools_rejects_non_list_tools():
+    # A bare string is the easy mistake, and it would silently grant one tool per
+    # CHARACTER if it were merely iterated.
+    ov = {"name": "h", "overlay": [{"add_tools": "b", "tools": "gen_image_asset"}]}
+    with pytest.raises(ComposeError, match="list of tool names"):
+        compose_graph(_base(), [ov])
+
+
+def test_add_tools_coexists_with_add_template_on_one_step():
+    # The pairing an addon actually uses: domain guidance plus the tools to act
+    # on it, both riding on the same step's opaque config.
+    ov = {"name": "h", "overlay": [
+        {"add_template": "b", "fragment": "addons/game/implementer.md"},
+        {"add_tools": "b", "tools": ["gen_image_asset"]},
+    ]}
+    cfg = {s["id"]: s for s in compose_graph(_base(), [ov])["steps"]}["b"]["config"]
+    assert cfg["extra_templates"] == ["addons/game/implementer.md"]
+    assert cfg["extra_tools"] == ["gen_image_asset"]
+
+
 def test_multiple_addons_compose_in_order():
     a1 = {"name": "a1", "overlay": [{"insert_after": "b",
           "steps": [{"id": "x", "step_type": "tool"}]}]}

@@ -37,6 +37,15 @@ loops back); only steps left without transitions are auto-chained.
 
 The one primitive ``insert_after`` covers the game-harness case (attach compile /
 play-test gates into the verification stretch) and any "add a stage here" need.
+
+Three more ops modify an EXISTING step rather than splicing new ones:
+``add_context`` (see another step's output), ``add_template`` (extra prompt
+fragment) and ``add_tools`` (extra tools). The latter two ride on the step's
+opaque ``config``, so an addon can hand an agent domain-specific guidance and the
+tools to act on it without either leaking into the base graph's shared roles::
+
+    - add_tools: "@implementer"
+      tools: [gen_image_asset, gen_audio_asset]
 """
 from __future__ import annotations
 
@@ -124,6 +133,27 @@ def _apply_add_context(base: dict, to_id: str, source: dict) -> None:
         ctx.append(entry)
 
 
+def _apply_add_tools(base: dict, to_id: str, tools: list) -> None:
+    """Grant an existing (agent) step extra tools.
+
+    Stored on the step's opaque ``config.extra_tools`` — the same channel
+    ``add_template`` uses for prompt fragments. skillflow merges these names into
+    the step's toolset at claim time (next to a capability grant); the base
+    graph's roles stay domain-agnostic, so a tool that only makes sense for one
+    addon (generating game art, say) reaches the agent ONLY when that addon is
+    applied, instead of being listed on a role every pipeline shares."""
+    by_id = {s["id"]: s for s in base["steps"]}
+    if to_id not in by_id:
+        raise ComposeError(f"add_tools target '{to_id}' not found in base graph")
+    if not isinstance(tools, list) or not all(isinstance(x, str) for x in tools):
+        raise ComposeError(f"add_tools '{to_id}': 'tools' must be a list of tool names")
+    cfg = by_id[to_id].setdefault("config", {})
+    have = cfg.setdefault("extra_tools", [])
+    for name in tools:
+        if name not in have:
+            have.append(name)
+
+
 def _apply_add_template(base: dict, to_id: str, fragment: str) -> None:
     """Attach an extra prompt fragment to an existing (agent) step.
 
@@ -141,7 +171,7 @@ def _apply_add_template(base: dict, to_id: str, fragment: str) -> None:
         frags.append(fragment)
 
 
-_OPS = {"insert_after", "add_context", "add_template"}
+_OPS = {"insert_after", "add_context", "add_template", "add_tools"}
 
 
 def compose_graph(base: dict, overlays: list[dict]) -> dict:
@@ -183,5 +213,11 @@ def compose_graph(base: dict, overlays: list[dict]) -> dict:
                     merged,
                     _resolve_anchor(op["add_template"], anchors),
                     op["fragment"],
+                )
+            elif action == "add_tools":
+                _apply_add_tools(
+                    merged,
+                    _resolve_anchor(op["add_tools"], anchors),
+                    op.get("tools", []),
                 )
     return merged
