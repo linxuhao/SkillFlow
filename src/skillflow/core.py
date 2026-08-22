@@ -40,8 +40,10 @@ from skillflow.exceptions import (
     OutputValidationError,
     RequiredContextMissing,
     StepVersionConflict,
+    StaleClaimFenced,
     SkillFlowError,
 )
+from skillflow.identity import owner_is_dead, worker_identity
 
 
 # ── Internal abort signal for intentional rollback within _tx ────────
@@ -58,6 +60,13 @@ class ClaimToken:
     step_instance_id: int
     version: int
     claimed_at: float
+    # Fencing token — the value of skillflow_steps.claim_epoch at claim time.
+    # Checked by the write paths (confirm_step, fail_step, execute_tool) so a
+    # reclaimed-but-still-running executor is refused rather than racing its
+    # replacement. 0 = unfenced (a hand-built token, or a row claimed before
+    # the column existed); the check is skipped when either side is 0 so the
+    # migration cannot reject a claim that is legitimately in flight.
+    claim_epoch: int = 0
 
 
 @dataclass(frozen=True)
@@ -1158,6 +1167,40 @@ class SkillFlow:
         self.start_run(run_id)
         return run_id
 
+    # ── Fencing ────────────────────────────────────────────────────
+
+    def _epoch_holds(self, step_instance_id: int, claim_epoch: int,
+                     conn: "sqlite3.Connection | None" = None) -> bool:
+        """Is `claim_epoch` still this step instance's claim?
+
+        False means the step was reclaimed and the caller is a zombie. Either
+        side being 0 means "unfenced" and always holds: a hand-built token, or
+        a row that predates the column, must not be locked out by a migration.
+        """
+        if not claim_epoch:
+            return True
+        sql = "SELECT claim_epoch FROM skillflow_steps WHERE id = ?"
+        if conn is not None:
+            row = conn.execute(sql, (step_instance_id,)).fetchone()
+        else:
+            # Own the lock for the read: the connection is shared across the
+            # host's threads and another one may be mid-_tx.
+            with self._lock:
+                row = self._conn.execute(sql, (step_instance_id,)).fetchone()
+        if row is None:
+            return True          # unknown instance — not our call to refuse
+        current = row["claim_epoch"] or 0
+        return current == 0 or current == claim_epoch
+
+    def _assert_epoch(self, token: "ClaimToken", what: str) -> None:
+        """Refuse a write from an executor that no longer holds the step."""
+        if self._epoch_holds(token.step_instance_id, token.claim_epoch):
+            return
+        raise StaleClaimFenced(
+            f"Step '{token.step_id}' (instance {token.step_instance_id}) was "
+            f"reclaimed: {what} refused for claim_epoch {token.claim_epoch}."
+        )
+
     # ── Claim / Confirm / Fail ─────────────────────────────────────
 
     def claim_next_step(self, run_id: str) -> ClaimedStep | None:
@@ -1252,16 +1295,20 @@ class SkillFlow:
             cursor = conn.execute(
                 """
                 UPDATE skillflow_steps SET status = 'claimed', version = version + 1,
-                    claimed_at = ?, claimed_by = ?, updated_at = datetime('now')
+                    claimed_at = ?, claimed_by = ?,
+                    claim_epoch = COALESCE(claim_epoch, 0) + 1,
+                    updated_at = datetime('now')
                 WHERE run_id = ? AND step_id = ? AND version = ? AND status = 'pending'
                 """,
-                (claimed_at_str, "worker", run_id, run["current_node"], ver),
+                (claimed_at_str, worker_identity("worker"),
+                 run_id, run["current_node"], ver),
             )
             if cursor.rowcount == 0:
                 raise _TxRollback()
 
             step_row = conn.execute(
-                "SELECT id FROM skillflow_steps WHERE run_id = ? AND step_id = ? AND status = 'claimed'",
+                "SELECT id, claim_epoch FROM skillflow_steps "
+                "WHERE run_id = ? AND step_id = ? AND status = 'claimed'",
                 (run_id, run["current_node"]),
             ).fetchone()
 
@@ -1327,6 +1374,7 @@ class SkillFlow:
                 step_id=run["current_node"], run_id=run_id,
                 step_instance_id=step_row["id"] if step_row else 0,
                 version=ver + 1, claimed_at=claimed_at,
+                claim_epoch=(step_row["claim_epoch"] or 0) if step_row else 0,
             )
 
             # Inject resolved tool schemas if agent config is registered
@@ -1650,6 +1698,13 @@ class SkillFlow:
             )
 
     def confirm_step(self, token: ClaimToken, result: StepResult) -> None:
+        # BEFORE the lifecycle hooks, not after. The version guard at the
+        # bottom of this method fires only once every side effect has already
+        # landed: on_deliver runs repo_apply, which makes real git commits in
+        # the user's repository, and after_validate promotes {step}.tmp/ over
+        # {step}/. A reclaimed executor reaching here would do both alongside
+        # its replacement and only then be told it had lost the step.
+        self._assert_epoch(token, "confirm_step")
         resolver = self._get_resolver_for_run(token.run_id)
         node = resolver.get_node(token.step_id)
 
@@ -2504,6 +2559,11 @@ class SkillFlow:
                    step_instance_id=token.step_instance_id)
 
     def fail_step(self, token: ClaimToken, error: str, retryable: bool = True) -> None:
+        # A zombie must not spend the replacement's retry budget, nor overwrite
+        # a live claim with `pending`. (The CAS in _fail_step_in_tx re-reads
+        # `version` from the row it is about to write, so it never detects a
+        # reclaim on its own.)
+        self._assert_epoch(token, "fail_step")
         with self._tx() as conn:
             self._fail_step_in_tx(conn, token, error, retryable)
 
@@ -3507,9 +3567,11 @@ class SkillFlow:
             claimed_at_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time()))
             cur = conn.execute(
                 "UPDATE skillflow_steps SET status = 'claimed', version = version + 1, "
-                "claimed_at = ?, claimed_by = ?, updated_at = datetime('now') "
+                "claimed_at = ?, claimed_by = ?, "
+                "claim_epoch = COALESCE(claim_epoch, 0) + 1, "
+                "updated_at = datetime('now') "
                 "WHERE run_id = ? AND step_id = ? AND version = ? AND status = 'pending'",
-                (claimed_at_str, "tool-inline", run_id, step_id, ver),
+                (claimed_at_str, worker_identity("tool-inline"), run_id, step_id, ver),
             )
             if cur.rowcount == 0:
                 return None  # lost the race
@@ -4282,7 +4344,8 @@ class SkillFlow:
         with self._tx() as conn:
             claimed = conn.execute(
                 """
-                SELECT id, run_id, step_id, inputs_json, claimed_at, updated_at
+                SELECT id, run_id, step_id, inputs_json, claimed_at, updated_at,
+                       claimed_by
                 FROM skillflow_steps WHERE status = 'claimed'
                 """,
             ).fetchall()
@@ -4304,6 +4367,19 @@ class SkillFlow:
             # its window is its timeout_seconds (0 = never stale), unchanged.
             stale = []
             for row in claimed:
+                # Death first, tardiness second — they are different questions
+                # and only the first has a definite answer. If the process that
+                # made this claim is provably gone, no amount of waiting will
+                # make it come back, so skip the lease entirely. This also
+                # overrides the timeout_seconds == 0 exemption below: that rule
+                # exists because reclaiming a LIVE tool relaunches it beside
+                # itself, and a dead owner is running nothing.
+                # owner_is_dead returns None for a legacy `claimed_by`
+                # ("worker"), for another kernel boot, and wherever /proc is
+                # not available — every uncertainty falls through to the lease.
+                if owner_is_dead(row["claimed_by"]) is True:
+                    stale.append(row)
+                    continue
                 window = stale_threshold_seconds
                 try:
                     node = self._get_resolver_for_run(
@@ -4682,6 +4758,7 @@ class SkillFlow:
     def execute_tool(self, name: str, params: dict, *,
                      run_id: str = "", step_id: str = "",
                      step_instance_id: int | None = None,
+                     claim_epoch: int = 0,
                      project_root: str = "") -> dict:
         """Execute a tool on behalf of the host's agent loop.
 
@@ -4693,7 +4770,21 @@ class SkillFlow:
         ``step_instance_id`` (from the claimed step's token) so each tool call
         correlates to its exact step instance — essential for loop iterations
         where the same step_id runs many times.
+
+        Pass ``claim_epoch`` (also from the token) to fence the call: once the
+        step has been reclaimed, the tool is refused with an error dict instead
+        of running beside the replacement executor. Omitted (0) it is unfenced,
+        which is what a host that has not been taught to forward the epoch
+        gets — the same behaviour as before.
         """
+        if (claim_epoch and step_instance_id
+                and not self._epoch_holds(step_instance_id, claim_epoch)):
+            msg = (f"Step '{step_id}' was reclaimed; tool '{name}' refused "
+                   f"(stale claim_epoch {claim_epoch}).")
+            self.trace(run_id, "tool_call", name,
+                       {"source": "agent", "fenced": msg},
+                       step_id=step_id, step_instance_id=step_instance_id)
+            return {"error": msg}
         # Trace the call (params summarized — content fields can be huge).
         param_summary = {k: (f"<{len(v)} chars>" if isinstance(v, str) and len(v) > 200 else v)
                          for k, v in (params or {}).items()}
