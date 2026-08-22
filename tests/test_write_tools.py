@@ -103,6 +103,54 @@ class TestWriteTools:
         assert (staging / "app.py").read_text() == "x = 1\ny = NEW\nz = 3\n"
         assert (repo / "app.py").read_text() == "x = 1\ny = OLD\nz = 3\n"
 
+    def test_execute_edit_compounds_edits_on_a_repo_file(self, tmp_path):
+        """Two edits in one step both survive, even when the repo has the file.
+
+        Regression: baseline used to be repo-first, so with the repo copy
+        present each call re-read the ORIGINAL and overwrote staging with
+        "original + this one edit" — only the LAST edit of the step survived.
+        A live architect step made 14 edits and committed a 1-line diff.
+        """
+        repo = tmp_path / "repo"; repo.mkdir()
+        staging = tmp_path / "stage"; staging.mkdir()
+        (repo / "design.md").write_text("# Design\nALPHA\nmiddle\nOMEGA\n")
+        first = execute_edit("design", {"design": "design.md"},
+                             {"old_str": "ALPHA", "new_str": "alpha-edited"},
+                             str(staging), source_dir=str(repo))
+        second = execute_edit("design", {"design": "design.md"},
+                              {"old_str": "OMEGA", "new_str": "omega-edited"},
+                              str(staging), source_dir=str(repo))
+        assert first == {"edited": "design.md"}
+        assert second == {"edited": "design.md"}
+        # BOTH edits are present — the second did not re-baseline off the repo
+        assert (staging / "design.md").read_text() == (
+            "# Design\nalpha-edited\nmiddle\nomega-edited\n")
+        # the repo copy stays the pre-step baseline until repo_apply
+        assert (repo / "design.md").read_text() == "# Design\nALPHA\nmiddle\nOMEGA\n"
+
+    def test_execute_edit_staging_beats_repo(self, tmp_path):
+        """A file written this step is the baseline, not the stale repo copy."""
+        repo = tmp_path / "repo"; repo.mkdir()
+        staging = tmp_path / "stage"; staging.mkdir()
+        (repo / "app.py").write_text("stale repo version\n")
+        (staging / "app.py").write_text("written this step\n")
+        res = execute_edit("app", {"app": "app.py"},
+                           {"old_str": "written this step",
+                            "new_str": "written then edited"},
+                           str(staging), source_dir=str(repo))
+        assert res == {"edited": "app.py"}
+        assert (staging / "app.py").read_text() == "written then edited\n"
+
+    def test_execute_edit_staging_only_file(self, tmp_path):
+        """No repo at all: staging is still a valid baseline."""
+        staging = tmp_path / "stage"; staging.mkdir()
+        (staging / "notes.md").write_text("keep\nfix me\n")
+        res = execute_edit("notes", {"notes": "notes.md"},
+                           {"old_str": "fix me", "new_str": "fixed"},
+                           str(staging), source_dir=str(tmp_path / "repo"))
+        assert res == {"edited": "notes.md"}
+        assert (staging / "notes.md").read_text() == "keep\nfixed\n"
+
     def test_execute_edit_errors_when_not_unique(self, tmp_path):
         repo = tmp_path / "repo"; repo.mkdir()
         (repo / "app.py").write_text("dup\ndup\n")

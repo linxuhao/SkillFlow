@@ -536,14 +536,27 @@ def execute_edit(slot: str, fixed: dict, params: dict,
                  fallback_source_dir: str = "") -> dict:
     """Execute an edit_{slot} call: surgical str-replace on the EXISTING file.
 
-    Baseline resolution order:
-    1. ``source_dir`` (the consolidated repo — accumulated cross-task state);
-    2. ``output_dir`` staging (a file written earlier this same attempt);
+    Baseline is STAGING-FIRST, and the order is the whole point: one step makes
+    many edit_{slot} calls and each must build on the previous one's result.
+    1. ``output_dir`` staging — the file as this step has it SO FAR (written or
+       edited earlier this same attempt), so repeated edits to one file compound;
+    2. ``source_dir`` (the consolidated repo) — the PRE-step baseline only. It is
+       refreshed by ``on_deliver: repo_apply`` AFTER the step finishes, so during
+       the step it can never carry this step's own work;
     3. ``fallback_source_dir`` — the step's own PROMOTED output. The caller
        only passes this for a revision loop WITHIN the current run: step dirs
        are shared across runs of one config, so an ungated fallback would let a
        fresh run silently edit a PREVIOUS run's output (e.g. chapter 2's first
        outline attempt editing chapter 1's promoted outline).
+
+    Reading the repo first is exactly what broke: whenever the file already
+    existed in the repo, every call re-read that ORIGINAL and rewrote staging as
+    ``original + this one edit``, so only the LAST edit of the step survived —
+    silently, no error, nothing to see but a thin diff. A live DPE architect step
+    made 14 edits to step2_design.md and committed "1 file changed, 1
+    insertion(+), 1 deletion(-)"; two correction rounds each lost 6 of 7 required
+    edits. ``execute_generic_edit`` (output.mode "write") was already
+    staging-first; content-mode slots now follow the same rule.
 
     The spliced result is always written into ``output_dir`` (staging) — from
     where normal promotion + repo_apply overwrites the repo copy.
@@ -554,22 +567,21 @@ def execute_edit(slot: str, fixed: dict, params: dict,
     if not old_str:
         return {"error": f"edit_{slot}: 'old_str' is required and must be non-empty"}
 
-    src_base = Path(source_dir) if source_dir else Path(output_dir)
-    src = src_base / base_name
-    if not src.exists():
-        # fall back to staging copy (a file written earlier this same step)
-        staged = Path(output_dir) / base_name
-        prior = (Path(fallback_source_dir) / base_name
-                 if fallback_source_dir else None)
-        if staged.exists():
-            src = staged
-        elif prior is not None and prior.exists():
-            src = prior
-        else:
-            return {"error": (f"edit_{slot}: cannot edit '{base_name}' — no "
-                              "existing version to edit (nothing in the repo, "
-                              "staging, or this run's prior output). Use "
-                              f"create_{slot}/write_{slot} to author it first.")}
+    staged = Path(output_dir) / base_name
+    repo = (Path(source_dir) / base_name) if source_dir else None
+    prior = (Path(fallback_source_dir) / base_name
+             if fallback_source_dir else None)
+    if staged.exists():
+        src = staged
+    elif repo is not None and repo.exists():
+        src = repo
+    elif prior is not None and prior.exists():
+        src = prior
+    else:
+        return {"error": (f"edit_{slot}: cannot edit '{base_name}' — no "
+                          "existing version to edit (nothing in the repo, "
+                          "staging, or this run's prior output). Use "
+                          f"create_{slot}/write_{slot} to author it first.")}
 
     content = src.read_text(encoding="utf-8")
     updated, err = _unique_replace(content, old_str, new_str,

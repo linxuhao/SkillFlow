@@ -65,7 +65,9 @@ ContextResolver → assemble prompt context from:
 
 StepValidator → run validation specs: [{files, tool, inline_schema}]
 WriteTools → generate constrained write_*/create_*/edit_* tools from output.fixed
-  # edit baseline: repo → staging → own promoted dir (same-run gated)
+  # edit baseline: staging → repo → own promoted dir (same-run gated)
+  # staging FIRST so a step's successive edits COMPOUND; the repo copy is only
+  # the pre-step baseline (repo_apply refreshes it after the step ends)
 ```
 
 ## Key Data Structures
