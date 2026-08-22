@@ -395,13 +395,61 @@ UI never renders a loop re-run *after* still-pending downstream steps.
 
 ## Stale Claim Recovery
 
-Built into `advance_run`. A claim whose worker died before calling `confirm`, and that is older than `stale_threshold_seconds` (default 300), is auto-reset to `pending` and re-claimed:
+Built into `advance_run`. Two signals, never merged: **death** is observed by
+someone else, **tardiness** is measured by the clock.
+
+**Death — the owner's pid is gone.** Every claim records who made it, in
+`skillflow_steps.claimed_by`:
+
+```
+worker host=box-1 pid=4711 boot=911724fdc197 ns=4026531836 start=154110928
+```
+
+`recover_stale_claims` probes that owner (`skillflow.identity.owner_is_dead`)
+and reclaims a dead one **immediately**, without waiting out the lease — and
+regardless of the `timeout_seconds: 0` exemption below, since a dead owner is
+running nothing. `start=` is the process's start time, so a *recycled* pid (a
+restarted container whose new main process is pid 1 exactly as the old one was)
+is not mistaken for the original. The probe is three-valued and only "dead"
+short-circuits anything: another kernel boot, a `claimed_by` written before this
+existed, or a platform without `/proc` all answer "unknown" and fall back to the
+lease. `claimed_by` used to be the string literal `"worker"`, which made a
+crashed worker and a quiet one the same row by construction.
+
+**Tardiness — the activity lease.** A claim that has been *silent* longer than
+`stale_threshold_seconds` (default 300) is reset to `pending` and re-claimed.
+Silence, not runtime: every `trace()` heartbeats the claimed step, so a
+slow-but-active agent is never reaped. A tool step's window is the longer of the
+threshold and its node's `timeout_seconds`; `timeout_seconds: 0` means a live
+tool is never reclaimed at all (reclaiming it would relaunch it beside itself).
 
 ```python
 sf = SkillFlow("pipeline.db", stale_threshold_seconds=300)
 ```
 
 **Crash-loop guard:** if the *same* step instance is recovered 3 times, skillflow stops retrying and marks it `failed` (`"worker crashed 3 times — likely a code bug or OOM"`), emitting a non-retryable `step_failed` event — so a buggy or OOM-prone step can't loop forever.
+
+## Fencing a reclaimed executor
+
+Reclaiming a step does not stop the executor that was holding it — a hung LLM
+call in a thread is not killable — so recovery has to make the zombie's *writes*
+harmless. Every claim bumps `skillflow_steps.claim_epoch`, and the value rides
+on the `ClaimToken`:
+
+| path | fenced | how |
+|---|---|---|
+| `confirm_step(token, …)` | always | raises `StaleClaimFenced`, **before** the lifecycle hooks — so `on_deliver` (`repo_apply`, real git commits) and the `{step}.tmp/` → `{step}/` promotion never run twice |
+| `fail_step(token, …)` | always | raises `StaleClaimFenced` — a zombie cannot spend its replacement's retry budget |
+| `sf.execute_tool(…, claim_epoch=token.claim_epoch)` | when the host forwards the epoch | returns `{"error": "… was reclaimed …"}` |
+
+`StaleClaimFenced` subclasses `StepVersionConflict`, but they mean different
+things: a version conflict says *reload and re-decide*, a fence says **stop** —
+nothing the caller re-reads will make it the executor again.
+
+`claim_epoch = 0` means "unfenced" on either side, so a hand-built `ClaimToken`
+and rows written before the column existed behave exactly as they did. Adding
+the column is the whole migration (`SKILLFLOW_MIGRATIONS`, applied on every
+open); old rows backfill to 0.
 
 ## Event Streaming
 

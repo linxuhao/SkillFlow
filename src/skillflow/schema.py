@@ -65,7 +65,18 @@ CREATE TABLE IF NOT EXISTS skillflow_steps (
     result_flags_json       TEXT NOT NULL DEFAULT '{}',
     last_error              TEXT,
     claimed_at              TEXT,
+    -- WHO holds the claim: an identity, not a literal. See skillflow.identity.
+    -- "worker host=box pid=4711 boot=… ns=… start=…". A reaper that can ask
+    -- "is that pid alive?" separates a crashed owner from a quiet one; the
+    -- literal "worker" this used to hold made the two indistinguishable.
     claimed_by              TEXT,
+    -- Fencing token: bumped by EVERY claim of this step instance, carried by
+    -- the ClaimToken, and checked on the write paths. `version` answers
+    -- "reload and re-decide"; this answers "stop — you are not the executor
+    -- any more", which is the only correct answer for a zombie that would
+    -- otherwise run on_deliver (repo_apply, real git commits) beside its
+    -- replacement. 0 = pre-migration/unfenced.
+    claim_epoch             INTEGER NOT NULL DEFAULT 0,
     completed_at            TEXT,
     -- Per-run monotonic COMPLETION order (1, 2, 3 … assigned when a step
     -- instance is marked completed). `id` is CREATION order — the two diverge
@@ -179,6 +190,10 @@ SKILLFLOW_MIGRATIONS: list[str] = [
     "ALTER TABLE skillflow_loop_state ADD COLUMN current_item TEXT",
     # SF-25: per-run completion order (see SKILLFLOW_STEPS.completion_seq)
     "ALTER TABLE skillflow_steps ADD COLUMN completion_seq INTEGER",
+    # SF-26: fencing token (see SKILLFLOW_STEPS.claim_epoch). Existing rows
+    # backfill to 0, which reads as "unfenced" on both sides of every check —
+    # a claim already in flight when this ships is never falsely rejected.
+    "ALTER TABLE skillflow_steps ADD COLUMN claim_epoch INTEGER NOT NULL DEFAULT 0",
     # Backfill historical rows by their best available approximation:
     # (completed_at, id). Idempotent — the IS NULL guard makes every re-run
     # after the first a no-op (migrations execute on each boot).

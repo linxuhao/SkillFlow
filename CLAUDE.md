@@ -38,7 +38,8 @@ SkillFlow (orchestrator)  ← SQLite (WAL mode)
   ├── claim_next_step()  → ClaimedStep → StepRunner (host app)
   ├── confirm_step()     → completed/failed
   ├── advance_run()      → resolve gates, auto-execute tools
-  │   ├── recover_stale_claims() (built-in)
+  │   ├── recover_stale_claims() (built-in) — dead owner (identity.py) first,
+  │   │     silence lease second; a reclaimed executor is fenced by claim_epoch
   │   └── feedback loopback (inject tool error into step inputs)
   ├── _routing_reason_suffix() → on a terminal routing failure (cycle limit /
   │     no matching transition, agent+tool+gate, incl. the pre-resolved gate
@@ -74,7 +75,9 @@ WriteTools → generate constrained write_*/create_*/edit_* tools from output.fi
 
 - `Transition(to, match, max_loop, label, feedback)` — directed edge
 - `StepNode(id, step_type, transitions, checkpoint, checkpoint_reject_to, config, tool_name, tool_params, agent_config, context, output_mode, output_fixed, validation)` — graph node (checkpoints work on tool steps too)
-- `ClaimToken(step_id, run_id, step_instance_id, version, claimed_at)` — frozen claim
+- `ClaimToken(step_id, run_id, step_instance_id, version, claimed_at, claim_epoch)` — frozen claim.
+  `version` = optimistic concurrency (*reload and re-decide*); `claim_epoch` = fencing token,
+  bumped by every claim and checked by `confirm_step`/`fail_step`/`execute_tool` (*stop*).
 - `ClaimedStep(token, step_config, run_context, inputs, validation_error)` — ready to execute
 - `StepResult(outputs, flags)` — execution result (flags used for transition matching)
 - `StepRunner` — Protocol: `async def execute(step: ClaimedStep) -> StepResult`

@@ -18,6 +18,17 @@ class StepVersionConflict(SkillFlowError):
     """
 
 
+class StaleClaimFenced(StepVersionConflict):
+    """The caller's claim_epoch is not the step's — it is no longer the executor.
+
+    A ``StepVersionConflict`` says *reload and re-decide*. This says **stop**:
+    the step was reclaimed (crash recovery, stale lease) and someone else is
+    executing it now. Nothing the caller re-reads will change that, so a retry
+    would be a second live writer on the same step. Subclasses
+    StepVersionConflict so hosts that already handle a lost claim keep working.
+    """
+
+
 class RequiredContextMissing(SkillFlowError):
     """A context source marked ``required: true`` resolved to no content.
 
