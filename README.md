@@ -395,8 +395,10 @@ UI never renders a loop re-run *after* still-pending downstream steps.
 
 ## Stale Claim Recovery
 
-Built into `advance_run`. Two signals, never merged: **death** is observed by
-someone else, **tardiness** is measured by the clock.
+Built into `advance_run`. **Ownership decides; the clock only answers where
+ownership cannot.** Death is observed by someone else, tardiness is measured by
+the clock, and the two are never merged — a process cannot detect its own death,
+and nobody else should be guessing at its tardiness.
 
 **Death — the owner's pid is gone.** Every claim records who made it, in
 `skillflow_steps.claimed_by`:
@@ -416,12 +418,23 @@ existed, or a platform without `/proc` all answer "unknown" and fall back to the
 lease. `claimed_by` used to be the string literal `"worker"`, which made a
 crashed worker and a quiet one the same row by construction.
 
-**Tardiness — the activity lease.** A claim that has been *silent* longer than
-`stale_threshold_seconds` (default 300) is reset to `pending` and re-claimed.
-Silence, not runtime: every `trace()` heartbeats the claimed step, so a
-slow-but-active agent is never reaped. A tool step's window is the longer of the
-threshold and its node's `timeout_seconds`; `timeout_seconds: 0` means a live
-tool is never reclaimed at all (reclaiming it would relaunch it beside itself).
+**Life — the owner answers to its pid.** An owner observed *running* is never
+reclaimed, whatever the clock says: it is still working, and there is nothing to
+recover. Silence is not death — an agent step spends minutes inside one LLM call
+and traces nothing while it waits, so the activity clock below cannot tell a
+working step from an abandoned one. Reaping the working one killed real work and
+then failed the returning executor's `confirm_step` on a version mismatch. If a
+live owner is *also* hung, that is tardiness, and tardiness belongs to its own
+timeout and to the host's supervision — not to a reaper that cannot tell the two
+apart.
+
+**Tardiness — the activity lease, for owners that cannot be probed.** Where the
+answer is "unknown" — another kernel boot, a pre-identity `claimed_by`, no
+`/proc` — a claim *silent* longer than `stale_threshold_seconds` (default 300)
+is reset to `pending` and re-claimed. Silence, not runtime: every `trace()`
+heartbeats the claimed step. A tool step's window is the longer of the threshold
+and its node's `timeout_seconds`; `timeout_seconds: 0` means such a tool is
+never reclaimed at all (reclaiming it would relaunch it beside itself).
 
 ```python
 sf = SkillFlow("pipeline.db", stale_threshold_seconds=300)

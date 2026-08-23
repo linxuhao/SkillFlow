@@ -4367,18 +4367,40 @@ class SkillFlow:
             # its window is its timeout_seconds (0 = never stale), unchanged.
             stale = []
             for row in claimed:
-                # Death first, tardiness second — they are different questions
-                # and only the first has a definite answer. If the process that
-                # made this claim is provably gone, no amount of waiting will
-                # make it come back, so skip the lease entirely. This also
-                # overrides the timeout_seconds == 0 exemption below: that rule
-                # exists because reclaiming a LIVE tool relaunches it beside
-                # itself, and a dead owner is running nothing.
-                # owner_is_dead returns None for a legacy `claimed_by`
-                # ("worker"), for another kernel boot, and wherever /proc is
-                # not available — every uncertainty falls through to the lease.
-                if owner_is_dead(row["claimed_by"]) is True:
+                # Ownership decides. The lease only answers where ownership
+                # cannot — these are different questions and only the first has
+                # a definite answer:
+                #
+                #   dead    the process that made this claim is gone. No amount
+                #           of waiting brings it back, so reclaim NOW instead of
+                #           serving out a window. This also overrides the
+                #           timeout_seconds == 0 exemption below: that rule
+                #           exists because reclaiming a LIVE tool relaunches it
+                #           beside itself, and a dead owner runs nothing.
+                #   alive   observed running by the OS, right now — so it is
+                #           still working and there is nothing to recover.
+                #           Silence is not death: an agent step spends minutes
+                #           inside a single LLM call and emits no trace while it
+                #           waits, so its activity clock goes quiet WHILE IT
+                #           WORKS. Reaping it there killed real work (8 reclaims
+                #           against 13 t_impl executions on one run) and then
+                #           failed the returning executor's confirm on `version
+                #           mismatch`, leaving the step recorded as failed after
+                #           its output had been promoted. A live owner is never
+                #           reclaimed. If it is also hung, that is tardiness,
+                #           and tardiness is for its own timeout and for the
+                #           host's hung-step warning — not for a reaper that
+                #           cannot tell the two apart.
+                #   unknown a legacy `claimed_by` ("worker"), another kernel
+                #           boot, or no /proc to read. Nothing was observed, so
+                #           the lease below is still the only answer there —
+                #           which is also why this change is inert on a platform
+                #           where liveness cannot be seen.
+                owner_dead = owner_is_dead(row["claimed_by"])
+                if owner_dead is True:
                     stale.append(row)
+                    continue
+                if owner_dead is False:
                     continue
                 window = stale_threshold_seconds
                 try:

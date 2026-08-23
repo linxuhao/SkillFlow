@@ -38,8 +38,10 @@ SkillFlow (orchestrator)  ← SQLite (WAL mode)
   ├── claim_next_step()  → ClaimedStep → StepRunner (host app)
   ├── confirm_step()     → completed/failed
   ├── advance_run()      → resolve gates, auto-execute tools
-  │   ├── recover_stale_claims() (built-in) — dead owner (identity.py) first,
-  │   │     silence lease second; a reclaimed executor is fenced by claim_epoch
+  │   ├── recover_stale_claims() (built-in) — ownership decides: a dead owner
+  │   │     (identity.py) is reclaimed at once, a LIVE one never is however
+  │   │     long it is quiet, and only an unprobeable owner falls to the
+  │   │     silence lease; a reclaimed executor is fenced by claim_epoch
   │   └── feedback loopback (inject tool error into step inputs)
   ├── _routing_reason_suffix() → on a terminal routing failure (cycle limit /
   │     no matching transition, agent+tool+gate, incl. the pre-resolved gate

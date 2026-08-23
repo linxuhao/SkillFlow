@@ -1,11 +1,20 @@
 """A dead worker is not a quiet one, and a reclaimed one cannot keep writing.
 
-Two properties, one cause. `claimed_by` used to be the literal "worker", so
+Three properties, one cause. `claimed_by` used to be the literal "worker", so
 "the owner crashed" and "the owner is alive but silent" were the same row, and
-only the silence lease could answer either. And the optimistic `version` guard
-sat at the BOTTOM of confirm_step, after on_deliver had already run repo_apply
-against the user's git repo — so a prematurely reclaimed executor committed
-beside its replacement and was told it had lost the step afterwards.
+only the silence lease could answer either — which meant it answered BOTH, and
+answered the second one wrong: an agent step sitting inside a ten-minute LLM
+call traces nothing while it waits, and got reaped for working. And the
+optimistic `version` guard sat at the BOTTOM of confirm_step, after on_deliver
+had already run repo_apply against the user's git repo — so a prematurely
+reclaimed executor committed beside its replacement and was told it had lost
+the step afterwards.
+
+So: the claim names its owner; the owner's liveness — not the clock — decides
+whether it is recovered; and whoever loses a claim is fenced out of writing.
+The fence still matters with ownership deciding, because ownership cannot
+always answer (a legacy row, another kernel boot, no /proc) and the host has
+reset paths of its own (startup recovery, checkpoint rejection).
 """
 
 import os
@@ -168,20 +177,29 @@ def test_a_recycled_pid_is_not_mistaken_for_the_original(fake_self):
     assert owner_is_dead(live) is False
 
 
-def test_a_live_owner_still_waits_for_the_lease(sf: SkillFlow, fake_self):
-    """Death and tardiness are different signals and the fast path only carries
-    the first. A live-but-hung owner is still the lease's business."""
+def test_a_live_owner_is_never_reclaimed_however_long_it_is_quiet(
+        sf: SkillFlow, fake_self):
+    """The defect the whole mechanism exists to remove.
+
+    An agent step spends minutes inside a single LLM call and traces nothing
+    while it waits, so the activity clock cannot tell "working" from "gone" —
+    and the lease reaped the working one. Measured on a live run: 8 reclaims
+    against 13 implementation steps, each surviving executor then failing its
+    confirm on `version mismatch` and recording as failed work that had in fact
+    been promoted. Liveness is a fact about a process, so ask the process.
+    """
     run_id = _one_step_run(sf)
     mine = worker_identity("worker")
-    row_id = _insert_claim(sf, run_id, "a", mine, age_seconds=5)
+    row_id = _insert_claim(sf, run_id, "a", mine, age_seconds=6 * 3600)
 
     assert owner_is_dead(mine) is False
-    assert sf.recover_stale_claims(stale_threshold_seconds=3600) == []
+    # Six hours quiet against a three-minute lease, and still not reclaimed.
+    assert sf.recover_stale_claims(stale_threshold_seconds=180) == []
     assert _status(sf, row_id) == "claimed"
-
-    # ...and the lease itself is untouched.
-    assert run_id in sf.recover_stale_claims(stale_threshold_seconds=-1)
-    assert _status(sf, row_id) == "pending"
+    # Not even "everything is stale" reaches an owner that is demonstrably
+    # running: there is no elapsed time that makes a live process dead.
+    assert sf.recover_stale_claims(stale_threshold_seconds=-1) == []
+    assert _status(sf, row_id) == "claimed"
 
 
 def test_an_unknown_host_falls_back_to_the_lease(sf: SkillFlow, fake_self):
@@ -199,6 +217,23 @@ def test_an_unknown_host_falls_back_to_the_lease(sf: SkillFlow, fake_self):
     assert _status(sf, row_id) == "pending"
 
 
+def test_a_quiet_live_owner_and_a_dead_one_are_told_apart_in_one_sweep(
+        sf: SkillFlow, fake_self, dead_pid):
+    """Both rules at once, which is the only way they are ever exercised: one
+    sweep over a table holding a working step and an abandoned one must move
+    exactly one of them."""
+    run_id = _one_step_run(sf)
+    alive = _insert_claim(sf, run_id, "a", worker_identity("worker"),
+                          age_seconds=9999)
+    dead = _insert_claim(
+        sf, run_id, "b",
+        f"worker host=testhost pid={dead_pid} boot=testboot", age_seconds=1)
+
+    assert run_id in sf.recover_stale_claims(stale_threshold_seconds=180)
+    assert _status(sf, alive) == "claimed"
+    assert _status(sf, dead) == "pending"
+
+
 def test_a_legacy_claim_is_still_reaped_by_the_lease(sf: SkillFlow, fake_self):
     """The migration must not strand rows claimed by the old literal."""
     run_id = _one_step_run(sf)
@@ -209,23 +244,23 @@ def test_a_legacy_claim_is_still_reaped_by_the_lease(sf: SkillFlow, fake_self):
 
 # ── Change 2: the fence ─────────────────────────────────────────────
 
-def test_every_claim_bumps_the_epoch(sf: SkillFlow):
+def test_every_claim_bumps_the_epoch(sf: SkillFlow, crash_the_owner):
     run_id = _one_step_run(sf)
     first = sf.claim_next_step(run_id)
     assert first.token.claim_epoch == 1
 
-    sf.recover_stale_claims(stale_threshold_seconds=-1)
+    crash_the_owner(sf, run_id)
     second = sf.claim_next_step(run_id)
     assert second.token.step_instance_id == first.token.step_instance_id
     assert second.token.claim_epoch == 2
 
 
 def test_a_stale_confirm_is_refused_and_the_current_holder_succeeds(
-        sf: SkillFlow):
+        sf: SkillFlow, crash_the_owner):
     run_id = _one_step_run(sf)
     zombie = sf.claim_next_step(run_id).token
 
-    sf.recover_stale_claims(stale_threshold_seconds=-1)   # premature reclaim
+    crash_the_owner(sf, run_id)          # the claim is reset under its executor
     holder = sf.claim_next_step(run_id).token
 
     with pytest.raises(StaleClaimFenced):
@@ -239,14 +274,14 @@ def test_a_stale_confirm_is_refused_and_the_current_holder_succeeds(
     assert "holder" in row["outputs_json"]
 
 
-def test_the_fence_fires_before_the_lifecycle_hooks(sf: SkillFlow,
-                                                    monkeypatch):
+def test_the_fence_fires_before_the_lifecycle_hooks(sf: SkillFlow, monkeypatch,
+                                                    crash_the_owner):
     """The point of the whole change: on_deliver runs repo_apply, which makes
     real git commits. The version guard at the bottom of confirm_step let those
     land first and complained afterwards."""
     run_id = _one_step_run(sf)
     zombie = sf.claim_next_step(run_id).token
-    sf.recover_stale_claims(stale_threshold_seconds=-1)
+    crash_the_owner(sf, run_id)
     sf.claim_next_step(run_id)
 
     ran = []
@@ -257,12 +292,12 @@ def test_the_fence_fires_before_the_lifecycle_hooks(sf: SkillFlow,
     assert ran == [], "a fenced-out executor reached its lifecycle hooks"
 
 
-def test_a_stale_fail_step_is_refused(sf: SkillFlow):
+def test_a_stale_fail_step_is_refused(sf: SkillFlow, crash_the_owner):
     """A zombie must not spend the replacement's retry budget or knock a live
     claim back to pending."""
     run_id = _one_step_run(sf)
     zombie = sf.claim_next_step(run_id).token
-    sf.recover_stale_claims(stale_threshold_seconds=-1)
+    crash_the_owner(sf, run_id)
     holder = sf.claim_next_step(run_id).token
 
     with pytest.raises(StaleClaimFenced):
@@ -270,10 +305,10 @@ def test_a_stale_fail_step_is_refused(sf: SkillFlow):
     assert _status(sf, holder.step_instance_id) == "claimed"
 
 
-def test_a_stale_tool_call_is_refused(sf: SkillFlow):
+def test_a_stale_tool_call_is_refused(sf: SkillFlow, crash_the_owner):
     run_id = _one_step_run(sf)
     zombie = sf.claim_next_step(run_id).token
-    sf.recover_stale_claims(stale_threshold_seconds=-1)
+    crash_the_owner(sf, run_id)
     holder = sf.claim_next_step(run_id).token
 
     refused = sf.execute_tool(
@@ -289,12 +324,12 @@ def test_a_stale_tool_call_is_refused(sf: SkillFlow):
     assert "reclaimed" not in str(allowed.get("error", ""))
 
 
-def test_an_unfenced_caller_is_unaffected(sf: SkillFlow):
+def test_an_unfenced_caller_is_unaffected(sf: SkillFlow, crash_the_owner):
     """claim_epoch=0 means "no token offered" — the behaviour every host has
     today, and what a hand-built ClaimToken carries."""
     run_id = _one_step_run(sf)
     token = sf.claim_next_step(run_id).token
-    sf.recover_stale_claims(stale_threshold_seconds=-1)
+    crash_the_owner(sf, run_id)
     sf.claim_next_step(run_id)
 
     res = sf.execute_tool("read_file", {"path": "nope.txt"}, run_id=run_id,

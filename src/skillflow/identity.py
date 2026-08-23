@@ -149,12 +149,15 @@ def owner_is_dead(claimed_by: str | None) -> bool | None:
     """Is the process that made this claim gone?
 
     ``True``  — observed dead: reclaim now, do not wait for the lease.
-    ``False`` — observed alive: the lease decides (a live-but-hung owner is
-                tardiness, and tardiness is the lease's job).
-    ``None``  — not determinable: the lease decides.
+    ``False`` — observed alive: it is still working, so there is nothing to
+                recover and the lease does not apply. Silence is not death —
+                a worker inside one long call emits nothing while it works —
+                and a reaper that cannot tell a quiet worker from a gone one
+                must not be what decides.
+    ``None``  — not determinable: the lease decides, exactly as it always did.
 
-    Only ``True`` short-circuits anything, so every uncertainty degrades to the
-    behaviour that existed before.
+    Only ``None`` reaches the lease, so this module changes nothing wherever
+    liveness cannot be observed.
     """
     ident = parse_identity(claimed_by)
     if ident is None:

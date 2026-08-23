@@ -1043,7 +1043,7 @@ def test_concurrent_claim_prevention_from_yaml(sf_with_tools):
     assert c2 is None
 
 
-def test_crash_recovery_from_yaml(sf_tmp):
+def test_crash_recovery_from_yaml(sf_tmp, crash_the_owner):
     """Claim then crash — stale claim recovered, step re-claimable."""
     tools = create_standard_mock_tools()
     sf = SkillFlow(str(sf_tmp._db_path), tool_loader=tools)
@@ -1056,8 +1056,8 @@ def test_crash_recovery_from_yaml(sf_tmp):
     sf.advance_run(run_id)
     sf.claim_next_step(run_id)
 
-    # Recover stale claims
-    sf.recover_stale_claims(stale_threshold_seconds=-1)
+    # Recover the claim the crashed owner left behind
+    crash_the_owner(sf, run_id)
 
     # Step should be re-claimable
     sf.advance_run(run_id)
@@ -1114,7 +1114,8 @@ def test_double_advance_before_claim_consistent(sf_with_tools):
     assert sf.get_run(run_id)["status"] == "completed"
 
 
-def test_double_confirm_version_conflict_from_yaml(sf_with_tools):
+def test_double_confirm_version_conflict_from_yaml(sf_with_tools,
+                                                  crash_the_owner):
     """Confirming with a stale token raises StepVersionConflict."""
     from skillflow.exceptions import StepVersionConflict
 
@@ -1128,7 +1129,7 @@ def test_double_confirm_version_conflict_from_yaml(sf_with_tools):
     assert claimed.step_id == "do_work"
 
     # Simulate stale claim recovery: reset the step to pending
-    sf.recover_stale_claims(stale_threshold_seconds=-1)
+    crash_the_owner(sf, run_id)
 
     # Confirm with the old (now stale) token should fail
     with pytest.raises(StepVersionConflict):
@@ -1154,7 +1155,7 @@ def test_reregister_graph_idempotent_from_yaml(sf_with_tools):
     assert sf.get_run(run_id)["status"] == "completed"
 
 
-def test_crash_mid_pipeline_recovery_from_yaml(sf_tmp):
+def test_crash_mid_pipeline_recovery_from_yaml(sf_tmp, crash_the_owner):
     """Crash after multiple completed steps — recover and continue."""
     tools = create_standard_mock_tools()
     sf = SkillFlow(str(sf_tmp._db_path), tool_loader=tools)
@@ -1175,8 +1176,8 @@ def test_crash_mid_pipeline_recovery_from_yaml(sf_tmp):
     sf.advance_run(run_id)
     sf.claim_next_step(run_id)  # claimed but never confirmed
 
-    # Recover stale claims
-    sf.recover_stale_claims(stale_threshold_seconds=-1)
+    # Recover the claim the crashed owner left behind
+    crash_the_owner(sf, run_id)
 
     # After recovery: run is still running, current_node is preserved
     # (publish). advance_run re-claims the crashed step.

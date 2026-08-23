@@ -213,7 +213,7 @@ def test_confirm_step(sf: SkillFlow):
     assert run["current_node"] == "b"  # Inline transition resolved by confirm
 
 
-def test_confirm_step_version_conflict(sf: SkillFlow):
+def test_confirm_step_version_conflict(sf: SkillFlow, crash_the_owner):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -222,7 +222,7 @@ def test_confirm_step_version_conflict(sf: SkillFlow):
     claimed = sf.claim_next_step(run_id)
 
     # Simulate stale recovery: reset the step
-    sf.recover_stale_claims(stale_threshold_seconds=-1)  # Everything is stale below -1s
+    crash_the_owner(sf, run_id)
 
     result = StepResult(outputs={}, flags={})
     with pytest.raises(StepVersionConflict):
@@ -619,7 +619,7 @@ def test_edge_count_increments_on_advance(sf: SkillFlow):
 
 # ── Recovery ─────────────────────────────────────────────────────────
 
-def test_recover_stale_claims(sf: SkillFlow):
+def test_recover_stale_claims(sf: SkillFlow, crash_the_owner):
     graph = _simple_graph()
     sf.register_graph(graph)
     run_id = sf.create_run("test")
@@ -627,8 +627,8 @@ def test_recover_stale_claims(sf: SkillFlow):
     sf.advance_run(run_id)
     sf.claim_next_step(run_id)
 
-    # Set threshold to -1 to recover all claims (everything is stale)
-    recovered = sf.recover_stale_claims(stale_threshold_seconds=-1)
+    # The claim's owner is gone, so the claim is recovered
+    recovered = crash_the_owner(sf, run_id)
     assert run_id in recovered
 
     # Step should be back to pending

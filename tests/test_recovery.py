@@ -171,7 +171,7 @@ def _trans(to: str):
     return Transition(to=to)
 
 
-def test_recover_stale_claims_resets_claimed(sf: SkillFlow):
+def test_recover_stale_claims_resets_claimed(sf: SkillFlow, crash_the_owner):
     graph = PipelineGraph(
         name="test", begin="a",
         steps=[_agent("a", [_trans("b")]), _agent("b", [])],
@@ -182,8 +182,8 @@ def test_recover_stale_claims_resets_claimed(sf: SkillFlow):
     sf.advance_run(run_id)
     sf.claim_next_step(run_id)
 
-    # Recover with negative threshold (everything is stale)
-    recovered = sf.recover_stale_claims(stale_threshold_seconds=-1)
+    # The owner crashed — its claim is recovered
+    recovered = crash_the_owner(sf, run_id)
     assert run_id in recovered
 
     # Step should be re-claimable

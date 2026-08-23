@@ -264,7 +264,7 @@ def test_checkpoint_rejection_then_reexecution(sf: SkillFlow):
     _execute(sf, run_id, "b")
 
 
-def test_crash_during_execute_recovery(sf_tmp: SkillFlow):
+def test_crash_during_execute_recovery(sf_tmp: SkillFlow, crash_the_owner):
     """Simulate crash during execute: claim, then recover without confirm."""
     graph = PipelineGraph(
         name="test", begin="a",
@@ -276,8 +276,8 @@ def test_crash_during_execute_recovery(sf_tmp: SkillFlow):
     sf_tmp.advance_run(run_id)
     sf_tmp.claim_next_step(run_id)
 
-    # "Crash" — recover stale claims
-    sf_tmp.recover_stale_claims(stale_threshold_seconds=-1)
+    # "Crash" — recover the claim its owner left behind
+    crash_the_owner(sf_tmp, run_id)
 
     # Step should be re-claimable
     sf_tmp.advance_run(run_id)
