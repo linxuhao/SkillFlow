@@ -389,7 +389,8 @@ class SkillTool:
 
     def _completed_response(self, run: dict) -> SkillResponse:
         """Collect final outputs from all completed steps."""
-        steps = self.sf.get_steps(self.run_id)
+        # include_payloads: this is the one caller that reads outputs_json.
+        steps = self.sf.get_steps(self.run_id, include_payloads=True)
         completed = [s for s in steps if s.get("status") == "completed"]
         outputs: dict = {}
         for s in completed:

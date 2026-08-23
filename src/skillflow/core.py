@@ -1090,7 +1090,19 @@ class SkillFlow:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def get_steps(self, run_id: str) -> list[dict]:
+    # Everything about a step EXCEPT the four JSON payload columns. Those four
+    # carry a step's whole resolved context and its whole output, and on a real
+    # run they are enormous: measured on one host, a single `5_review` row is
+    # 89 MB and one run's rows total 260 MB.
+    _STEP_SUMMARY_COLUMNS = (
+        "id, run_id, step_id, status, version, retry_count, "
+        "validation_retry_count, max_retries, last_error, claimed_at, "
+        "claimed_by, claim_epoch, completed_at, completion_seq, "
+        "created_at, updated_at"
+    )
+
+    def get_steps(self, run_id: str, *,
+                  include_payloads: bool = False) -> list[dict]:
         """All step instances of a run, in GRAPH declaration order.
 
         Raw id order is creation order: loop/reject re-runs append new
@@ -1100,10 +1112,23 @@ class SkillFlow:
         the node's declared position keeps every instance under its step
         (multiple attempts adjacent, in id order); steps not in the graph
         (renamed/removed mid-flight) sink to the end rather than erroring.
+
+        The payload columns (``step_config_json``, ``inputs_json``,
+        ``outputs_json``, ``result_flags_json``) are LEFT OUT unless you ask
+        for them. This was `SELECT *`, and every caller that wanted to know
+        "which steps of this run are done" — a dashboard listing, a status
+        sync running on every scheduler tick — read hundreds of megabytes of
+        agent context and output off disk and decoded it into Python strings
+        to look at ``step_id`` and ``status``. A six-project listing on one
+        host moved over a gigabyte that way and took a minute, on the event
+        loop, with the whole API dark behind it. The keys are OMITTED rather
+        than blanked, so a caller that actually needs a payload fails on the
+        missing key instead of quietly reading an empty one.
         """
+        columns = "*" if include_payloads else self._STEP_SUMMARY_COLUMNS
         with self._lock:
             rows = self._conn.execute(
-                """SELECT * FROM skillflow_steps
+                f"""SELECT {columns} FROM skillflow_steps
                    WHERE run_id = ? ORDER BY id ASC""",
                 (run_id,),
             ).fetchall()

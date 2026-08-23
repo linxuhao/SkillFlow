@@ -1921,3 +1921,66 @@ def test_node_added_mid_flight_is_claimable(sf):
 
     tok = sf.claim_next_step(rid)
     assert tok is not None and tok.step_id == "b"
+
+
+# ── get_steps does not haul the payloads ────────────────────────────
+
+def test_get_steps_leaves_the_payload_columns_behind(sf: SkillFlow):
+    """`SELECT *` here meant every listing read every step's whole context.
+
+    The four JSON columns hold a step's resolved inputs and its output. On a
+    real run they are megabytes each, and the callers that ask "which steps are
+    done" want two small columns. Reading them anyway is what turned a
+    six-project dashboard listing into a minute of blocked event loop.
+    """
+    graph = _simple_graph()
+    sf.register_graph(graph)
+    run_id = sf.create_run("test")
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+    sf.confirm_step(claimed.token, StepResult(outputs={"big": "x" * 10_000}))
+
+    light = sf.get_steps(run_id)
+    assert light and light[0]["step_id"] == "a"
+    assert light[0]["status"] == "completed"
+    for column in ("outputs_json", "inputs_json", "step_config_json",
+                   "result_flags_json"):
+        # Omitted, not blanked: a caller that needs one must fail on the key
+        # rather than quietly read an empty payload.
+        assert column not in light[0], f"{column} came back uninvited"
+
+
+def test_the_payloads_are_still_there_for_whoever_asks(sf: SkillFlow):
+    graph = _simple_graph()
+    sf.register_graph(graph)
+    run_id = sf.create_run("test")
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+    sf.confirm_step(claimed.token, StepResult(outputs={"big": "x" * 10_000}))
+
+    full = sf.get_steps(run_id, include_payloads=True)
+    assert "x" * 10_000 in full[0]["outputs_json"]
+    assert "inputs_json" in full[0]
+
+
+def test_both_shapes_agree_on_order_and_identity(sf: SkillFlow):
+    """The light read must be a drop-in: same rows, same order, same ids —
+    callers sort and reverse these lists to find the last completed step."""
+    graph = _simple_graph()
+    sf.register_graph(graph)
+    run_id = sf.create_run("test")
+    sf.start_run(run_id)
+    for _ in range(3):
+        if sf.advance_run(run_id) is None:
+            break
+        c = sf.claim_next_step(run_id)
+        if c is None:
+            break
+        sf.confirm_step(c.token, StepResult())
+
+    light = sf.get_steps(run_id)
+    full = sf.get_steps(run_id, include_payloads=True)
+    assert [(s["id"], s["step_id"], s["status"]) for s in light] == \
+           [(s["id"], s["step_id"], s["status"]) for s in full]
