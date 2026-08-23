@@ -27,13 +27,20 @@ def _satisfied(p: Path) -> tuple[bool, str]:
     directory, and rejecting it for not being a regular file failed correct steps —
     the check's job is "did the declared output appear", not "is it a file".
     An EMPTY directory does not count: that is the silent-wrote-nothing case this
-    validation exists to catch, wearing a directory as a disguise.
+    validation exists to catch, wearing a directory as a disguise. Neither does an
+    EMPTY FILE — the same disguise in different clothes, and the one that actually
+    got through. Live, AItelier jinyong-usable 2026-08-23: nine consecutive t_plan
+    executions ended without writing anything, each promoted a 0-byte
+    `task_plan.md`, and `file_exists` passed all nine because the path was there.
+    The reviewer downstream had to be the one to say "the plan is empty (0 bytes)",
+    and each of those rejections cost a loop-back budget that exists for real
+    disagreements about the plan, not for the absence of one.
     """
     if not p.exists():
         return False, "not found"
     if p.is_dir():
         return (True, "") if any(p.iterdir()) else (False, "is an empty directory")
-    return True, ""
+    return (True, "") if p.stat().st_size > 0 else (False, "is empty (0 bytes)")
 
 
 def file_exists(files: list[str], *, workspace_root: str = "") -> dict:
@@ -48,7 +55,11 @@ def file_exists(files: list[str], *, workspace_root: str = "") -> dict:
             # `files: ["*"]` — the canonical "assert the step wrote something"
             # validation — into a guaranteed failure for any step that creates a
             # subdirectory. Match files only, and judge the pattern as a whole.
-            matched = [f for f in root.rglob(pattern) if f.is_file()]
+            # Same rule as the named case: a 0-byte file is not something that
+            # got written, so `files: ["*"]` — the canonical "assert this step
+            # wrote SOMETHING" validation — must not be satisfied by one.
+            matched = [f for f in root.rglob(pattern)
+                       if f.is_file() and f.stat().st_size > 0]
             if matched:
                 results += [{"file": str(f.relative_to(root)), "passed": True,
                              "error_message": ""} for f in matched]

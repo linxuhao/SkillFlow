@@ -45,6 +45,21 @@ class TestADeclaredDirectoryCounts:
         assert r["all_passed"] is False
         assert "empty directory" in r["results"][0]["error_message"]
 
+    def test_an_empty_file_does_not_either(self, tmp_path):
+        """The same disguise in different clothes — and the one that got through.
+
+        AItelier jinyong-usable 2026-08-23: a planner step ran nine times without
+        writing anything, promoted a 0-byte task_plan.md each time, and this
+        validation passed every one because the path existed. Saying "the plan is
+        empty" was left to the LLM reviewer downstream, and each rejection spent a
+        loop-back budget meant for real disagreements about a plan, not for the
+        absence of one.
+        """
+        (tmp_path / "task_plan.md").write_text("")
+        r = file_exists(["task_plan.md"], workspace_root=str(tmp_path))
+        assert r["all_passed"] is False
+        assert "0 bytes" in r["results"][0]["error_message"]
+
     def test_a_nested_file_still_passes(self, tmp_path):
         _tree(tmp_path)
         r = file_exists(["src/word_freq/server.py"], workspace_root=str(tmp_path))
