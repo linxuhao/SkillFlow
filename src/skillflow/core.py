@@ -4895,6 +4895,17 @@ class SkillFlow:
             if node.context:
                 from skillflow.read_tools import get_read_tool_names
                 allowed.update(get_read_tool_names(node.context))
+            # Addon toolset: compose's `add_tools` op parks extra tool names in
+            # the step's opaque config, and claim_next_step merges them into the
+            # schemas the agent is SHOWN. This allowlist never consulted them, so
+            # `add_tools` advertised a tool and then refused the call —
+            # `{"error": "Tool 'X' not allowed. Allowed: [...]"}`. Offered-then-
+            # denied is worse than never offered: it burns the agent's turn and
+            # reads to the model as a broken environment, which is exactly what a
+            # tool grant is supposed to prevent.
+            _extra = node.config.get("extra_tools") if isinstance(node.config, dict) else None
+            if _extra:
+                allowed.update(_extra)
 
         if allowed and name not in allowed:
             return {"error": f"Tool '{name}' not allowed. Allowed: {sorted(allowed)}"}

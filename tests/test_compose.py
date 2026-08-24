@@ -209,3 +209,51 @@ def test_composed_graph_passes_validation():
     from skillflow.graph import GraphResolver
     GraphResolver(g).validate()  # raises if invalid
     assert any(s.id == "compile" for s in g.steps)
+
+
+def test_add_tools_grant_is_offered_and_executable(tmp_path):
+    """An `add_tools` grant has to survive BOTH gates, not just the first.
+
+    Claim time merges `config.extra_tools` into the schemas the agent is SHOWN.
+    The execution allowlist in `_execute_tool_impl` was built from the agent
+    config, the write-tool schemas and the context read tools only — it never
+    read `extra_tools` — so the agent was offered the tool and then told
+    `Tool 'X' not allowed` when it called it. Offered-then-denied is worse than
+    never offered: it burns the turn and reads to the model as a broken
+    environment.
+
+    The older tests here stop at `step_config["extra_tools"]`, i.e. at "was it
+    granted" — which is exactly why the second half stayed broken.
+    """
+    from skillflow import SkillFlow
+    from tests.mocks import MockToolLoader
+
+    tools = MockToolLoader()
+    tools.register("gen_image_asset", lambda **kw: {"generated": True},
+                   schema={"name": "gen_image_asset", "description": "d",
+                           "parameters": {}})
+    tools.register("read_file", lambda **kw: {"content": ""},
+                   schema={"name": "read_file", "description": "d",
+                           "parameters": {}})
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=tools)
+    sf.register_agent_config("builder", model="mock", tools=["read_file"])
+
+    base = {"name": "grant", "begin": "a",
+            "steps": [{"id": "a", "step_type": "agent", "agent_config": "builder",
+                       "transitions": [{"to": None}]}]}
+    merged = compose_graph(base, [{"name": "h", "overlay": [
+        {"add_tools": "a", "tools": ["gen_image_asset"]}]}])
+    sf.register_graph(PipelineGraph._from_dict(merged))
+
+    run_id = sf.create_run("grant")
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+
+    # Half one: the agent is shown the tool.
+    assert "gen_image_asset" in claimed.inputs.get("_tool_schemas", {})
+
+    # Half two: and calling it is not refused.
+    res = sf.execute_tool("gen_image_asset", {}, run_id=run_id, step_id="a")
+    assert "not allowed" not in str(res.get("error", "")), res
+    assert res.get("generated") is True, res
