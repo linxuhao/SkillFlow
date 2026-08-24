@@ -256,3 +256,75 @@ class TestRepositoryRootConsistency:
             [_normalize_context_spec({"from": "repository", "path": "brief.md"})],
             current_config="dpe_default")
         assert "legacy brief" in (list(result.values()) or [""])[0]
+
+
+class TestInterfacesTruncationIsAnnounced:
+    """An `interfaces` extract must never look like the whole document.
+
+    It drops content twice — non-matching sections, then a byte cap — and used
+    to return `extracted[:8000]` bare. On a real 41 KB design doc that is an
+    81% cut with nothing marking it, so a reviewer handed the result reviews
+    against a fifth of the design believing it has all of it. `summary` mode
+    has always emitted "... [summary truncated]"; these bind the same promise
+    here, including the pointer to the read tools that can fetch the rest.
+    """
+
+    @staticmethod
+    def _doc(interface_body_chars: int, tail_chars: int = 0) -> str:
+        body = "\n".join(f"- GET /api/{i}" for i in range(interface_body_chars // 14))
+        doc = f"# Architecture\n## Interface\n{body}\n"
+        if tail_chars:
+            doc += "## Notes\n" + ("x" * tail_chars) + "\n"
+        return doc
+
+    def test_byte_cap_is_announced_and_names_the_file(self):
+        from skillflow.context import ContextResolver, _INTERFACES_MAX_CHARS
+        out = ContextResolver._extract_interfaces(
+            self._doc(_INTERFACES_MAX_CHARS * 3), "step2_design.md")
+        assert "TRUNCATED" in out
+        assert "step2_design.md" in out          # what to open
+        assert "read/search" in out              # how to open it
+        assert str(_INTERFACES_MAX_CHARS) in out  # how much was shown
+
+    def test_dropped_sections_are_announced_even_under_the_cap(self):
+        from skillflow.context import ContextResolver
+        out = ContextResolver._extract_interfaces(
+            self._doc(200, tail_chars=5000), "step2_design.md")
+        assert "GET /api/0" in out
+        assert "xxxx" not in out                 # non-interface section dropped…
+        assert "INTERFACES EXTRACT" in out       # …and said so
+        assert "step2_design.md" in out
+
+    def test_no_marker_when_nothing_was_dropped(self):
+        """A trailing-newline delta is not a truncation.
+
+        The extractor rebuilds with "\n".join(), losing the source's final
+        newline — so a naive length test marked a document that dropped
+        NOTHING as truncated. A marker that fires on complete documents is
+        one the reader learns to skip past on the cut that matters.
+        """
+        from skillflow.context import ContextResolver
+        whole = "## Interface\n- GET /api\n"
+        assert "\u26a0" not in ContextResolver._extract_interfaces(whole, "d.md")
+
+    def test_keyword_fallback_announces_the_line_cut(self):
+        from skillflow.context import ContextResolver
+        text = "# Misc\n" + "\n".join(f"line {i}" for i in range(400))
+        out = ContextResolver._extract_interfaces(text, "step2_design.md")
+        assert "NO INTERFACE SECTIONS FOUND" in out
+        assert "step2_design.md" in out
+        assert "read/search" in out
+
+    def test_marker_survives_the_real_resolve_path(self, workspace):
+        """The caller must pass the filename through — not just the helper."""
+        from skillflow.context import ContextResolver, _INTERFACES_MAX_CHARS
+        big = workspace / "dpe_default" / "2" / "big_design.md"
+        big.write_text(self._doc(_INTERFACES_MAX_CHARS * 3))
+        resolver = ContextResolver(workspace)
+        result = resolver.resolve(
+            [{"source": {"step": "2", "output": "big_design.md",
+                         "mode": "interfaces"}}],
+            current_config="dpe_default")
+        content = list(result.values())[0]
+        assert "TRUNCATED" in content
+        assert "big_design.md" in content

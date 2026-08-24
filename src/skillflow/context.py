@@ -47,6 +47,11 @@ FEEDBACK_LOG_PREAMBLE = (
     "it exists from your denial. Just leave X out.\n"
 )
 
+# Byte cap on an `interfaces` extract. Exceeding it is ANNOUNCED, never
+# silent — see _extract_interfaces for why an unmarked cut is worse than
+# a visible one.
+_INTERFACES_MAX_CHARS = 8000
+
 
 def feedback_log_path(config_dir: Path, step_id: str) -> Path:
     """Path of a step's accumulated checkpoint-feedback log."""
@@ -307,7 +312,7 @@ class ContextResolver:
             if len(lines) > 100:
                 content = "\n".join(lines[:100]) + "\n... [summary truncated]"
         elif mode == "interfaces":
-            content = self._extract_interfaces(content)
+            content = self._extract_interfaces(content, output_file)
 
         label = f"Step {step_id} — {output_file}"
         return label, content
@@ -444,8 +449,24 @@ class ContextResolver:
             return f"[{tool_name}]", ""
 
     @staticmethod
-    def _extract_interfaces(content: str) -> str:
-        """Extract API/interface sections from architecture docs."""
+    def _extract_interfaces(content: str, source_name: str = "") -> str:
+        """Extract API/interface sections from architecture docs.
+
+        LOSSY TWICE OVER — keyword-matched sections only, then a hard byte cap —
+        and BOTH losses are announced. A silent extract reads as the whole
+        document: an agent handed 8 KB under the heading "the architecture"
+        reviews against those 8 KB and passes a design it never saw. `summary`
+        mode has always emitted "... [summary truncated]"; this mode returned
+        `extracted[:8000]` bare, and on a real 41 KB design doc that dropped 81%
+        with nothing to mark it. An unannounced truncation is indistinguishable
+        from a short document.
+
+        The marker names the source file, because knowing something is missing
+        is only half of it — the reader also needs to know what to open. Every
+        step that resolves context this way also carries paged read/search
+        tools, so the full file is one call away once the reader knows to make
+        it.
+        """
         import re
         lines = content.splitlines()
         result: list[str] = []
@@ -476,8 +497,39 @@ class ContextResolver:
             elif in_section:
                 result.append(line)
 
+        where = f" of {source_name}" if source_name else ""
+        total = len(content)
+
         if not result:
-            return "\n".join(lines[:150]) + "\n... [no interface sections found]"
+            head = "\n".join(lines[:150])
+            return (
+                head + f"\n\n... ⚠️ NO INTERFACE SECTIONS FOUND{where} — the above "
+                f"is only the FIRST {min(150, len(lines))} of {len(lines)} lines "
+                f"({len(head)} of {total} chars). The rest is NOT shown. Read the "
+                "file directly (read/search, start_line/end_line) before "
+                "concluding anything about what is not above."
+            )
 
         extracted = "\n".join(result)
-        return extracted[:8000]
+        if len(extracted) > _INTERFACES_MAX_CHARS:
+            return (
+                extracted[:_INTERFACES_MAX_CHARS]
+                + f"\n\n... ⚠️ TRUNCATED{where} — showing {_INTERFACES_MAX_CHARS} of "
+                f"{len(extracted)} extracted chars, themselves an interfaces-only "
+                f"slice of a {total}-char document. Non-interface sections were "
+                "ALSO dropped. Anything past this point is NOT shown. Read the "
+                "file directly (read/search, start_line/end_line) before "
+                "concluding it is absent."
+            )
+        # Compare STRIPPED: the extractor rebuilds with "\n".join(), which loses
+        # the source's trailing newline, so a byte-length test calls a document
+        # that dropped nothing "truncated". A marker that cries wolf on a
+        # complete document teaches the reader to ignore it on a real cut.
+        if extracted.strip() != content.strip():
+            return (
+                extracted
+                + f"\n\n... ⚠️ INTERFACES EXTRACT{where} — {len(extracted)} of "
+                f"{total} chars. Non-interface sections were dropped. Read the "
+                "file directly (read/search) if you need them."
+            )
+        return extracted
