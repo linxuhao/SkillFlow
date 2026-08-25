@@ -1097,7 +1097,7 @@ class SkillFlow:
     _STEP_SUMMARY_COLUMNS = (
         "id, run_id, step_id, status, version, retry_count, "
         "validation_retry_count, max_retries, last_error, claimed_at, "
-        "claimed_by, claim_epoch, completed_at, completion_seq, "
+        "claimed_by, claim_epoch, completed_at, completion_seq, loop_item, "
         "created_at, updated_at"
     )
 
@@ -1322,10 +1322,12 @@ class SkillFlow:
                 UPDATE skillflow_steps SET status = 'claimed', version = version + 1,
                     claimed_at = ?, claimed_by = ?,
                     claim_epoch = COALESCE(claim_epoch, 0) + 1,
+                    loop_item = ?,
                     updated_at = datetime('now')
                 WHERE run_id = ? AND step_id = ? AND version = ? AND status = 'pending'
                 """,
                 (claimed_at_str, worker_identity("worker"),
+                 self._loop_item_in_tx(conn, resolver, run_id, run["current_node"]),
                  run_id, run["current_node"], ver),
             )
             if cursor.rowcount == 0:
@@ -3550,7 +3552,42 @@ class SkillFlow:
             )
             return None
 
-    def _claim_tool_step_in_tx(self, run_id: str, step_id: str, node) -> int | None:
+    def _loop_item_in_tx(self, conn, resolver, run_id: str, step_id: str) -> str | None:
+        """The loop item this step is being claimed FOR, or None outside a loop.
+
+        Read at claim, which is when it is true: the loop advances
+        ``current_item`` before releasing its body, and the same value already
+        drives per-item write promotion and read routing. Stamping it on the row
+        is what makes a body instance attributable afterwards — see
+        SKILLFLOW_STEPS.loop_item.
+
+        Unlike the read-routing map in ``claim_next_step``, this does NOT filter
+        to agent steps. That filter is about promotion (tool body steps write
+        flat), which has nothing to do with which item a tool step ran for.
+
+        Never raises: attribution is metadata, and a claim must not fail because
+        of it.
+        """
+        try:
+            loop_id = resolver.loop_of(step_id)
+            if not loop_id:
+                return None
+            row = conn.execute(
+                "SELECT current_item FROM skillflow_loop_state "
+                "WHERE run_id = ? AND loop_step_id = ?",
+                (run_id, loop_id),
+            ).fetchone()
+            item = row["current_item"] if row else None
+            if item is None or item == "":
+                return None
+            return item if isinstance(item, str) else self._serialize(item)
+        except Exception:
+            logging.getLogger("skillflow").debug(
+                "loop_item not resolved for %s/%s", run_id, step_id, exc_info=True)
+            return None
+
+    def _claim_tool_step_in_tx(self, run_id: str, step_id: str, node,
+                               resolver=None) -> int | None:
         """Atomically claim a tool step (pending→claimed) for inline execution.
 
         Returns the claimed step-instance id, or None if the step is not
@@ -3594,9 +3631,13 @@ class SkillFlow:
                 "UPDATE skillflow_steps SET status = 'claimed', version = version + 1, "
                 "claimed_at = ?, claimed_by = ?, "
                 "claim_epoch = COALESCE(claim_epoch, 0) + 1, "
+                "loop_item = ?, "
                 "updated_at = datetime('now') "
                 "WHERE run_id = ? AND step_id = ? AND version = ? AND status = 'pending'",
-                (claimed_at_str, worker_identity("tool-inline"), run_id, step_id, ver),
+                (claimed_at_str, worker_identity("tool-inline"),
+                 self._loop_item_in_tx(conn, resolver, run_id, step_id)
+                 if resolver is not None else None,
+                 run_id, step_id, ver),
             )
             if cur.rowcount == 0:
                 return None  # lost the race
@@ -3692,7 +3733,7 @@ class SkillFlow:
                 if tool_node and not self._should_delegate_tool(
                         tool_node.tool_name):
                     inst_id = self._claim_tool_step_in_tx(
-                        run_id, current, tool_node)
+                        run_id, current, tool_node, resolver)
                     if inst_id is None:
                         return None  # another driver owns this tool step
                     self.trace(run_id, "step", "claimed",

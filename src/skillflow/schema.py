@@ -85,6 +85,19 @@ CREATE TABLE IF NOT EXISTS skillflow_steps (
     -- last?") must sort by this, never by id: sorting by id sent a live run
     -- back to an hours-old reviewer instance and re-ran its transition.
     completion_seq          INTEGER,
+    -- WHICH loop item this instance ran for, stamped at claim from
+    -- skillflow_loop_state.current_item. NULL when the step is not in a loop
+    -- body, and on every row written before this column existed.
+    --
+    -- The loop body is the only place where step_id is NOT enough to say what
+    -- an instance did: a fan-out over six tasks runs t_impl six times (plus
+    -- retries, plus review loop-backs, so nine rows for six items is normal),
+    -- and nothing else on the row distinguishes them. Reconstructing it from
+    -- completion order does not work — retries and loop-backs interleave. The
+    -- per-item OUTPUT was always recoverable ({step}/{item}/ in the
+    -- workspace), but that is project-scoped and replaced in place, so it
+    -- cannot answer "what happened during THIS run".
+    loop_item               TEXT,
     created_at              TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (run_id) REFERENCES skillflow_runs(id)
@@ -206,4 +219,9 @@ SKILLFLOW_MIGRATIONS: list[str] = [
                     AND s2.id <= skillflow_steps.id))
        )
        WHERE status = 'completed' AND completion_seq IS NULL""",
+    # SF-27: loop-item attribution (see SKILLFLOW_STEPS.loop_item). Historical
+    # rows stay NULL on purpose — the information was never recorded, and
+    # guessing it from completion order would be wrong exactly where it matters
+    # (a retried or looped-back body step).
+    "ALTER TABLE skillflow_steps ADD COLUMN loop_item TEXT",
 ]
