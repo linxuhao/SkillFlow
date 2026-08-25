@@ -636,13 +636,39 @@ def execute_generic_create(params: dict, output_dir: str,
     if not safe_parts:
         return {"error": "Invalid filename: path traversal denied"}
     rel = str(Path(*safe_parts))
+
+    # An empty create is a failure, never a success. `content` is declared
+    # required in the schema but nothing enforced it here, so a caller that used
+    # the WRONG KEY — `new_str`, which is what the sibling `edit` tool takes —
+    # got `{"written": ...}` back for a zero-byte file. Naming the key it did
+    # send is the difference between one corrected call and a dead step.
+    content = _ensure_str(params.get("content", ""))
+    if not content:
+        alt = next((k for k in ("new_str", "text", "body", "contents", "data")
+                    if _ensure_str(params.get(k, ""))), "")
+        if alt:
+            return {"error": (f"create: no 'content' — you passed the text as "
+                              f"'{alt}'. create takes (file, content); it is "
+                              f"'edit' that takes old_str/new_str.")}
+        return {"error": (f"create: 'content' is empty — refusing to write a "
+                          f"zero-byte '{rel}'. An empty file passes 'does the "
+                          f"file exist' checks and then delivers nothing.")}
+
     staged = Path(output_dir) / rel
     repo = (Path(source_dir) / rel) if source_dir else None
-    if staged.exists() or (repo is not None and repo.exists()):
+    # An EXISTING BUT EMPTY file may be created over. Refusing it is a trap with
+    # no legal move out: `create` says "use edit", and `edit` requires a
+    # non-empty `old_str` that an empty file cannot supply — so a zero-byte file
+    # could never be repaired, and an agent that produced one burned every
+    # remaining turn oscillating between the two errors before the step died
+    # with "no file writes produced". There is nothing to clobber.
+    def _blocking(p: "Path | None") -> bool:
+        return p is not None and p.exists() and p.stat().st_size > 0
+    if _blocking(staged) or _blocking(repo):
         return {"error": (f"create: '{rel}' already exists — use 'edit' to change "
                           f"an existing file (create is for new files only).")}
     staged.parent.mkdir(parents=True, exist_ok=True)
-    staged.write_text(_ensure_str(params.get("content", "")), encoding="utf-8")
+    staged.write_text(content, encoding="utf-8")
     return {"written": rel}
 
 
