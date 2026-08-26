@@ -1984,3 +1984,43 @@ def test_both_shapes_agree_on_order_and_identity(sf: SkillFlow):
     full = sf.get_steps(run_id, include_payloads=True)
     assert [(s["id"], s["step_id"], s["status"]) for s in light] == \
            [(s["id"], s["step_id"], s["status"]) for s in full]
+
+
+def test_claim_trace_counts_step_instances(sf: SkillFlow):
+    """`instance_n` makes a re-run visible in the trace.
+
+    `attempt_feedback` answers a narrower question than it reads as: true only
+    when `_feedback` was INJECTED (a checkpoint rejection, or a tool edge
+    declaring `feedback: true`). A reviewer that rejects through a verdict file
+    injects nothing — the maker re-reads the verdict through its own
+    `{step: <reviewer>}` context source — so a loop body can re-run over an item
+    with `attempt_feedback` false on every claim. Measured on a live pipeline:
+    232 claims of one implementer step, `attempt_feedback` false on all of them,
+    while 13% of its items had actually been sent back and re-run.
+    """
+    graph = PipelineGraph(
+        name="t", begin="a",
+        steps=[_agent("a", [_trans("b")]),
+               _agent("b", [_trans("a", max_loop=2)])],
+    )
+    sf.register_graph(graph)
+    run_id = sf.create_run("t")
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+
+    seen = []
+    for _ in range(3):
+        claimed = sf.claim_next_step(run_id)
+        assert claimed is not None
+        rows = [r for r in sf.get_trace(run_id, category="step")
+                if r["event"] == "claimed"]
+        payload = rows[-1]["payload"]
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        seen.append((claimed.step_id, payload["instance_n"]))
+        sf.confirm_step(claimed.token, StepResult(outputs={}, flags={}))
+        sf.advance_run(run_id)
+
+    assert seen[0] == ("a", 1)
+    assert seen[1] == ("b", 1)
+    assert seen[2] == ("a", 2)   # the re-run is visible without loop bookkeeping

@@ -1719,11 +1719,26 @@ class SkillFlow:
                 self.trace(_rid, category, event, payload,
                            step_id=_sid, step_instance_id=_inst)
 
+            # How many instances of this step the run has already created.
+            # `attempt_feedback` answers a NARROWER question than it reads as:
+            # it is true only when `_feedback` was INJECTED (a checkpoint
+            # rejection, or a tool edge declaring `feedback: true`). A reviewer
+            # that rejects through a verdict file injects nothing — the maker
+            # re-reads the verdict through its own `{step: <reviewer>}` context
+            # source — so a loop body can re-run three times over one item with
+            # `attempt_feedback` false on every claim, and the trace shows no
+            # rework at all. Counting instances is how "this step ran again"
+            # becomes answerable without reconstructing it from loop items.
+            _instance_n = conn.execute(
+                "SELECT COUNT(*) FROM skillflow_steps WHERE run_id = ? AND step_id = ?",
+                (token.run_id, claimed_step_id),
+            ).fetchone()[0]
             # Record the claim itself, so the trace shows step boundaries +
             # any reopen reason (reject feedback / validation error).
             _trace("step", "claimed", {
                 "attempt_feedback": bool(inputs_with_tools.get("_feedback")),
                 "validation_error": validation_error,
+                "instance_n": _instance_n,
             })
 
             # Wire emit to notification bus so host-internal events
