@@ -25,9 +25,15 @@ class StepValidator:
     """Runs validation tool specs against step output files."""
 
     def __init__(self, tool_loader: "ToolLoader", workspace_root: Path,
-                 trace_sink=None):
+                 trace_sink=None, config_name: str = ""):
         self._tool_loader = tool_loader
         self._workspace_root = Path(workspace_root)
+        # Which pipeline this validation belongs to. A validation tool that has
+        # to consult per-pipeline state (e.g. "is this capability one this
+        # pipeline offers?") otherwise receives an empty name and evaluates
+        # against nothing — passing or failing for a reason unrelated to the
+        # files it was handed.
+        self._config_name = config_name
         # Optional callable(event: str, payload: dict) — pre-bound by the caller
         # with run/step ids so validation/check tools land in the run trace too.
         self._trace_sink = trace_sink
@@ -77,6 +83,8 @@ class StepValidator:
 
             base_kwargs = {k: v for k, v in spec.items()
                           if k not in ("files", "file", "tool", "on_failure", "max_retries")}
+            if self._config_name:
+                base_kwargs.setdefault("config_name", self._config_name)
 
             if takes_plural:
                 # Batch tool (e.g. json_schema): pass all file patterns

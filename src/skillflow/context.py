@@ -184,7 +184,7 @@ class ContextResolver:
         if source_type == "repository":
             return self._resolve_repository(source)
         if "tool" in source:
-            return self._resolve_tool(source)
+            return self._resolve_tool(source, current_config)
         return "", ""
 
     def _resolve_cross_config(self, source: dict, current_config: str) -> tuple[str, str]:
@@ -433,7 +433,8 @@ class ContextResolver:
             return f"Repository — {rel_path}", "\n\n".join(parts)
         return "", ""
 
-    def _resolve_tool(self, source: dict) -> tuple[str, str]:
+    def _resolve_tool(self, source: dict,
+                      current_config: str = "") -> tuple[str, str]:
         tool_name = source["tool"]
         if not self._tool_loader:
             return f"[{tool_name}]", ""
@@ -446,6 +447,10 @@ class ContextResolver:
             call_kwargs = {
                 "workspace_root": str(self._workspace_root),
                 "project_root": str(self._code_root),
+                # Which pipeline is reading. A context tool that answers a
+                # per-pipeline question (what does THIS graph offer?) otherwise
+                # gets an empty name and silently answers about everything.
+                "config_name": current_config or "",
             }
             # Add the reading step's capability context (e.g. state_dir), then
             # drop any kwarg the tool doesn't accept (unless it takes **kwargs).

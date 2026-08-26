@@ -375,7 +375,14 @@ class PipelineGraph:
                     sd["checkpoint_reject_to"] = s.checkpoint_reject_to
             if s.max_retries != 3:
                 sd["max_retries"] = s.max_retries
-            if s.timeout_seconds:
+            # `is not None`, not truthiness: 0 means "no timeout" per the field's
+            # own docstring, and dropping it as falsy let _from_dict restore the
+            # 600s default. Same class as the `capability` bug fixed alongside —
+            # register_graph persists to_dict() and compose round-trips through
+            # it, so the declaration survived only in the process that parsed the
+            # YAML, while any worker reloading from the DB killed the step at 10
+            # minutes.
+            if s.timeout_seconds is not None:
                 sd["timeout_seconds"] = s.timeout_seconds
             if s.max_tool_turns:
                 sd["max_tool_turns"] = s.max_tool_turns
@@ -689,7 +696,32 @@ class GraphResolver:
         issues.extend(self._validate_transition_targets())
         issues.extend(self._validate_reachability())
         issues.extend(self._validate_cycle_safety())
+        issues.extend(self._validate_capability_offers())
 
+        return issues
+
+    def _validate_capability_offers(self) -> list[str]:
+        """A step declaring a capability the graph does not offer.
+
+        Only the STATIC forms are knowable here (a `{from_item: ...}` list exists
+        only at runtime). Catching it at registration matters for the same reason
+        the forge checks role models at emit: the runtime alternative is one
+        warning per claim, long after the author could have fixed it, on a step
+        that just quietly runs without the tools it asked for.
+        """
+        offers = set(self._graph.capabilities or ())
+        if not offers:
+            return []
+        issues: list[str] = []
+        for s in self._graph.steps:
+            cap = getattr(s, "capability", "") or ""
+            names = [cap] if isinstance(cap, str) and cap else (
+                [c for c in cap if c] if isinstance(cap, list) else [])
+            for n in names:
+                if n not in offers:
+                    issues.append(
+                        f"Step '{s.id}' declares capability '{n}', which is not "
+                        f"in this graph's capabilities: {sorted(offers)}")
         return issues
 
     def _validate_basic(self) -> list[str]:

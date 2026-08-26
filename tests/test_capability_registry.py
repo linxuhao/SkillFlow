@@ -238,19 +238,81 @@ def test_a_list_of_capabilities_grants_the_union(tmp_path):
     assert "write" in schemas and "pytest" in schemas
 
 
-def test_a_capability_the_graph_does_not_offer_is_refused(tmp_path):
-    """The offer list is the engine's own gate, not just the palette's filter.
+def test_a_card_cannot_grant_what_the_graph_does_not_offer(tmp_path):
+    """The offer list bounds what DATA may grant.
 
-    Whatever produced the name — a PM's task card, a hand edit — a pipeline
-    grants only what it advertises. Without this check the card is the only
-    authority, and editing a JSON file grants tools.
+    A task card is agent-authored: without this gate, writing a JSON file grants
+    tools. Note the asymmetry — a name written into the GRAPH is the author's own
+    declaration and is honoured (a graph with no offer list keeps working), while
+    a name arriving from a card is refused unless advertised. An empty offer list
+    therefore refuses every card-declared name rather than waving them through,
+    which an earlier `and offers` short-circuit got backwards.
+    """
+    import json as _json
+    tools = MockToolLoader()
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=tools,
+                   workspace_base=str(tmp_path / "ws"))
+    sf.register_agent_config("builder", tools=["read_file"])
+    sf.register_capability("tool_creation", tools=["register_tool"])
+    g = _cap_graph({"from_item": "capabilities", "card": "3/card.json"},
+                   offers=["something_else"], name="cardgate")
+    sf.register_graph(g)
+    run_id = sf.create_run("cardgate", {"project_id": "p"})
+    d = sf._workspace.get_step_dir("p", "cardgate", "3")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "card.json").write_text(_json.dumps({"capabilities": ["tool_creation"]}))
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+    assert "register_tool" not in claimed.inputs.get("_tool_schemas", {})
+
+
+def test_a_graph_with_no_offer_list_still_honours_its_own_declaration(tmp_path):
+    """Backwards compatibility, and the reason the gate is provenance-aware:
+    every graph that already declares `capability:` (pipeline_forge does) has no
+    offer list, and requiring one would revoke their grants."""
+    tools = MockToolLoader()
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=tools)
+    sf.register_agent_config("builder", tools=["read_file"])
+    sf.register_capability("tool_creation", tools=["register_tool"])
+    claimed = _claim(sf, _cap_graph("tool_creation", name="nolist"))
+    assert "register_tool" in claimed.inputs.get("_tool_schemas", {})
+
+
+def test_a_static_capability_outside_the_offer_list_fails_registration(tmp_path):
+    """Knowable statically → rejected at register_graph, not once per claim."""
+    import pytest as _pytest
+    from skillflow.exceptions import GraphValidationError
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=MockToolLoader())
+    sf.register_agent_config("builder", tools=["read_file"])
+    with _pytest.raises(GraphValidationError):
+        sf.register_graph(_cap_graph("tool_creation", offers=["other"],
+                                     name="contradiction"))
+
+
+def test_a_granted_tool_can_actually_be_called(tmp_path):
+    """Offered-then-denied is worse than never offered.
+
+    claim_next_step SHOWS the agent every tool a capability grants; the execution
+    allowlist decides whether the call is honoured, and it never consulted
+    capabilities — so `capability: "tool_creation"` advertised register_tool and
+    then answered "Tool 'register_tool' not allowed". The same bug had already
+    been fixed once for the addon `add_tools` channel, one lane over.
     """
     tools = MockToolLoader()
     sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=tools)
     sf.register_agent_config("builder", tools=["read_file"])
     sf.register_capability("tool_creation", tools=["register_tool"])
-    claimed = _claim(sf, _cap_graph("tool_creation", offers=["something_else"]))
-    assert "register_tool" not in claimed.inputs.get("_tool_schemas", {})
+    claimed = _claim(sf, _cap_graph("tool_creation", name="callable"))
+    assert "register_tool" in claimed.inputs.get("_tool_schemas", {})
+    # The mock loader has no fn for it, so the call gets as far as loading and
+    # raises — which is the point: it is no longer REFUSED by the gate.
+    try:
+        out = sf.execute_tool("register_tool", {}, run_id=claimed.token.run_id,
+                              step_id="build")
+    except ImportError:
+        out = {}
+    assert "not allowed" not in str(out.get("error", ""))
 
 
 def test_briefing_reaches_the_step_that_holds_the_capability(tmp_path):
@@ -340,3 +402,80 @@ def test_from_item_with_a_card_that_declares_nothing_grants_nothing(tmp_path):
     sf.advance_run(run_id)
     claimed = sf.claim_next_step(run_id)
     assert "write" not in claimed.inputs.get("_tool_schemas", {})
+
+
+def test_a_card_declared_capability_still_hands_its_tools_the_state_dir(tmp_path):
+    """The kwargs half of a `{from_item:}` grant.
+
+    The three kwarg paths (context-source tool, tool node, agent-invoked tool)
+    re-derived the capability from the NODE, which for a card declaration needs
+    the loop item's card they do not have — so they resolved to nothing. The
+    task got the tools and then let them pick their own directories, which is
+    the `Path.home()/".aitelier"` failure the whole mechanism exists to prevent.
+    """
+    import json as _json
+    tools = MockToolLoader()
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=tools,
+                   workspace_base=str(tmp_path / "ws"))
+    sf.register_agent_config("builder", tools=["read_file"])
+    sf.register_capability(
+        "stateful", tools=["write"],
+        context_provider=lambda cfg: {"state_dir": f"/state/{cfg}"})
+    g = _cap_graph({"from_item": "capabilities", "card": "3/card.json"},
+                   offers=["stateful"], name="kwargs")
+    sf.register_graph(g)
+    run_id = sf.create_run("kwargs", {"project_id": "p"})
+    d = sf._workspace.get_step_dir("p", "kwargs", "3")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "card.json").write_text(_json.dumps({"capabilities": ["stateful"]}))
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+    assert claimed.inputs.get("_capabilities") == ["stateful"]
+    node = sf._get_resolver("kwargs").get_node("build")
+    kw = sf._capability_context(node, "kwargs",
+                                names=sf._granted_capabilities(run_id, "build"))
+    assert kw == {"state_dir": "/state/kwargs"}
+
+
+def test_a_capability_card_cannot_escape_the_config_directory(tmp_path):
+    """`card:` interpolates a loop item read out of an LLM-authored manifest."""
+    import json as _json
+    tools = MockToolLoader()
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=tools,
+                   workspace_base=str(tmp_path / "ws"))
+    sf.register_agent_config("builder", tools=["read_file"])
+    sf.register_capability("stateful", tools=["write"])
+    outside = tmp_path / "outside.json"
+    outside.write_text(_json.dumps({"capabilities": ["stateful"]}))
+    g = _cap_graph({"from_item": "capabilities",
+                    "card": "3/../../../../outside.json"},
+                   offers=["stateful"], name="escape")
+    sf.register_graph(g)
+    run_id = sf.create_run("escape", {"project_id": "p"})
+    d = sf._workspace.get_step_dir("p", "escape", "3")
+    d.mkdir(parents=True, exist_ok=True)
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+    assert claimed.inputs.get("_capabilities") == []
+    assert "write" not in claimed.inputs.get("_tool_schemas", {})
+
+
+def test_conflicting_capability_kwargs_do_not_wedge_the_run(tmp_path):
+    """Two capabilities disagreeing about a key is an author error; it must not
+    take the run down. Raising did: the tool-node path let it escape advance_run
+    (the run then sat at its node forever, failing nothing), and the claim path
+    swallowed it into a step with no context at all."""
+    tools = MockToolLoader()
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=tools)
+    sf.register_agent_config("builder", tools=["read_file"])
+    sf.register_capability("a", tools=["write"],
+                           context_provider=lambda cfg: {"state_dir": "/A"})
+    sf.register_capability("b", tools=["pytest"],
+                           context_provider=lambda cfg: {"state_dir": "/B"})
+    g = _cap_graph(["a", "b"], offers=["a", "b"], name="clash")
+    sf.register_graph(g)
+    node = sf._get_resolver("clash").get_node("build")
+    kw = sf._capability_context(node, "clash", offers=["a", "b"])
+    assert "state_dir" not in kw          # omitted, not guessed
