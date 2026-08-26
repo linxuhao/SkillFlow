@@ -185,3 +185,158 @@ def test_capability_injects_state_dir_into_context_source_tool(tmp_path):
     sf.advance_run(run_id)
     sf.claim_next_step(run_id)          # claim resolves context → invokes loader
     assert captured.get("state_dir") == str(sf._workspace.state_dir("ctxtool")), captured
+
+
+# ── Batch 1: declaration forms, offer lists, briefings, ownership ─────────
+def _cap_graph(cap, *, offers=None, name="captest"):
+    g = PipelineGraph(
+        name=name, begin="build",
+        steps=[
+            StepNode(id="build", step_type="agent", agent_config="builder",
+                     capability=cap, transitions=[Transition(to="done")]),
+            StepNode(id="done", step_type="gate", transitions=[]),
+        ],
+        end_conditions=_end())
+    if offers is not None:
+        g.capabilities = list(offers)
+    return g
+
+
+def _claim(sf, graph):
+    sf.register_graph(graph)
+    run_id = sf.create_run(graph.name)
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    return sf.claim_next_step(run_id)
+
+
+def test_capability_survives_serialization(tmp_path):
+    """A step's `capability` must round-trip through to_dict/from_dict.
+
+    It never did: `to_dict` simply did not emit the field, and registration
+    persists `graph.to_dict()` while `compose_config` round-trips through it.
+    So the declaration lived only in the object parsed straight from YAML in
+    that process — every composed config, and every graph reloaded from the DB,
+    silently lost it. Verified on the live deployment: pipeline_forge declares
+    `capability: "tool_creation"` in its YAML and the stored graph had the key
+    on no step at all.
+    """
+    g = _cap_graph("tool_creation", offers=["tool_creation"])
+    back = PipelineGraph._from_dict(g.to_dict())
+    assert back.steps[0].capability == "tool_creation"
+    assert back.capabilities == ["tool_creation"]
+
+
+def test_a_list_of_capabilities_grants_the_union(tmp_path):
+    tools = MockToolLoader()
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=tools)
+    sf.register_agent_config("builder", tools=["read_file"])
+    sf.register_capability("a", tools=["write"])
+    sf.register_capability("b", tools=["pytest"])
+    claimed = _claim(sf, _cap_graph(["a", "b"], offers=["a", "b"]))
+    schemas = claimed.inputs.get("_tool_schemas", {})
+    assert "write" in schemas and "pytest" in schemas
+
+
+def test_a_capability_the_graph_does_not_offer_is_refused(tmp_path):
+    """The offer list is the engine's own gate, not just the palette's filter.
+
+    Whatever produced the name — a PM's task card, a hand edit — a pipeline
+    grants only what it advertises. Without this check the card is the only
+    authority, and editing a JSON file grants tools.
+    """
+    tools = MockToolLoader()
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=tools)
+    sf.register_agent_config("builder", tools=["read_file"])
+    sf.register_capability("tool_creation", tools=["register_tool"])
+    claimed = _claim(sf, _cap_graph("tool_creation", offers=["something_else"]))
+    assert "register_tool" not in claimed.inputs.get("_tool_schemas", {})
+
+
+def test_briefing_reaches_the_step_that_holds_the_capability(tmp_path):
+    tools = MockToolLoader()
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=tools)
+    sf.register_agent_config("builder", tools=["read_file"])
+    sf.register_capability("game_assets", tools=["write"],
+                           briefing="transparent=true is mandatory")
+    claimed = _claim(sf, _cap_graph("game_assets", offers=["game_assets"]))
+    rc = claimed.inputs.get("_resolved_context") or {}
+    assert any("transparent=true is mandatory" in str(v) for v in rc.values())
+    assert claimed.inputs.get("_capabilities") == ["game_assets"]
+
+
+def test_a_step_without_the_capability_carries_no_briefing(tmp_path):
+    """The whole point: an unheld capability costs nothing, not even its text."""
+    tools = MockToolLoader()
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=tools)
+    sf.register_agent_config("builder", tools=["read_file"])
+    sf.register_capability("game_assets", tools=["write"], briefing="…")
+    claimed = _claim(sf, _cap_graph("", offers=["game_assets"]))
+    rc = claimed.inputs.get("_resolved_context") or {}
+    assert not any("capability:" in str(k) for k in rc)
+    assert "write" not in claimed.inputs.get("_tool_schemas", {})
+
+
+def test_redefinition_by_another_owner_is_refused(tmp_path):
+    """Same owner re-registering is an edit; a different owner is a silent
+    substitution of what every holder is granted."""
+    sf = SkillFlow(str(tmp_path / "t.db"))
+    sf.register_capability("game_assets", tools=["a"], owner="addon:game_harness")
+    sf.register_capability("game_assets", tools=["a", "b"],
+                           owner="addon:game_harness")          # edit: fine
+    import pytest
+    with pytest.raises(ValueError) as e:
+        sf.register_capability("game_assets", tools=["x"], owner="gen:evil")
+    assert "already registered" in str(e.value)
+
+
+def test_from_item_reads_the_loop_item_card(tmp_path):
+    """`{from_item: ...}` grants per TASK, not per step.
+
+    The card is named by the declaration (`card:`), interpolated with the same
+    loop variables the context sources use.
+    """
+    tools = MockToolLoader()
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=tools,
+                   workspace_base=str(tmp_path / "ws"))
+    ws = sf._workspace
+    sf.register_agent_config("builder", tools=["read_file"])
+    sf.register_capability("game_assets", tools=["write"],
+                           briefing="pin the subject")
+
+    import json as _json
+    g = _cap_graph({"from_item": "capabilities",
+                    "card": "3/tasks/card.json"},
+                   offers=["game_assets"], name="fromitem")
+    sf.register_graph(g)
+    run_id = sf.create_run("fromitem", {"project_id": "p"})
+    card_dir = ws.get_step_dir("p", "fromitem", "3") / "tasks"
+    card_dir.mkdir(parents=True, exist_ok=True)
+    (card_dir / "card.json").write_text(
+        _json.dumps({"id": "t1", "capabilities": ["game_assets"]}))
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+    assert "write" in claimed.inputs.get("_tool_schemas", {})
+    assert claimed.inputs.get("_capabilities") == ["game_assets"]
+
+
+def test_from_item_with_a_card_that_declares_nothing_grants_nothing(tmp_path):
+    tools = MockToolLoader()
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=tools,
+                   workspace_base=str(tmp_path / "ws"))
+    ws = sf._workspace
+    sf.register_agent_config("builder", tools=["read_file"])
+    sf.register_capability("game_assets", tools=["write"])
+    import json as _json
+    g = _cap_graph({"from_item": "capabilities", "card": "3/tasks/card.json"},
+                   offers=["game_assets"], name="fromitem2")
+    sf.register_graph(g)
+    run_id = sf.create_run("fromitem2", {"project_id": "p"})
+    d = ws.get_step_dir("p", "fromitem2", "3") / "tasks"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "card.json").write_text(_json.dumps({"id": "t1"}))
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+    assert "write" not in claimed.inputs.get("_tool_schemas", {})

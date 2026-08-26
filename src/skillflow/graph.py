@@ -128,7 +128,12 @@ class StepNode:
     tool_name: str = ""
     tool_params: dict = field(default_factory=dict)
     agent_config: str = ""
-    capability: str = ""  # v2: framework-provisioned toolset + injected context (host capability registry)
+    # v2: framework-provisioned toolset + injected context (host capability
+    # registry). One of: a name ("stateful"), a list of names, or
+    # {from_item: "<card field>"} to read the list off the loop item this
+    # instance is running — declared, never inferred, so a reader can see
+    # where a grant came from.
+    capability: object = ""
     context: list[dict] = field(default_factory=list)
     output_mode: str = ""
     output_fixed: dict = field(default_factory=dict)
@@ -222,6 +227,11 @@ class PipelineGraph:
     begin: str = ""
     steps: list[StepNode] = field(default_factory=list)
     end_conditions: EndConditions | None = None
+    # Capabilities this graph OFFERS. Definitions are global (the host registry);
+    # this is the per-graph visibility list a declarer may choose from, and the
+    # engine's own gate at claim time. A first-class field rather than host
+    # metadata precisely because the engine enforces it. Composition unions it.
+    capabilities: list[str] = field(default_factory=list)
     # Named references to steps (``@name`` → step id) that overlays target when
     # this graph is used as a composition base. Preserved through the registry
     # (unlike compose_graph, which strips them from the *composed result*) so a
@@ -344,6 +354,7 @@ class PipelineGraph:
             steps=steps,
             end_conditions=end_conditions,
             anchors=data.get("anchors", {}) or {},
+            capabilities=list(data.get("capabilities", []) or []),
         )
 
     def to_dict(self) -> dict:
@@ -382,6 +393,8 @@ class PipelineGraph:
                 sd["notify"] = s.notify
             if s.agent_config:
                 sd["agent_config"] = s.agent_config
+            if s.capability:
+                sd["capability"] = s.capability
             if s.context:
                 sd["context"] = s.context
             if s.output_mode:
@@ -421,6 +434,8 @@ class PipelineGraph:
             "begin": self.begin,
             "steps": steps_data,
         }
+        if self.capabilities:
+            result["capabilities"] = list(self.capabilities)
         if self.description:
             result["description"] = self.description
         if self.end_conditions:

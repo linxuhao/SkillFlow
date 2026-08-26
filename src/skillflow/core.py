@@ -666,7 +666,8 @@ class SkillFlow:
 
     # ── Capability registry ─────────────────────────────────────────
     def register_capability(self, name: str, *, tools=(),
-                            context_provider=None) -> None:
+                            context_provider=None, briefing: str = "",
+                            owner: str = "host") -> None:
         """Register a capability: a step keyword the FRAMEWORK expands into a
         curated toolset + injected context.
 
@@ -683,9 +684,23 @@ class SkillFlow:
         typically closes over the workspace). ``tools`` is a list of tool names.
         Either may be omitted.
         """
+        prev = self._capabilities.get(name)
+        if prev is not None and prev.get("owner", "host") != owner:
+            # Re-registering under the SAME owner is how an edit lands (the
+            # generate → drive → fix loop). A different owner is not an edit: it
+            # silently changes what every step holding this capability is
+            # granted, with nothing in the log to read afterwards. In a registry
+            # fed by the base, addons and generated artifacts, that is the one
+            # write that must never be quiet.
+            raise ValueError(
+                f"capability {name!r} is already registered by "
+                f"{prev.get('owner', 'host')!r}; {owner!r} cannot redefine it. "
+                "Pick another name, or archive the existing one first.")
         self._capabilities[name] = {
             "tools": list(tools or ()),
             "context_provider": context_provider,
+            "briefing": briefing or "",
+            "owner": owner,
         }
 
     def _resolve_tool_schema(self, name: str, *, owner: str):
@@ -731,27 +746,147 @@ class SkillFlow:
                 out[owner] = sorted(names)
         return out
 
-    def _capability_of(self, node) -> dict | None:
-        cap = getattr(node, "capability", "") or ""
-        return self._capabilities.get(cap) if cap else None
+    @staticmethod
+    def _declared_capability_names(node, item_card: dict | None = None) -> list[str]:
+        """The capability names a step instance declares.
 
-    def _capability_context(self, node, config_name: str) -> dict:
-        """Extra kwargs a step's capability injects into its tool calls."""
-        cap = self._capability_of(node)
-        if not cap:
-            return {}
-        provider = cap.get("context_provider")
-        if not provider:
-            return {}
+        Three forms, all explicit: a name, a list of names, or
+        ``{from_item: "<field>"}`` which reads the list off the loop item's card.
+        `from_item` is written down rather than inferred for the same reason
+        `repo_mode` is: a grant that appears from nowhere cannot be traced back
+        when it is missing.
+        """
+        cap = getattr(node, "capability", "") or ""
+        if isinstance(cap, str):
+            return [cap] if cap else []
+        if isinstance(cap, list):
+            return [c for c in cap if c]
+        if isinstance(cap, dict):
+            field = cap.get("from_item") or ""
+            if not field or not isinstance(item_card, dict):
+                return []
+            got = item_card.get(field) or []
+            if isinstance(got, str):
+                got = [got]
+            return [c for c in got if isinstance(c, str) and c]
+        return []
+
+    def _capabilities_for(self, node, item_card: dict | None = None,
+                          offers: list[str] | None = None) -> list[tuple[str, dict]]:
+        """Registered ``(name, capability)`` pairs this step instance holds.
+
+        A name the graph does not OFFER is refused here as well as at whatever
+        gate produced it: the offer list is the engine's own check, so a
+        hand-edited task card cannot grant itself tools that the pipeline never
+        advertised. A name that is offered but not registered is a deployment
+        gap, and is warned about rather than silently skipped.
+        """
+        out: list[tuple[str, dict]] = []
+        for name in self._declared_capability_names(node, item_card):
+            if offers is not None and offers and name not in offers:
+                logging.getLogger("skillflow").warning(
+                    "step %s declares capability %r, which this graph does not "
+                    "offer — refused", getattr(node, "id", "?"), name)
+                continue
+            cap = self._capabilities.get(name)
+            if cap is None:
+                logging.getLogger("skillflow").warning(
+                    "step %s declares capability %r, which is not registered on "
+                    "this deployment — granting nothing",
+                    getattr(node, "id", "?"), name)
+                continue
+            out.append((name, cap))
+        return out
+
+    def _capability_item_card(self, node, run, loop_context) -> dict | None:
+        """The loop item's card, for a ``{from_item: ...}`` declaration.
+
+        Two shapes, because loops carry two: an item that IS a dict answers
+        directly; a loop over names (DPE's task manifest is a list of task ids)
+        needs the file that names it, which the declaration points at:
+
+            capability: { from_item: "capabilities", card: "3/tasks/$current_task.json" }
+
+        The path is interpolated from the same loop variables the context sources
+        use, so there is one substitution rule in the config, not two.
+        """
+        cap = getattr(node, "capability", "") or ""
+        if not isinstance(cap, dict) or not cap.get("from_item"):
+            return None
+        if loop_context:
+            _lid = loop_context.get("_reader_loop") or ""
+            _item = (loop_context.get("_loop_items") or {}).get(_lid)
+            if isinstance(_item, dict):
+                return _item
+        card = cap.get("card") or ""
+        if not card or not self._workspace:
+            return None
+        import re as _re
+        if "$" in card and loop_context:
+            def _sub(m):
+                v = m.group(1)
+                return str(loop_context.get(f"[{v}]", loop_context.get(v, m.group(0))))
+            card = _re.sub(r"\$(\w+)", _sub, card)
         try:
-            out = provider(config_name) or {}
-            return dict(out) if isinstance(out, dict) else {}
+            step_part, _, file_part = card.partition("/")
+            path = self._workspace.get_step_dir(
+                run["project_id"], run["graph_name"], step_part) / file_part
+            if not path.is_file():
+                logging.getLogger("skillflow").warning(
+                    "step %s reads capabilities from %s, which does not exist — "
+                    "granting nothing", getattr(node, "id", "?"), card)
+                return None
+            return json.loads(path.read_text(encoding="utf-8"))
         except Exception:
-            import logging
             logging.getLogger("skillflow").warning(
-                "capability context_provider for step %s failed",
-                getattr(node, "id", "?"), exc_info=True)
-            return {}
+                "step %s could not read its capability card %s",
+                getattr(node, "id", "?"), card, exc_info=True)
+            return None
+
+    def _capability_of(self, node) -> dict | None:
+        """First registered capability of a STATIC declaration (legacy readers)."""
+        names = self._declared_capability_names(node)
+        for n in names:
+            cap = self._capabilities.get(n)
+            if cap is not None:
+                return cap
+        return None
+
+    def _capability_context(self, node, config_name: str,
+                            item_card: dict | None = None,
+                            offers: list[str] | None = None) -> dict:
+        """Extra kwargs a step's capabilities inject into its tool calls.
+
+        Several capabilities may apply to one step, so their kwargs are merged —
+        and a KEY COLLISION RAISES. Two capabilities disagreeing about
+        `state_dir` is not a preference to resolve by ordering; letting the last
+        writer win hands a tool a directory chosen by registration order, which
+        is exactly the class of bug `stateful` exists to prevent.
+        """
+        merged: dict = {}
+        source: dict[str, str] = {}
+        for name, cap in self._capabilities_for(node, item_card, offers):
+            provider = cap.get("context_provider")
+            if not provider:
+                continue
+            try:
+                out = provider(config_name) or {}
+            except Exception:
+                logging.getLogger("skillflow").warning(
+                    "capability %r context_provider for step %s failed",
+                    name, getattr(node, "id", "?"), exc_info=True)
+                continue
+            if not isinstance(out, dict):
+                continue
+            for k, v in out.items():
+                if k in merged and merged[k] != v:
+                    raise ValueError(
+                        f"capabilities {source[k]!r} and {name!r} both inject "
+                        f"{k!r} with different values on step "
+                        f"{getattr(node, 'id', '?')!r}")
+                merged[k] = v
+                source[k] = name
+        return merged
 
     def _check_agent_configs(self, graph: PipelineGraph) -> list[str]:
         """Return names of agent_configs referenced in graph but not registered."""
@@ -1411,21 +1546,8 @@ class SkillFlow:
                 agent_cfg = self.agent_registry.get(node.agent_config)
                 if agent_cfg and agent_cfg.tool_schemas:
                     tool_schemas = agent_cfg.tool_schemas
-            # Capability toolset: a step's `capability` grants extra framework
-            # tools (e.g. tool_creation → write/test/register_tool). Merge their
-            # schemas WITHOUT mutating the shared agent config cache (copy first,
-            # else the grant leaks into every other step using this role).
-            _cap = self._capability_of(node)
-            if _cap and _cap.get("tools") and self._tool_loader:
-                tool_schemas = dict(tool_schemas)
-                _cap_name = getattr(node, "capability", "") or "?"
-                for _tn in _cap["tools"]:
-                    if _tn in tool_schemas:
-                        continue
-                    _schema = self._resolve_tool_schema(
-                        _tn, owner=f"capability:{_cap_name}")
-                    if _schema is not None:
-                        tool_schemas[_tn] = _schema
+            # (Capability toolset is merged further down, once the loop item is
+            # resolved — a `{from_item: ...}` declaration cannot be read here.)
             # Addon toolset: compose's `add_tools` op parks extra tool names in
             # the step's opaque config. Merge them exactly like a capability
             # grant — copy first, or the grant leaks into every other step that
@@ -1509,7 +1631,9 @@ class SkillFlow:
                         # a `{source: {tool: X}}` context tool runs on behalf of
                         # THIS step → hand it the step's capability context too.
                         extra_tool_kwargs=self._capability_context(
-                            node, run["graph_name"]))
+                            node, run["graph_name"],
+                            offers=getattr(self._graphs.get(run["graph_name"]),
+                                           "capabilities", []) or []))
                     resolved = resolver.resolve(
                         node.context,
                         current_config=run["graph_name"],
@@ -1634,6 +1758,36 @@ class SkillFlow:
                         "read tool registration failed for step %s; agent will "
                         "run without read/search/list",
                         getattr(node, "id", "?"), exc_info=True)
+
+            # ── Capability provisioning ──────────────────────────────────
+            # Late on purpose: a `{from_item: "..."}` declaration reads the loop
+            # item's card, which does not exist until loop_context is built. The
+            # toolset merge COPIES first — a grant written into the shared agent
+            # config cache leaks into every other step using that role.
+            _item_card = self._capability_item_card(node, run, loop_context)
+            _offers = getattr(self._graphs.get(run["graph_name"]), "capabilities", []) or []
+            _caps = self._capabilities_for(node, _item_card, _offers)
+            if _caps and self._tool_loader:
+                tool_schemas = dict(tool_schemas)
+                for _cap_name, _cap in _caps:
+                    for _tn in _cap.get("tools") or ():
+                        if _tn in tool_schemas:
+                            continue
+                        _schema = self._resolve_tool_schema(
+                            _tn, owner=f"capability:{_cap_name}")
+                        if _schema is not None:
+                            tool_schemas[_tn] = _schema
+            # A capability's briefing is the ONLY channel that teaches a step how
+            # to use what it was just handed. It rides the step's context (not the
+            # system preamble): the preamble is project-global and byte-identical
+            # because that is what makes it cacheable, and a per-step block landing
+            # there breaks the property it exists for.
+            _briefs = [(n, c.get("briefing")) for n, c in _caps if c.get("briefing")]
+            if _briefs:
+                _rc = inputs_with_tools.setdefault("_resolved_context", {})
+                for _n, _b in _briefs:
+                    _rc[f"[capability: {_n}]"] = _b
+            inputs_with_tools["_capabilities"] = [n for n, _ in _caps]
 
             inputs_with_tools["_tool_schemas"] = tool_schemas
 
@@ -2831,7 +2985,9 @@ class SkillFlow:
         # Capability context: a `capability` keyword on this tool step hands the
         # tool framework-selected values (e.g. a durable state_dir) so the tool
         # never picks its own path. setdefault → explicit tool_params still win.
-        for _ck, _cv in self._capability_context(tool_node, graph_name).items():
+        _offers = getattr(self._graphs.get(graph_name), "capabilities", []) or []
+        for _ck, _cv in self._capability_context(
+                tool_node, graph_name, offers=_offers).items():
             kwargs.setdefault(_ck, _cv)
         # Resolve $STEP_DRAFT_DIR etc. via workspace
         if self._workspace and run_id:
@@ -5069,7 +5225,9 @@ class SkillFlow:
                 _cgn = self._get_graph_name(run_id)
                 _cnode = self._get_resolver(_cgn).get_node(step_id)
                 if _cnode is not None:
-                    for _ck, _cv in self._capability_context(_cnode, _cgn).items():
+                    _cof = getattr(self._graphs.get(_cgn), "capabilities", []) or []
+                    for _ck, _cv in self._capability_context(
+                            _cnode, _cgn, offers=_cof).items():
                         kwargs.setdefault(_ck, _cv)
             except Exception:
                 pass
