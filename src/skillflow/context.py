@@ -52,6 +52,19 @@ FEEDBACK_LOG_PREAMBLE = (
 # a visible one.
 _INTERFACES_MAX_CHARS = 8000
 
+# The file-boundary marker inside a multi-file context entry.
+#
+# `### FILE: <relpath>` and not a bare `### <relpath>`: the bare form is valid
+# markdown, so it cannot be told apart from a section heading in the CONTENT of
+# the files being concatenated, and every rule for guessing trades one failure
+# mode for the other. Both were live in AItelier's context clipper — requiring
+# an extension made "### Dockerfile" invisible (its content folded into the
+# previous file, which was then reported at the wrong length), while accepting
+# any bare word made "### Notes" invent a file that does not exist and split a
+# real one. An explicit token has neither, by construction.
+_FILE_MARKER = "### FILE: "
+
+
 
 def feedback_log_path(config_dir: Path, step_id: str) -> Path:
     """Path of a step's accumulated checkpoint-feedback log."""
@@ -260,7 +273,7 @@ class ContextResolver:
                     except Exception:
                         continue
                     rel = f.relative_to(step_dir)
-                    parts.append(f"### {rel}\n{content}")
+                    parts.append(f"{_FILE_MARKER}{rel}\n{content}")
             if not parts:
                 return "", ""
             label = f"Step {step_id}"
@@ -278,7 +291,7 @@ class ContextResolver:
                         content = f.read_text(encoding="utf-8", errors="replace")
                     except Exception:
                         continue
-                    parts.append(f"### {f.relative_to(step_dir)}\n{content}")
+                    parts.append(f"{_FILE_MARKER}{f.relative_to(step_dir)}\n{content}")
             if not parts:
                 return "", ""
             label = f"Step {step_id} — {output_file}"
@@ -295,7 +308,7 @@ class ContextResolver:
                         c = f.read_text(encoding="utf-8", errors="replace")
                     except Exception:
                         continue
-                    parts.append(f"### {f.relative_to(step_dir)}\n{c}")
+                    parts.append(f"{_FILE_MARKER}{f.relative_to(step_dir)}\n{c}")
             if parts:
                 return f"Step {step_id} — {output_file} (all items)", "\n\n".join(parts)
             return "", ""
@@ -359,7 +372,7 @@ class ContextResolver:
                     except Exception:
                         continue
                     rel = f.relative_to(abs_path)
-                    parts.append(f"### {rel}\n{content}")
+                    parts.append(f"{_FILE_MARKER}{rel}\n{content}")
             if not parts:
                 return "", ""
             return f"Workspace — {rel_path}", "\n\n".join(parts)
@@ -408,7 +421,7 @@ class ContextResolver:
                     except Exception:
                         continue
                     rel = f.relative_to(abs_path)
-                    parts.append(f"### {rel}\n{content}")
+                    parts.append(f"{_FILE_MARKER}{rel}\n{content}")
             if not parts:
                 return "", ""
             return f"Repository — {rel_path}", "\n\n".join(parts)
