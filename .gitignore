@@ -218,3 +218,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 .buildvenv/
+
+# Agent worktrees — embedded git repos, never part of a release
+.claude/worktrees/
