@@ -224,3 +224,38 @@ class TestMaxRetriesFiltering:
         result = validator.validate([spec])
         assert "passed" in result
         assert result["passed"] is True
+
+
+def test_config_name_is_offered_only_to_tools_that_accept_it(tmp_path):
+    """A fixed-signature validation tool must not be handed a new kwarg.
+
+    `config_name` was added so a validation tool could ask a per-pipeline
+    question. Passing it unconditionally broke EVERY spec whose tool takes a
+    fixed signature — `file_exists(files, *, workspace_root="")` and friends
+    have no **kwargs — with "unexpected keyword argument", which a step then
+    burns its whole retry budget on before fail-opening. 36 specs across 7
+    configs, and the repo's own end-to-end test caught it while the unit suite
+    did not.
+    """
+    from skillflow.step_validation import StepValidator
+
+    seen = {}
+
+    def strict(files=None, *, workspace_root=""):
+        seen["strict"] = True
+        return {"all_passed": True, "results": [{"passed": True}]}
+
+    def curious(files=None, *, workspace_root="", config_name=""):
+        seen["config_name"] = config_name
+        return {"all_passed": True, "results": [{"passed": True}]}
+
+    class _L:
+        def load_fn(self, name):
+            return {"strict": strict, "curious": curious}[name]
+
+    v = StepValidator(_L(), tmp_path, config_name="dpe_game")
+    out = v.validate([{"files": ["*.md"], "tool": "strict"},
+                      {"files": ["*.md"], "tool": "curious"}])
+    assert out["passed"] is True, out
+    assert seen["strict"] is True
+    assert seen["config_name"] == "dpe_game"

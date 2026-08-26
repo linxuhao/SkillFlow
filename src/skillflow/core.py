@@ -521,6 +521,18 @@ class SkillFlow:
             else:
                 self._conn.commit()
 
+    @contextmanager
+    def _ro(self):
+        """Read-only access to the persistent connection.
+
+        Same lock (the connection is shared and not thread-safe), but no
+        `BEGIN IMMEDIATE`: a pure SELECT on a hot path should not take the
+        write lock, which is what turns into SQLITE_BUSY and reaped claims
+        elsewhere.
+        """
+        with self._lock:
+            yield self._conn
+
     @staticmethod
     def _serialize(obj: dict) -> str:
         return json.dumps(obj, ensure_ascii=False)
@@ -892,7 +904,11 @@ class SkillFlow:
         if not run_id or not step_id:
             return []
         try:
-            with self._tx() as conn:
+            # Read-only: `_tx()` opens BEGIN IMMEDIATE, and this runs twice per
+            # agent tool call (allowlist + kwargs). Taking the write lock on the
+            # hottest path is what the tool fast-path's own comment warns about —
+            # SQLITE_BUSY there turns into reaped claims.
+            with self._ro() as conn:
                 row = conn.execute(
                     "SELECT inputs_json FROM skillflow_steps WHERE run_id = ? "
                     "AND step_id = ? ORDER BY id DESC LIMIT 1",

@@ -21,6 +21,18 @@ if TYPE_CHECKING:
     from skillflow.tool_loader import ToolLoader
 
 
+def _accepts(fn, param: str) -> bool:
+    """True if `fn` declares `param` or takes `**kwargs`."""
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return False
+    if param in sig.parameters:
+        return True
+    return any(p.kind == inspect.Parameter.VAR_KEYWORD
+               for p in sig.parameters.values())
+
+
 class StepValidator:
     """Runs validation tool specs against step output files."""
 
@@ -83,7 +95,15 @@ class StepValidator:
 
             base_kwargs = {k: v for k, v in spec.items()
                           if k not in ("files", "file", "tool", "on_failure", "max_retries")}
-            if self._config_name:
+            # `config_name` is offered, not imposed: most validation tools take a
+            # fixed signature (`file_exists(files, *, workspace_root="")` and
+            # friends have no **kwargs), and handing them an argument they never
+            # declared turns EVERY validation spec into
+            # "file_exists() got an unexpected keyword argument" — a step that
+            # then burns its whole retry budget and fail-opens. ContextResolver
+            # already filters this way five files over; the same rule belongs
+            # here.
+            if self._config_name and _accepts(fn, "config_name"):
                 base_kwargs.setdefault("config_name", self._config_name)
 
             if takes_plural:
