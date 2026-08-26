@@ -257,3 +257,13 @@ def test_add_tools_grant_is_offered_and_executable(tmp_path):
     res = sf.execute_tool("gen_image_asset", {}, run_id=run_id, step_id="a")
     assert "not allowed" not in str(res.get("error", "")), res
     assert res.get("generated") is True, res
+
+
+def test_addon_capabilities_union_with_the_base():
+    """An addon adds to the base's offer list; it never replaces it."""
+    from skillflow.compose import compose_graph
+    base = {"name": "b", "begin": "a", "steps": [{"id": "a", "step_type": "agent"}],
+            "capabilities": ["stateful"]}
+    out = compose_graph(base, [{"name": "ov", "capabilities": ["game_assets"],
+                                "overlay": []}])
+    assert out["capabilities"] == ["game_assets", "stateful"]

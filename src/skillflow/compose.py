@@ -186,6 +186,14 @@ def compose_graph(base: dict, overlays: list[dict]) -> dict:
     merged.setdefault("steps", [])
 
     for ov in overlays:
+        # An addon may OFFER capabilities. Union, never override: every other
+        # composed field is a scalar the overlay replaces, and an addon that
+        # silently revoked the base's offers would be invisible until a task
+        # card that used to work stopped being granted anything.
+        _offers = ov.get("capabilities")
+        if _offers:
+            merged["capabilities"] = sorted(
+                set(merged.get("capabilities") or []) | set(_offers))
         ops = ov.get("overlay", [])
         if not isinstance(ops, list):
             raise ComposeError(f"overlay '{ov.get('name', '?')}': 'overlay' must be a list")
