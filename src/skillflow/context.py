@@ -65,7 +65,6 @@ _INTERFACES_MAX_CHARS = 8000
 _FILE_MARKER = "### FILE: "
 
 
-
 def feedback_log_path(config_dir: Path, step_id: str) -> Path:
     """Path of a step's accumulated checkpoint-feedback log."""
     return config_dir / "_feedback" / f"{step_id}.md"
