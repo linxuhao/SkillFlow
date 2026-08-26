@@ -265,6 +265,7 @@ class ContextResolver:
         # No specific file requested — return all files concatenated
         if not output_file:
             parts: list[str] = []
+            entries: list[tuple[str, int, int]] = []
             for f in sorted(step_dir.rglob("*")):
                 if f.is_file() and f.name != ".gitkeep":
                     try:
@@ -272,11 +273,20 @@ class ContextResolver:
                     except Exception:
                         continue
                     rel = f.relative_to(step_dir)
-                    parts.append(f"{_FILE_MARKER}{rel}\n{content}")
+                    projected = self._project(content, mode, str(rel))
+                    entries.append((str(rel), len(content), len(projected)))
+                    parts.append(f"{_FILE_MARKER}{rel}\n{projected}")
             if not parts:
                 return "", ""
             label = f"Step {step_id}"
-            return label, "\n\n".join(parts)
+            body = "\n\n".join(parts)
+            # A directory that projected nothing is byte-identical to before —
+            # the header appears only where something was actually cut, so a
+            # config that asks for no projection sees no change at all (which
+            # matters: this block feeds provider prefix caches).
+            if any(raw != proj for _, raw, proj in entries):
+                body = self._dir_listing(entries) + "\n" + body
+            return label, body
 
         # Specific file: glob for patterns like "tasks/*.json"
         if "*" in output_file:
@@ -290,7 +300,9 @@ class ContextResolver:
                         content = f.read_text(encoding="utf-8", errors="replace")
                     except Exception:
                         continue
-                    parts.append(f"{_FILE_MARKER}{f.relative_to(step_dir)}\n{content}")
+                    rel = f.relative_to(step_dir)
+                    parts.append(f"{_FILE_MARKER}{rel}\n"
+                                 f"{self._project(content, mode, str(rel))}")
             if not parts:
                 return "", ""
             label = f"Step {step_id} — {output_file}"
@@ -319,12 +331,7 @@ class ContextResolver:
         except Exception:
             return "", ""
 
-        if mode == "summary":
-            lines = content.splitlines()
-            if len(lines) > 100:
-                content = "\n".join(lines[:100]) + "\n... [summary truncated]"
-        elif mode == "interfaces":
-            content = self._extract_interfaces(content, output_file)
+        content = self._project(content, mode, output_file)
 
         label = f"Step {step_id} — {output_file}"
         return label, content
@@ -459,6 +466,45 @@ class ContextResolver:
             return label, content
         except Exception:
             return f"[{tool_name}]", ""
+
+    def _project(self, content: str, mode: str, name: str) -> str:
+        """Apply a context source's ``mode:`` to ONE file's content.
+
+        Every branch of `_resolve_step_output` routes through here. It used to
+        live inline on the named-single-file branch only, so a source that named
+        a step but no file — `{step: "2", mode: "interfaces"}` — took the
+        "concatenate the whole step dir" branch and returned before `mode` was
+        ever read. The projection the config asked for silently did not happen,
+        and nothing said so: the reader got the full document under a label that
+        promised a slice.
+        """
+        if mode == "summary":
+            lines = content.splitlines()
+            if len(lines) > 100:
+                return "\n".join(lines[:100]) + "\n... [summary truncated]"
+            return content
+        if mode == "interfaces":
+            return self._extract_interfaces(content, name)
+        return content
+
+    @staticmethod
+    def _dir_listing(entries: list[tuple[str, int, int]]) -> str:
+        """Header naming every file in a step dir, with raw → projected sizes.
+
+        A projection that shrinks a document is announced by the projector
+        itself; a projection that drops a WHOLE FILE from the reader's view is
+        not, because the file simply is not there to carry a marker. That is the
+        failure mode of naming one file in a directory of several: the others do
+        not get truncated, they get erased, and the reader cannot ask for what it
+        cannot see. So a projected directory always says what it contained.
+        """
+        rows = []
+        for name, raw, projected in entries:
+            rows.append(f"  - {name} ({raw} B"
+                        + (f" → {projected} B after projection)" if projected != raw else ")"))
+        return ("[step output contains]\n" + "\n".join(rows)
+                + "\nRead any of these directly (read/search) for what a "
+                  "projection above left out.\n")
 
     @staticmethod
     def _extract_interfaces(content: str, source_name: str = "") -> str:

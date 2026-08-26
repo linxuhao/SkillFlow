@@ -66,6 +66,68 @@ class TestContextResolver:
         assert "GET /api" in content
         assert "Overview" not in content  # Non-interface section excluded
 
+    def test_mode_applies_without_a_named_file(self, workspace):
+        """`{step: N, mode: ...}` with no `file:` must still project.
+
+        The regression this pins: mode was read only on the named-single-file
+        branch, so the bare form silently returned the whole step directory.
+        A config asking for an 8 KB interfaces slice got a 39 KB document under
+        a label that said "interfaces", and nothing anywhere said the
+        projection had not happened.
+        """
+        resolver = ContextResolver(workspace)
+        full = list(resolver.resolve(
+            [{"source": {"step": "2"}}],
+            current_config="dpe_default").values())[0]
+        sliced = list(resolver.resolve(
+            [{"source": {"step": "2", "mode": "interfaces"}}],
+            current_config="dpe_default").values())[0]
+        # Asserted on CONTENT, not length: on a small document the truncation
+        # marker is longer than what it replaced, so a byte-count test calls a
+        # working projection broken.
+        assert "GET /api" in full and "Extra info" in full
+        assert "GET /api" in sliced
+        assert "Extra info" not in sliced
+
+    def test_projected_directory_still_lists_every_file(self, workspace):
+        """A projection may shrink a file; it may not hide one.
+
+        Naming a single file is the other way to trim a directory, and it
+        erases the siblings instead of truncating them — the reader cannot ask
+        for what it cannot see. So a projected directory announces its whole
+        contents.
+        """
+        resolver = ContextResolver(workspace)
+        content = list(resolver.resolve(
+            [{"source": {"step": "2", "mode": "interfaces"}}],
+            current_config="dpe_default").values())[0]
+        assert "[step output contains]" in content
+        assert "step2_design.md" in content
+
+    def test_unprojected_directory_is_byte_identical(self, workspace):
+        """No mode → no header. This block feeds provider prefix caches, so a
+        source that asked for nothing must be unchanged to the byte."""
+        resolver = ContextResolver(workspace)
+        content = list(resolver.resolve([{"source": {"step": "2"}}],
+                                        current_config="dpe_default").values())[0]
+        assert "[step output contains]" not in content
+
+    def test_bare_and_named_share_one_label(self, workspace):
+        """The label must not change when a mode is applied.
+
+        A host may drop a context entry by exact label (AItelier hoists step
+        1/2 into a cached system preamble and removes `"Step 2"` from the user
+        message). Projecting must not rename the source out from under that
+        drop — doing so puts the same document in the prompt twice.
+        """
+        resolver = ContextResolver(workspace)
+        plain = resolver.resolve([{"source": {"step": "2"}}],
+                                 current_config="dpe_default")
+        sliced = resolver.resolve([{"source": {"step": "2",
+                                               "mode": "interfaces"}}],
+                                  current_config="dpe_default")
+        assert list(plain.keys()) == list(sliced.keys()) == ["Step 2"]
+
     def test_multiple_sources(self, workspace):
         resolver = ContextResolver(workspace)
         specs = [
@@ -328,3 +390,4 @@ class TestInterfacesTruncationIsAnnounced:
         content = list(result.values())[0]
         assert "TRUNCATED" in content
         assert "big_design.md" in content
+
