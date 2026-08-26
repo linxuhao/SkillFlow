@@ -1655,6 +1655,29 @@ class SkillFlow:
                 # successful step consumes tmp via promotion (tmp→step_dir rename),
                 # so the next step still starts clean without an explicit wipe.
                 tmp_dir.mkdir(parents=True, exist_ok=True)
+                # carry_forward: seed an EMPTY staging from this step's own
+                # promoted output. Promotion is a replace (rmtree + rename), so a
+                # re-run after a rejection starts blank and an agent that writes
+                # only what it changed destroys the rest — which is precisely the
+                # reading its briefing invites ("step output — files from previous
+                # retries", searched after staging). Live 2026-08-26: a re-planned
+                # PM emitted 2 of 9 task cards and promotion deleted the other 8,
+                # while the manifest still named them.
+                # Empty-only: a retry mid-step already has its accumulated state
+                # here (see the note above) and must not be overwritten by the
+                # older promoted copy.
+                if getattr(node, "output_carry_forward", False) and not any(
+                        tmp_dir.iterdir()):
+                    _prior = self._workspace.get_step_dir(
+                        run["project_id"], run["graph_name"], node.id)
+                    if _prior.exists():
+                        import shutil as _shutil
+                        for _src in sorted(_prior.rglob("*")):
+                            if not _src.is_file():
+                                continue
+                            _dst = tmp_dir / _src.relative_to(_prior)
+                            _dst.parent.mkdir(parents=True, exist_ok=True)
+                            _shutil.copy2(_src, _dst)
                 inputs_with_tools["_output_dir"] = str(tmp_dir)
                 if node.output_fixed:
                     from skillflow.write_tools import _get_pattern
@@ -4930,7 +4953,8 @@ class SkillFlow:
                 from skillflow.write_tools import generate_write_tool_schemas
                 for ws in generate_write_tool_schemas(
                         node.output_mode, node.output_fixed,
-                        allow_full_write=node.output_allow_full_write):
+                        allow_full_write=node.output_allow_full_write,
+                        carry_forward=getattr(node, "output_carry_forward", False)):
                     allowed.add(ws["name"])
             # Add read tool names from context specs (mode ∈ {tool, both})
             if node.context:
@@ -4955,16 +4979,18 @@ class SkillFlow:
 
         # Write/create/edit tools — write to step tmp directory (atomic staging)
         if (name.startswith("write_") or name.startswith("create_")
-                or name.startswith("edit_")):
+                or name.startswith("edit_") or name.startswith("delete_")):
             if not self._workspace:
                 return {"error": "No workspace configured for write tool"}
             pid = self._get_project_id(run_id)
             gname = self._get_graph_name(run_id)
             tmp_dir = self._workspace.get_step_tmp_dir(pid, gname, step_id)
             from skillflow.write_tools import (execute_write, execute_create,
-                                               execute_edit)
+                                               execute_edit, execute_delete)
             slot = name[name.index("_") + 1:]  # everything after first _
-            if name.startswith("create_"):
+            if name.startswith("delete_"):
+                res = execute_delete(slot, fixed, params, str(tmp_dir))
+            elif name.startswith("create_"):
                 res = execute_create(slot, fixed, params, str(tmp_dir))
             elif name.startswith("edit_"):
                 # Edit the EXISTING file from the consolidated repo (project_root),

@@ -93,6 +93,15 @@ class StepNode:
         agent_config: For agent nodes: key into agent config YAML.
         context: List of context source specs for prompt assembly.
         output_mode: ``"content"`` (constrained write) or ``"write"`` (free).
+    output_carry_forward: seed this step's staging from its own previously
+        promoted output when it re-runs. Promotion REPLACES the step directory
+        (rmtree + rename), so without this a re-run that writes only the files
+        it changed silently deletes the rest — while the agent's workspace
+        briefing describes staging and step output as LAYERED for reading and
+        says nothing about the destructive write. With carry_forward the two
+        models agree: what you do not touch survives, what you write is
+        replaced, and DROPPING a file becomes an explicit ``delete_{slot}``
+        call instead of an accident of omission.
         output_fixed: Fixed output filename mapping (content mode).
         validation: List of validation specs (files + tool + params).
                     A spec that still fails once the retry budget is spent does
@@ -124,6 +133,7 @@ class StepNode:
     output_mode: str = ""
     output_fixed: dict = field(default_factory=dict)
     output_allow_full_write: bool = False
+    output_carry_forward: bool = False
     validation: list[dict] = field(default_factory=list)
     notify: list[str] | None = None  # event types to push (None = outbox only)
     lifecycle: dict[str, Any] = field(default_factory=dict)
@@ -301,6 +311,7 @@ class PipelineGraph:
                     output_mode=(s.get("output") or {}).get("mode", "") or s.get("output_mode", ""),
                     output_fixed=(s.get("output") or {}).get("fixed", {}),
                     output_allow_full_write=bool((s.get("output") or {}).get("allow_full_write", False)),
+                    output_carry_forward=bool((s.get("output") or {}).get("carry_forward", False)),
                     validation=s.get("validation", []),
                     notify=s.get("notify"),
                     lifecycle=s.get("lifecycle", {}),
@@ -375,12 +386,15 @@ class PipelineGraph:
                 sd["context"] = s.context
             if s.output_mode:
                 sd["output_mode"] = s.output_mode
-                if s.output_fixed or s.output_allow_full_write:
+                if (s.output_fixed or s.output_allow_full_write
+                        or s.output_carry_forward):
                     sd["output"] = {}
                     if s.output_fixed:
                         sd["output"]["fixed"] = s.output_fixed
                     if s.output_allow_full_write:
                         sd["output"]["allow_full_write"] = True
+                    if s.output_carry_forward:
+                        sd["output"]["carry_forward"] = True
             if s.validation:
                 sd["validation"] = s.validation
             if s.lifecycle:

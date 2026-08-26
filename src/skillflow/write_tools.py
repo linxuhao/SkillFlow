@@ -178,7 +178,8 @@ def _archive_old_file(directory: Path, base_name: str) -> str | None:
 
 def generate_write_tool_schemas(output_mode: str,
                                 fixed: dict,
-                                allow_full_write: bool = False) -> list[dict]:
+                                allow_full_write: bool = False,
+                                carry_forward: bool = False) -> list[dict]:
     """Generate tool schema dicts for write/create/edit/append tools.
 
     Returns a list of dicts with 'name', 'description', 'parameters'.
@@ -190,6 +191,15 @@ def generate_write_tool_schemas(output_mode: str,
     ``edit`` carries the rest of the file through verbatim, so that failure mode
     is impossible. Whole-file ``write`` is exposed only when ``allow_full_write``
     is set on the step (rare: genuine from-scratch authorship).
+
+    ``delete_{slot}`` appears ONLY under ``carry_forward`` and only for a glob
+    slot. Without carry_forward, staging holds exactly what this run wrote, so
+    there is nothing to delete — offering the verb would just invite an agent to
+    "clean up" files that were never there. With carry_forward the prior run's
+    files ARE there, so dropping one has to be sayable; otherwise the only way
+    to remove a task is to omit it, which is the silent-deletion bug this whole
+    mechanism exists to remove. A non-glob slot is a required output of the step
+    and is never droppable.
     """
     if output_mode == "write" and not fixed:
         tools = [{
@@ -343,6 +353,23 @@ def generate_write_tool_schemas(output_mode: str,
             }
             if is_glob:
                 edit_params = {"id": dict(params["id"]), **edit_params}
+            if carry_forward and is_glob:
+                tools.append({
+                    "name": f"delete_{slot}",
+                    "description": (
+                        f"DROP one {pattern} that a previous run produced. Your "
+                        f"staging starts as a copy of that run's output, so a "
+                        f"file you simply do not rewrite SURVIVES unchanged — "
+                        f"this is the only way to remove one. Use it when a task "
+                        f"is genuinely dropped from the plan; if you also keep it "
+                        f"out of the manifest, the two stay consistent."
+                    ),
+                    "parameters": {
+                        "id": {"type": "string", "required": True,
+                               "description": f"Replaces * in {pattern}"},
+                    },
+                })
+
             tools.append({
                 "name": f"edit_{slot}",
                 "description": (
@@ -373,6 +400,35 @@ def generate_write_tool_schemas(output_mode: str,
         return tools
 
     return []
+
+
+def execute_delete(slot: str, fixed: dict, params: dict,
+                   output_dir: str) -> dict:
+    """Remove one carried-forward file from this step's staging.
+
+    Staging only — the promoted step directory is never touched here; promotion
+    replaces it wholesale from staging, so removing the file from staging is
+    exactly what makes it absent from the step's output.
+    """
+    from pathlib import Path as _Path
+
+    pattern = _get_pattern(slot, fixed)
+    if "*" not in pattern:
+        return {"error": f"'{slot}' is a single required output ({pattern}) — "
+                         f"it cannot be deleted, only rewritten."}
+    ident = _ensure_str(params.get("id")).strip()
+    if not ident:
+        return {"error": "id is required — it replaces * in " + pattern}
+    if "/" in ident or "\\" in ident or ident.startswith("."):
+        return {"error": f"invalid id {ident!r}: no path separators, no leading dot"}
+
+    target = _Path(output_dir) / pattern.replace("*", ident)
+    if not target.is_file():
+        return {"error": f"{target.name} is not in this step's staging — nothing "
+                         f"to delete. (Only files carried forward from a previous "
+                         f"run, or written this run, can be deleted.)"}
+    target.unlink()
+    return {"deleted": str(target.relative_to(_Path(output_dir)))}
 
 
 def _resolve_slot_document(slot: str, fixed: dict, params: dict) -> "tuple[str | None, dict | None]":
