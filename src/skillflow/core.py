@@ -923,6 +923,29 @@ class SkillFlow:
                 run_id, step_id, exc_info=True)
             return []
 
+    def capabilities(self) -> dict[str, dict]:
+        """Registered capabilities as ``{name: {tools, briefing, owner}}``.
+
+        Public because the host reads this table in six places — a palette, an
+        emit gate, a registry module, a catalog row — and was reaching into
+        `_capabilities` to do it. A private name that gets renamed here degrades
+        every one of those SILENTLY: the gate returns no violations and goes
+        green, the palette says the deployment registers nothing. An accessor
+        turns that skew into an AttributeError at the first call.
+
+        The `context_provider` callable is deliberately not exposed: it is the
+        engine's to invoke, not a caller's to inspect.
+        """
+        return {name: {"tools": list(cap.get("tools") or ()),
+                       "briefing": cap.get("briefing", ""),
+                       "owner": cap.get("owner", "host")}
+                for name, cap in self._capabilities.items()}
+
+    def graph_capabilities(self, graph_name: str) -> list[str]:
+        """What a registered graph OFFERS, or [] if it is not registered."""
+        graph = self._graphs.get(graph_name)
+        return list(getattr(graph, "capabilities", []) or [])
+
     def _capability_of(self, node) -> dict | None:
         """First registered capability of a STATIC declaration (legacy readers)."""
         names = self._declared_capability_names(node)

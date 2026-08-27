@@ -479,3 +479,27 @@ def test_conflicting_capability_kwargs_do_not_wedge_the_run(tmp_path):
     node = sf._get_resolver("clash").get_node("build")
     kw = sf._capability_context(node, "clash", offers=["a", "b"])
     assert "state_dir" not in kw          # omitted, not guessed
+
+
+def test_the_capability_table_has_a_public_accessor(tmp_path):
+    """The host reads this table in six places. Reaching into `_capabilities`
+    means a rename here degrades every one of them silently — the emit gate
+    returns no violations and goes green."""
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=MockToolLoader())
+    sf.register_capability("x", tools=["write"], briefing="b", owner="host")
+    got = sf.capabilities()
+    assert got["x"]["tools"] == ["write"]
+    assert got["x"]["owner"] == "host" and got["x"]["briefing"] == "b"
+    assert "context_provider" not in got["x"], "the callable is the engine's"
+    got["x"]["tools"].append("leak")
+    assert sf._capabilities["x"]["tools"] == ["write"], "accessor returned a live ref"
+
+
+def test_graph_offers_have_a_public_accessor(tmp_path):
+    sf = SkillFlow(str(tmp_path / "t.db"), tool_loader=MockToolLoader())
+    sf.register_agent_config("builder", tools=["read_file"])
+    sf.register_capability("tool_creation", tools=["register_tool"])
+    sf.register_graph(_cap_graph("tool_creation", offers=["tool_creation"],
+                                 name="offers"))
+    assert sf.graph_capabilities("offers") == ["tool_creation"]
+    assert sf.graph_capabilities("nope") == []
