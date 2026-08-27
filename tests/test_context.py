@@ -431,3 +431,54 @@ class TestADirectorySourceIsBounded:
             [{"source": {"step": "2"}}], current_config="dpe_default").values())[0]
         assert len(content) < 2_100_000
         assert "TRUNCATED" in content
+
+
+    def test_a_directory_of_only_binaries_still_says_so(self, workspace):
+        """The incident's own shape: `frames/`, 184 PNGs, no text sibling.
+
+        Returning ("", "") named nothing at all — the reader saw an absent
+        source, not a source it could go and read. Every existing test wrote a
+        sibling .md, which is why the hole survived.
+        """
+        step = workspace / "dpe_default" / "2"
+        (step / "frames").mkdir(parents=True, exist_ok=True)
+        for i in range(3):
+            (step / "frames" / f"f{i}.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\xff" * 900)
+        content = list(ContextResolver(workspace).resolve(
+            [{"source": {"step": "2"}}], current_config="dpe_default").values())[0]
+        assert "frames/f0.png" in content
+        assert "not shown" in content
+
+    def test_a_header_then_raw_binary_is_caught_without_a_nul(self, workspace):
+        """A .ppm screenshot is an ASCII header followed by pixel bytes; it can
+        carry no NUL in the first 8 KB and used to sail through."""
+        step = workspace / "dpe_default" / "2"
+        step.mkdir(parents=True, exist_ok=True)
+        (step / "shot.ppm").write_bytes(b"P6\n64 64\n255\n" + bytes(range(1, 256)) * 40)
+        (step / "notes.md").write_text("keep me")
+        content = list(ContextResolver(workspace).resolve(
+            [{"source": {"step": "2"}}], current_config="dpe_default").values())[0]
+        assert "keep me" in content and "shot.ppm" in content
+        assert "�" not in content
+
+    def test_the_cap_is_measured_in_bytes(self, workspace):
+        """A character cap is ~3x looser than it reads for CJK, and what this
+        bounds — a step's persisted inputs — is measured in bytes."""
+        step = workspace / "dpe_default" / "2"
+        step.mkdir(parents=True, exist_ok=True)
+        (step / "big.md").write_text("字" * 1_200_000)      # 3.6 MB, 1.2M chars
+        content = list(ContextResolver(workspace).resolve(
+            [{"source": {"step": "2"}}], current_config="dpe_default").values())[0]
+        assert len(content.encode("utf-8")) < 2_200_000
+        assert "TRUNCATED" in content
+
+    def test_a_glob_source_also_skips_binaries(self, workspace):
+        step = workspace / "dpe_default" / "2"
+        (step / "tasks").mkdir(parents=True, exist_ok=True)
+        (step / "tasks" / "a.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\xff" * 900)
+        (step / "tasks" / "b.json").write_text('{"id": "b"}')
+        content = list(ContextResolver(workspace).resolve(
+            [{"source": {"step": "2", "file": "tasks/*"}}],
+            current_config="dpe_default").values())[0]
+        assert '{"id": "b"}' in content
+        assert "�" not in content

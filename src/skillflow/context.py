@@ -88,11 +88,11 @@ def read_feedback_log(config_dir: Path, step_id: str) -> str | None:
     return FEEDBACK_LOG_PREAMBLE + "\n" + text
 
 
-# Ceiling on ONE directory source's concatenated text. Beyond it the source is
+# Ceiling on ONE directory source's concatenated text, in BYTES. Beyond it the source is
 # cut with a marker naming what was dropped: the step's persisted inputs are
 # where this lands, and an unbounded source has already produced single rows of
 # 89 MB. Generous on purpose — this is a runaway guard, not a context budget.
-_DIR_SOURCE_MAX_CHARS = 2_000_000
+_DIR_SOURCE_MAX_BYTES = 2_000_000
 
 _BINARY_SUFFIXES = {
     ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".tiff",
@@ -100,7 +100,7 @@ _BINARY_SUFFIXES = {
     ".zip", ".gz", ".tar", ".bz2", ".xz", ".7z", ".rar",
     ".pdf", ".ttf", ".otf", ".woff", ".woff2", ".so", ".dll", ".dylib",
     ".pyc", ".pyo", ".class", ".jar", ".wasm", ".db", ".sqlite", ".bin",
-    ".pck", ".import", ".res", ".exr", ".psd",
+    ".pck", ".import", ".res", ".exr", ".psd", ".ppm", ".pgm", ".pbm",
 }
 
 
@@ -116,9 +116,20 @@ def _is_binary(path) -> bool:
         return True
     try:
         with open(path, "rb") as fh:
-            return b"\x00" in fh.read(8192)
+            sample = fh.read(8192)
     except Exception:
         return True
+    if not sample:
+        return False
+    if b"\x00" in sample:
+        return True
+    # Header-then-raw formats (.ppm, .bmp, some dumps) start with ASCII and may
+    # carry no NUL at all in the first 8 KB. Judge by how much of the sample is
+    # not plausible text: a 30% floor passes UTF-8 prose in any language while
+    # rejecting pixel data.
+    text_bytes = bytes(range(0x20, 0x7F)) + b"\t\r\n\f\b"
+    nontext = sum(1 for b in sample if b not in text_bytes and b < 0x80)
+    return nontext / len(sample) > 0.30
 
 
 class ContextResolver:
@@ -320,7 +331,7 @@ class ContextResolver:
                     projected = self._project(content, mode, str(rel))
                     entries.append((str(rel), len(content), len(projected)))
                     parts.append(f"{_FILE_MARKER}{rel}\n{projected}")
-            if not parts:
+            if not parts and not skipped:
                 return "", ""
             label = f"Step {step_id}"
             body = "\n\n".join(parts)
@@ -335,10 +346,15 @@ class ContextResolver:
             # matters: this block feeds provider prefix caches).
             if any(raw != proj for _, raw, proj in entries):
                 body = self._dir_listing(entries) + "\n" + body
-            if len(body) > _DIR_SOURCE_MAX_CHARS:
-                body = (body[:_DIR_SOURCE_MAX_CHARS]
+            # BYTES, not characters. A character cap is ~3x looser than it
+            # reads for CJK, and this exists to bound what lands in a step's
+            # persisted inputs — which is measured in bytes.
+            nbytes = len(body.encode("utf-8", errors="ignore"))
+            if nbytes > _DIR_SOURCE_MAX_BYTES:
+                keep = body.encode("utf-8", errors="ignore")[:_DIR_SOURCE_MAX_BYTES]
+                body = (keep.decode("utf-8", errors="ignore")
                         + f"\n\n... ⚠️ TRUNCATED — this step's output directory "
-                          f"is {len(body)} chars, over the {_DIR_SOURCE_MAX_CHARS} "
+                          f"is {nbytes} bytes, over the {_DIR_SOURCE_MAX_BYTES} "
                           f"limit for one context source. Files after this point "
                           f"are NOT shown; read them directly, or name the file "
                           f"you need with `output:`.")
@@ -352,6 +368,9 @@ class ContextResolver:
                 matches = sorted(set(matches) | set(step_dir.glob(f"*/{output_file}")))
             for f in matches:
                 if f.is_file():
+                    if _is_binary(f):
+                        # `tasks/*` can match a PNG as easily as a directory can.
+                        continue
                     try:
                         content = f.read_text(encoding="utf-8", errors="replace")
                     except Exception:
