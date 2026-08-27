@@ -391,3 +391,43 @@ class TestInterfacesTruncationIsAnnounced:
         assert "TRUNCATED" in content
         assert "big_design.md" in content
 
+
+
+class TestADirectorySourceIsBounded:
+    """A step's output directory is not all prose, and not all small.
+
+    One Godot play-test step writes 184 PNG frames (101 MB). Decoded with
+    `errors="replace"` they became 91 MB of replacement characters inside ONE
+    step's persisted inputs — a single database row bigger than most databases,
+    which no reader could use and no prompt could hold. The live deployment had
+    15 such rows totalling 1,008 MB in a 2 GB file.
+    """
+
+    def test_binaries_are_skipped_and_named(self, workspace):
+        step = workspace / "dpe_default" / "2"
+        (step / "frames").mkdir(parents=True, exist_ok=True)
+        (step / "frames" / "f0.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\xff" * 5000)
+        (step / "notes.md").write_text("real content")
+        content = list(ContextResolver(workspace).resolve(
+            [{"source": {"step": "2"}}], current_config="dpe_default").values())[0]
+        assert "real content" in content
+        assert "frames/f0.png" in content, "a skipped file must still be named"
+        assert "�" not in content, "binary was decoded into the context"
+
+    def test_an_extensionless_binary_is_sniffed(self, workspace):
+        step = workspace / "dpe_default" / "2"
+        step.mkdir(parents=True, exist_ok=True)
+        (step / "blob").write_bytes(b"\x00\x01\x02" * 4000)
+        content = list(ContextResolver(workspace).resolve(
+            [{"source": {"step": "2"}}], current_config="dpe_default").values())[0]
+        assert "�" not in content
+        assert "blob" in content
+
+    def test_a_giant_text_directory_is_cut_with_a_marker(self, workspace):
+        step = workspace / "dpe_default" / "2"
+        step.mkdir(parents=True, exist_ok=True)
+        (step / "huge.log").write_text("x" * 3_000_000)
+        content = list(ContextResolver(workspace).resolve(
+            [{"source": {"step": "2"}}], current_config="dpe_default").values())[0]
+        assert len(content) < 2_100_000
+        assert "TRUNCATED" in content

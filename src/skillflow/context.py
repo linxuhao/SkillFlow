@@ -88,6 +88,39 @@ def read_feedback_log(config_dir: Path, step_id: str) -> str | None:
     return FEEDBACK_LOG_PREAMBLE + "\n" + text
 
 
+# Ceiling on ONE directory source's concatenated text. Beyond it the source is
+# cut with a marker naming what was dropped: the step's persisted inputs are
+# where this lands, and an unbounded source has already produced single rows of
+# 89 MB. Generous on purpose — this is a runaway guard, not a context budget.
+_DIR_SOURCE_MAX_CHARS = 2_000_000
+
+_BINARY_SUFFIXES = {
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".tiff",
+    ".mp3", ".wav", ".ogg", ".flac", ".mp4", ".mov", ".webm", ".avi",
+    ".zip", ".gz", ".tar", ".bz2", ".xz", ".7z", ".rar",
+    ".pdf", ".ttf", ".otf", ".woff", ".woff2", ".so", ".dll", ".dylib",
+    ".pyc", ".pyo", ".class", ".jar", ".wasm", ".db", ".sqlite", ".bin",
+    ".pck", ".import", ".res", ".exr", ".psd",
+}
+
+
+def _is_binary(path) -> bool:
+    """Whether a file should be excluded from a text context source.
+
+    Extension first (cheap and covers the common case), then a NUL-byte sniff of
+    the first 8 KB for anything unknown — a decoded binary is never useful to a
+    reader and, unlike a long document, it cannot even be truncated into
+    something meaningful.
+    """
+    if path.suffix.lower() in _BINARY_SUFFIXES:
+        return True
+    try:
+        with open(path, "rb") as fh:
+            return b"\x00" in fh.read(8192)
+    except Exception:
+        return True
+
+
 class ContextResolver:
     """Resolves context sources into assembled content."""
 
@@ -266,8 +299,19 @@ class ContextResolver:
         if not output_file:
             parts: list[str] = []
             entries: list[tuple[str, int, int]] = []
+            skipped: list[str] = []
             for f in sorted(step_dir.rglob("*")):
                 if f.is_file() and f.name != ".gitkeep":
+                    if _is_binary(f):
+                        # A step's output dir is not all prose. One Godot
+                        # play-test step writes 184 PNG frames (101 MB); decoded
+                        # with errors="replace" they became 91 MB of replacement
+                        # characters inside ONE step's persisted inputs — a
+                        # single row larger than most databases, that no reader
+                        # could use and no prompt could hold. Named, not hidden:
+                        # the reader has to know the file is there.
+                        skipped.append(str(f.relative_to(step_dir)))
+                        continue
                     try:
                         content = f.read_text(encoding="utf-8", errors="replace")
                     except Exception:
@@ -280,12 +324,24 @@ class ContextResolver:
                 return "", ""
             label = f"Step {step_id}"
             body = "\n\n".join(parts)
+            if skipped:
+                shown = ", ".join(skipped[:10])
+                more = f" (+{len(skipped) - 10} more)" if len(skipped) > 10 else ""
+                body = (f"[binary files in this step's output, not shown: "
+                        f"{shown}{more}]\n\n" + body)
             # A directory that projected nothing is byte-identical to before —
             # the header appears only where something was actually cut, so a
             # config that asks for no projection sees no change at all (which
             # matters: this block feeds provider prefix caches).
             if any(raw != proj for _, raw, proj in entries):
                 body = self._dir_listing(entries) + "\n" + body
+            if len(body) > _DIR_SOURCE_MAX_CHARS:
+                body = (body[:_DIR_SOURCE_MAX_CHARS]
+                        + f"\n\n... ⚠️ TRUNCATED — this step's output directory "
+                          f"is {len(body)} chars, over the {_DIR_SOURCE_MAX_CHARS} "
+                          f"limit for one context source. Files after this point "
+                          f"are NOT shown; read them directly, or name the file "
+                          f"you need with `output:`.")
             return label, body
 
         # Specific file: glob for patterns like "tasks/*.json"
