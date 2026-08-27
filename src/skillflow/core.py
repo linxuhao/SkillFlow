@@ -4818,11 +4818,31 @@ class SkillFlow:
                         """,
                         (error_msg, row["id"]),
                     )
-                    conn.execute(
+                    # NOT on a paused run. For a paused run `current_node` is
+                    # not a position to be re-derived — it is the checkpoint's
+                    # RESUME TARGET, written by the pause and read verbatim by
+                    # approve_checkpoint. Clearing it makes approval return an
+                    # empty next_node, after which advance_run re-resolves from
+                    # the last completed step, hits that step's checkpoint edge
+                    # again and PAUSES THE RUN A SECOND TIME: the user approves,
+                    # nothing happens, the run sits at the same checkpoint.
+                    #
+                    # This reaper is the only one of the five pointer-clearing
+                    # sites that can reach a paused run at all: the other four
+                    # run on a worker holding a claim token, and a paused run has
+                    # no live claim. It fires on a timer against every run.
+                    cur = conn.execute(
                         "UPDATE skillflow_runs SET current_node = NULL, "
-                        "updated_at = datetime('now') WHERE id = ?",
+                        "updated_at = datetime('now') "
+                        "WHERE id = ? AND status != 'paused'",
                         (row["run_id"],),
                     )
+                    if cur.rowcount == 0:
+                        logging.getLogger("skillflow").warning(
+                            "run %s is paused; step %s failed permanently but "
+                            "its resume target was kept — approving the "
+                            "checkpoint will route into a failed step",
+                            row["run_id"], row["step_id"])
                     self.notifications.publish_sync(
                         "step_failed",
                         {

@@ -2024,3 +2024,53 @@ def test_claim_trace_counts_step_instances(sf: SkillFlow):
     assert seen[0] == ("a", 1)
     assert seen[1] == ("b", 1)
     assert seen[2] == ("a", 2)   # the re-run is visible without loop bookkeeping
+
+
+def test_reaping_a_dead_claim_keeps_a_paused_run_s_resume_target(sf: SkillFlow, tmp_path):
+    """A paused run's `current_node` is not a position — it is the checkpoint's
+    resume target, written by the pause and read verbatim by
+    approve_checkpoint.
+
+    Clearing it makes approval return an empty next_node; advance_run then
+    re-derives from the last completed step, hits that step's checkpoint edge
+    again, and pauses the run a SECOND time. Observable signature: the user
+    approves a checkpoint and the run sits at the same checkpoint, forever.
+
+    recover_stale_claims is the only pointer-clearing site that can reach a
+    paused run — the other four run on a worker holding a claim token, and a
+    paused run has none. This one fires on a timer against every run.
+    """
+    graph = PipelineGraph(
+        name="ck", begin="A",
+        steps=[
+            _agent("A", [_trans("B", match={"from": "checkpoint",
+                                            "value": "approved"})],
+                   checkpoint=True),
+            _agent("B", [_trans("done")]),
+            _gate("done", []),
+        ],
+    )
+    sf.register_graph(graph)
+    run_id = sf.create_run("ck", {"project_id": "p"})
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+    sf.confirm_step(claimed.token, StepResult(outputs={}, flags={}))
+    sf.advance_run(run_id)
+    assert sf.get_run(run_id)["status"] == "paused"
+    assert sf.get_run(run_id)["current_node"] == "B"
+
+    # a claim of this run left behind by a dead worker, already reaped twice
+    with sf._tx() as conn:
+        conn.execute(
+            "INSERT INTO skillflow_steps (run_id, step_id, step_config_json, "
+            "status, claimed_at, claimed_by, inputs_json, updated_at) VALUES "
+            "(?, 'B', '{}', 'claimed', '2020-01-01T00:00:00Z', 'pid:999999', "
+            "?, '2020-01-01 00:00:00')",
+            (run_id, json.dumps({"_stale_recovery_count": 2})))
+    sf.recover_stale_claims(1)
+
+    assert sf.get_run(run_id)["current_node"] == "B", "resume target was cleared"
+    assert sf.approve_checkpoint(run_id) == "B"
+    assert sf.advance_run(run_id) == "B"
+    assert sf.get_run(run_id)["status"] == "running"
