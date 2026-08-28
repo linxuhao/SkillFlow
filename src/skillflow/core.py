@@ -350,6 +350,22 @@ class SkillFlow:
         # never reaped while a truly dead/hung one still is.
         self._hb_last: dict[tuple[str, str], float] = {}
         self._hb_min_interval = 25.0  # seconds between heartbeat writes per step
+        # Tool callables owned by a CLAIM rather than by the shared ToolLoader:
+        # the unified read/search/list trio, whose closures capture that step's
+        # source map (its workspace, staging dir and code repo). Keyed by
+        # (run_id, step_id) — skillflow allows at most one live claim per run, so
+        # that pair names the owner, and a retry or a loop's next item re-claims
+        # and overwrites its own entry. Held in one process-wide, name-keyed slot
+        # they were last-writer-wins across projects: with several projects
+        # advancing concurrently a review step in one project listed another
+        # project's git repository (observed 2026-08-28).
+        self._step_tools: dict[tuple[str, str], dict] = {}
+        # Names handed out that way. Kept HERE rather than asked of the tool
+        # loader: the loader is a duck-typed injected dependency, and making a
+        # boolean query part of its contract breaks every custom implementation
+        # (and silently mis-answers for a MagicMock, which returns truthy for
+        # any attribute). skillflow declared these names, so skillflow knows.
+        self._step_scoped_names: set[str] = set()
         self._load_native_tools()
         self._stale_threshold = stale_threshold_seconds
         self._workspace = None
@@ -1865,21 +1881,42 @@ class SkillFlow:
                             step_dir=_step_dir,
                             _smap=_smap,
                         )
-                        stale = [n for n in self._tool_loader._cache
-                                 if any(n.startswith(p) for p in
-                                        ("list_step_", "read_step_", "search_step_",
-                                         "list_repo_", "read_repo_", "search_repo_",
-                                         "list_config_", "read_config_", "search_config_",
-                                         "list_workspace_", "read_workspace_", "search_workspace_"))
-                                 and self._tool_loader.is_dynamic(n)]
-                        for n in stale:
-                            del self._tool_loader._cache[n]
+                        # Legacy per-label dynamic read tools (`read_step_2`, …)
+                        # that a host may have registered. Guarded on the private
+                        # cache being present: the tool loader is duck-typed, and
+                        # reaching into an attribute only the built-in class has
+                        # raised straight into the `except` below — which silently
+                        # left the step with NO read surface at all.
+                        _cache = getattr(self._tool_loader, "_cache", None)
+                        if isinstance(_cache, dict):
+                            stale = [n for n in _cache
+                                     if any(n.startswith(p) for p in
+                                            ("list_step_", "read_step_", "search_step_",
+                                             "list_repo_", "read_repo_", "search_repo_",
+                                             "list_config_", "read_config_", "search_config_",
+                                             "list_workspace_", "read_workspace_", "search_workspace_"))
+                                     and self._tool_loader.is_dynamic(n)]
+                            for n in stale:
+                                del _cache[n]
+                        step_fns: dict = {}
                         for rs in read_schemas:
                             name = rs["name"]
                             fn = read_fns.get(name)
                             if fn:
                                 tool_schemas[name] = rs
-                                self._tool_loader.register_dynamic_tool(name, rs, fn)
+                                # Declare the NAME globally (so is_native /
+                                # is_dynamic keep classifying it) but hand the
+                                # closure to this claim: it captures this step's
+                                # source map, and a shared slot let whichever
+                                # project claimed last answer everyone's reads.
+                                _decl = getattr(self._tool_loader,
+                                                "declare_dynamic", None)
+                                if _decl:
+                                    _decl(name)
+                                self._step_scoped_names.add(name)
+                                step_fns[name] = fn
+                        if step_fns:
+                            self._set_step_tools(run_id, node.id, step_fns)
                 except Exception:
                     # Best-effort: the step still runs without read tools. But
                     # build_source_map handles missing paths gracefully, so an
@@ -2056,6 +2093,9 @@ class SkillFlow:
         # {step}/. A reclaimed executor reaching here would do both alongside
         # its replacement and only then be told it had lost the step.
         self._assert_epoch(token, "confirm_step")
+        # The claim is over — drop the read tools it owned. After the epoch
+        # assert, so a reclaimed executor cannot release its replacement's.
+        self._release_step_tools(token.run_id, token.step_id)
         resolver = self._get_resolver_for_run(token.run_id)
         node = resolver.get_node(token.step_id)
 
@@ -2915,6 +2955,7 @@ class SkillFlow:
         # `version` from the row it is about to write, so it never detects a
         # reclaim on its own.)
         self._assert_epoch(token, "fail_step")
+        self._release_step_tools(token.run_id, token.step_id)
         with self._tx() as conn:
             self._fail_step_in_tx(conn, token, error, retryable)
 
@@ -5193,6 +5234,32 @@ class SkillFlow:
 
     # ── Host tool execution API ─────────────────────────────────────
 
+    # ── Step-owned tool callables ─────────────────────────────────────
+    # Bound at claim, resolved by the owning step, dropped when the step ends.
+
+    _STEP_TOOL_CAP = 512
+
+    def _set_step_tools(self, run_id: str, step_id: str, fns: dict) -> None:
+        with self._lock:
+            self._step_tools[(run_id, step_id)] = fns
+            # A step whose host dies is never confirmed or failed, so its entry
+            # is only replaced when that step is re-claimed. The cap bounds that
+            # without a run-teardown hook; in normal operation the releases on
+            # confirm/fail keep this far below it.
+            while len(self._step_tools) > self._STEP_TOOL_CAP:
+                self._step_tools.pop(next(iter(self._step_tools)))
+
+    def _step_tool_fn(self, run_id: str, step_id: str, name: str):
+        """The callable *this* step owns for *name*, or None."""
+        if not (run_id and step_id):
+            return None
+        with self._lock:
+            return (self._step_tools.get((run_id, step_id)) or {}).get(name)
+
+    def _release_step_tools(self, run_id: str, step_id: str) -> None:
+        with self._lock:
+            self._step_tools.pop((run_id, step_id), None)
+
     def execute_tool(self, name: str, params: dict, *,
                      run_id: str = "", step_id: str = "",
                      step_instance_id: int | None = None,
@@ -5378,8 +5445,17 @@ class SkillFlow:
         if name == "finish_step":
             return {"status": "completed", "summary": params.get("summary", "")}
 
-        # Read/exploration/validation tools via ToolLoader
-        fn = self._tool_loader.load_fn(name)
+        # Read/exploration/validation tools. The read/search/list trio belongs to
+        # the claim that built it, so ask that step first — the shared loader has
+        # no callable for it and must never be allowed to answer with another
+        # step's.
+        fn = self._step_tool_fn(run_id, step_id, name)
+        if fn is None:
+            if name in self._step_scoped_names:
+                return {"error": f"Tool '{name}' is provided per step, and this "
+                                 f"step has no read surface (or its claim has "
+                                 f"already ended)."}
+            fn = self._tool_loader.load_fn(name)
         kwargs = dict(params)
         kwargs.setdefault("workspace_root", project_root or "")
         kwargs.setdefault("project_root", project_root or "")

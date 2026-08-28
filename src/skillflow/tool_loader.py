@@ -30,6 +30,10 @@ class ToolLoader:
         self._tools_dirs: list[Path] = [Path(d) for d in tools_dirs]
         self._cache: dict[str, tuple[dict, Callable]] = {}
         self._tool_dir_cache: dict[str, Path] = {}  # name → which dir
+        # Names whose CALLABLE is owned by a step rather than by this loader
+        # (the unified read/search/list trio). Only the name is global here —
+        # see `declare_dynamic` for why the function must not be.
+        self._dynamic_names: set[str] = set()
 
     def add_tools_dir(self, path: Path):
         """Register an additional tools directory (searched last)."""
@@ -53,22 +57,41 @@ class ToolLoader:
         if not self._tools_dirs:
             return False
         tool_dir = self._find_tool_dir(name)
-        # Dynamic tools (registered via register_dynamic_tool) are also native
-        if tool_dir is None and name in self._cache:
+        # Dynamic tools (registered via register_dynamic_tool, or declared
+        # per-step via declare_dynamic) are also native
+        if tool_dir is None and (name in self._cache
+                                 or name in self._dynamic_names):
             return True
         return tool_dir is not None and tool_dir == self._tools_dirs[0]
 
     def register_dynamic_tool(self, name: str, schema: dict, fn: Callable) -> None:
         """Register a tool that isn't backed by a tool.yaml on disk.
 
-        Dynamically generated tools (e.g. read_step_1_sota from context specs)
-        are registered here so load_schema/load_fn work without file I/O.
+        Binds ONE callable into a process-wide slot keyed by name alone, so two
+        registrations of the same name overwrite each other. That is fine for a
+        tool whose behaviour does not depend on who is calling it, and wrong for
+        anything that closes over per-step state — use `declare_dynamic` plus a
+        step-owned callable for those.
         """
         self._cache[name] = (schema, fn)
+        self._dynamic_names.add(name)
+
+    def declare_dynamic(self, name: str) -> None:
+        """Record *name* as dynamically provided WITHOUT storing a callable.
+
+        The unified `read`/`search`/`list` tools close over the source map of
+        the step that built them. Registered by name in the shared cache, the
+        last claim's closures served every in-flight step: with several projects
+        advancing at once, a review step in one project listed ANOTHER project's
+        git repository (observed 2026-08-28). Only the name is global now — it
+        keeps `is_native`/`is_dynamic` classifying these tools correctly — while
+        the callable belongs to the claim that owns it (SkillFlow._step_tools).
+        """
+        self._dynamic_names.add(name)
 
     def is_dynamic(self, name: str) -> bool:
-        """True if the tool was registered via register_dynamic_tool."""
-        if name not in self._cache:
+        """True if the tool is dynamic (registered or declared), not on disk."""
+        if name not in self._cache and name not in self._dynamic_names:
             return False
         # Dynamic tools have no tool_dir on disk — we check by trying to find one
         return self._find_tool_dir(name) is None
