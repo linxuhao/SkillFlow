@@ -208,3 +208,77 @@ def test_adding_a_tools_dir_forgets_registered_callables_but_not_step_names(
         "its callable was just discarded; it must not still read as native"
     assert loader.is_native("list"), \
         "a step-owned name has nothing in this loader to invalidate"
+
+
+# ── Bounding must not blind a live step ───────────────────────────────────
+
+def test_the_cap_never_evicts_an_entry_that_could_still_be_running(sf, monkeypatch):
+    """Insertion order would sacrifice the OLDEST entry — under load that is the
+    longest-RUNNING claim, the one most likely to still need its tools. Only
+    entries past the stale threshold are eligible; if none are, keep them all."""
+    monkeypatch.setattr(type(sf), "_STEP_TOOL_CAP", 2)
+    for i in range(4):
+        sf._set_step_tools(f"run{i}", "s", {"list": lambda: None}, 1)
+
+    assert len(sf._step_tools) == 4, \
+        "young entries were evicted; a live step just lost its read surface"
+
+    # Age the first one past the threshold, then trip the cap again.
+    k = ("run0", "s")
+    epoch, fns, _ = sf._step_tools[k]
+    sf._step_tools[k] = (epoch, fns, 0.0)
+    sf._set_step_tools("run4", "s", {"list": lambda: None}, 1)
+
+    assert k not in sf._step_tools
+    assert ("run4", "s") in sf._step_tools
+
+
+def test_a_reaped_claim_gives_its_tools_back(sf, tmp_path):
+    """The reaper is where an abandoned claim is KNOWN dead. Left to the cap,
+    a reaped step's closures sit in the map until it is claimed again — for a
+    run that never resumes, forever.
+
+    The claim is re-stamped with a dead owner first: `recover_stale_claims`
+    never reclaims a LIVE one, and the fixture's claim is owned by this very
+    process, so without that the reaper correctly does nothing and the test
+    would prove only that.
+    """
+    _repo(tmp_path, "proj_a", "ONLY_IN_A.txt")
+    sf.register_graph(_graph("ga"))
+    run_a, _ = _claim(sf, "ga", "proj_a")
+    assert (run_a, "review") in sf._step_tools
+
+    with sf._tx() as conn:
+        conn.execute(
+            "UPDATE skillflow_steps SET claimed_by = ?, claimed_at = ?, "
+            "updated_at = ? WHERE run_id = ? AND step_id = ?",
+            ("worker host=gone pid=999999", "2000-01-01 00:00:00",
+             "2000-01-01 00:00:00", run_a, "review"))
+
+    reaped = sf.recover_stale_claims(stale_threshold_seconds=1)
+
+    assert reaped, "the reaper did not reclaim; this test would prove nothing"
+    assert (run_a, "review") not in sf._step_tools
+
+
+def test_a_tool_lookup_does_not_wait_on_an_engine_transaction(sf, tmp_path):
+    """`_step_tool_fn` is on the hot path of every tool call. Sharing the engine
+    RLock would make one project's tool call block on another project's claim or
+    confirm — cross-project coupling re-introduced by the fix meant to remove it.
+    """
+    import threading
+    _repo(tmp_path, "proj_a", "ONLY_IN_A.txt")
+    sf.register_graph(_graph("ga"))
+    run_a, _ = _claim(sf, "ga", "proj_a")
+
+    done = threading.Event()
+
+    def _lookup():
+        sf._step_tool_fn(run_a, "review", "list")
+        done.set()
+
+    with sf._lock:                       # as _tx does, for a whole transaction
+        t = threading.Thread(target=_lookup, daemon=True)
+        t.start()
+        assert done.wait(timeout=2.0), \
+            "tool lookup blocked on the engine lock held by another thread"

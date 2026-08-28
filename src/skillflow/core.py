@@ -359,7 +359,15 @@ class SkillFlow:
         # they were last-writer-wins across projects: with several projects
         # advancing concurrently a review step in one project listed another
         # project's git repository (observed 2026-08-28).
-        self._step_tools: dict[tuple[str, str], dict] = {}
+        self._step_tools: dict[tuple[str, str], tuple] = {}
+        # Its OWN lock, not the engine RLock. `_step_tool_fn` runs on the hot
+        # path of every tool call, and `_tx` holds the engine lock for whole
+        # transactions — sharing it would make one project's tool calls wait on
+        # another project's claim, i.e. re-introduce cross-project coupling in
+        # the very change that exists to remove it. Only ever held across dict
+        # operations, so it can be taken while holding the engine lock (the
+        # reaper does) and never the other way round.
+        self._step_tools_lock = threading.Lock()
         # Names handed out that way. Kept HERE rather than asked of the tool
         # loader: the loader is a duck-typed injected dependency, and making a
         # boolean query part of its contract breaks every custom implementation
@@ -4886,6 +4894,11 @@ class SkillFlow:
                 # SF-20: track stale recovery count to detect crash loops.
                 # If the same step instance has been recovered twice already,
                 # the worker keeps dying on it — fail it permanently.
+                # This claim is over either way — give its read tools back
+                # before the row is rewritten. Without this, a reaped step's
+                # closures sit in the map until that step is claimed again,
+                # which for a run that never resumes is forever.
+                self._drop_step_tools(row["run_id"], row["step_id"])
                 inputs = self._deserialize(row["inputs_json"])
                 stale_count = inputs.get("_stale_recovery_count", 0) + 1
                 if stale_count >= 3:
@@ -5262,14 +5275,35 @@ class SkillFlow:
 
     def _set_step_tools(self, run_id: str, step_id: str, fns: dict,
                         epoch: int) -> None:
-        with self._lock:
-            self._step_tools[(run_id, step_id)] = (epoch, fns)
-            # A step whose host dies is never confirmed or failed, so its entry
-            # is only replaced when that step is re-claimed. The cap bounds that
-            # without a run-teardown hook; in normal operation the releases on
-            # confirm/fail keep this far below it.
-            while len(self._step_tools) > self._STEP_TOOL_CAP:
-                self._step_tools.pop(next(iter(self._step_tools)))
+        with self._step_tools_lock:
+            self._step_tools[(run_id, step_id)] = (epoch, fns, time.monotonic())
+            if len(self._step_tools) > self._STEP_TOOL_CAP:
+                self._evict_step_tools_locked()
+
+    def _evict_step_tools_locked(self) -> None:
+        """Last-resort bound, and it must never cost a LIVE step its tools.
+
+        Entries are released on confirm/fail and on stale recovery, so reaching
+        the cap means something is not ending steps at all. Evicting by plain
+        insertion order would then sacrifice the OLDEST entry — which under load
+        is the longest-RUNNING claim, exactly the one still using its tools (a
+        17-minute architect step is the shape that motivated this). Only entries
+        older than the stale threshold are eligible: past that, the step is
+        either finished or already reclaimed. If nothing is old enough, keep them
+        all and say so — a few closures of unbounded growth is a smaller failure
+        than silently blinding a step that is still working.
+        """
+        cutoff = time.monotonic() - max(float(self._stale_threshold or 0), 60.0)
+        evictable = [k for k, v in self._step_tools.items() if v[2] < cutoff]
+        for k in evictable:
+            del self._step_tools[k]
+            if len(self._step_tools) <= self._STEP_TOOL_CAP:
+                break
+        if len(self._step_tools) > self._STEP_TOOL_CAP:
+            logging.getLogger("skillflow").warning(
+                "step tool map holds %d entries and none are older than the "
+                "stale threshold — steps are being claimed but never confirmed, "
+                "failed or reclaimed", len(self._step_tools))
 
     def _step_tool_fn(self, run_id: str, step_id: str, name: str):
         """The callable *this* step owns for *name*, or None.
@@ -5280,7 +5314,7 @@ class SkillFlow:
         """
         if not (run_id and step_id):
             return None
-        with self._lock:
+        with self._step_tools_lock:
             entry = self._step_tools.get((run_id, step_id))
         return entry[1].get(name) if entry else None
 
@@ -5296,10 +5330,23 @@ class SkillFlow:
         area exists to stop producing.
         """
         key = (run_id, step_id)
-        with self._lock:
+        with self._step_tools_lock:
             entry = self._step_tools.get(key)
             if entry is not None and entry[0] == epoch:
                 del self._step_tools[key]
+
+    def _drop_step_tools(self, run_id: str, step_id: str) -> None:
+        """Unconditional release, for the reaper only.
+
+        `_release_step_tools` compares epochs because a caller there may be a
+        zombie. Stale recovery is the opposite case: it runs inside the engine
+        transaction, the step is 'claimed' at that instant so no new claim can be
+        in flight, and it is about to bump the epoch — whatever is stored is dead
+        by definition, and comparing against a token nobody holds would just
+        leave it behind.
+        """
+        with self._step_tools_lock:
+            self._step_tools.pop((run_id, step_id), None)
 
     def execute_tool(self, name: str, params: dict, *,
                      run_id: str = "", step_id: str = "",
