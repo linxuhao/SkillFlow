@@ -136,7 +136,7 @@ class ContextResolver:
     """Resolves context sources into assembled content."""
 
     def __init__(self, workspace_root: Path, tool_loader=None,
-                 code_root: Path | str | None = None,
+                 code_root: Path | str | bool | None = None,
                  extra_tool_kwargs: dict | None = None):
         self._workspace_root = Path(workspace_root)
         self._tool_loader = tool_loader
@@ -152,8 +152,18 @@ class ContextResolver:
         # a near-empty brief dir — while the read-tool branch of the SAME spec
         # used the real code repo. Falls back to the old path so a resolver
         # constructed without it keeps its (degenerate) behavior.
-        self._code_root = Path(code_root) if code_root \
-            else self._workspace_root / "project"
+        #
+        # ``False`` is the third answer, matching WorkspaceManager's
+        # ``code_path_resolver`` convention: "this run HAS no code repository".
+        # It must not fall back, because the fallback path
+        # (``workspace_root/"project"``) exists and is populated — it is the
+        # project BRIEF directory — so a repo-less run would be shown the brief
+        # dir labelled "Repository". None keeps meaning "no opinion".
+        if code_root is False:
+            self._code_root = None
+        else:
+            self._code_root = Path(code_root) if code_root \
+                else self._workspace_root / "project"
 
     def resolve(self, specs: list[dict],
                 current_config: str = "",
@@ -474,6 +484,17 @@ class ContextResolver:
         if source.get("mode") == "tool":
             return "", ""  # tool-only, no inline injection
 
+        if self._code_root is None:
+            # The run declares no code repository, so there is nothing here to
+            # read. Reported rather than silently empty: a `from: repository`
+            # spec on a repo-less run is a config mistake, and the previous
+            # answer — the project brief dir, presented as "Repository" — was a
+            # wrong answer that looked like a right one.
+            logging.getLogger("skillflow.context").warning(
+                "from:repository on a run that declares no code repository — "
+                "nothing injected")
+            return "", ""
+
         rel_path = source.get("path", "")
         if not rel_path:
             logging.getLogger("skillflow.context").warning(
@@ -521,12 +542,17 @@ class ContextResolver:
             # dir_tree must describe the same tree the read tools serve.
             call_kwargs = {
                 "workspace_root": str(self._workspace_root),
-                "project_root": str(self._code_root),
                 # Which pipeline is reading. A context tool that answers a
                 # per-pipeline question (what does THIS graph offer?) otherwise
                 # gets an empty name and silently answers about everything.
                 "config_name": current_config or "",
             }
+            # Omitted, not "", when the run declares no code repository: the
+            # tool's own default applies, and a tool that resolves the value
+            # (`Path(project_root).resolve()` is the process CWD for "") gets
+            # nothing to resolve instead of the server's own checkout.
+            if self._code_root is not None:
+                call_kwargs["project_root"] = str(self._code_root)
             # Add the reading step's capability context (e.g. state_dir), then
             # drop any kwarg the tool doesn't accept (unless it takes **kwargs).
             for _k, _v in self._extra_tool_kwargs.items():

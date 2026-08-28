@@ -20,6 +20,14 @@ def git_sync_pre(project_root: str) -> dict:
         {"synced": true/false, "action": "skip"|"up-to-date"|"pulled",
          "pulled": N, "error": "..."}
     """
+    if not project_root or not Path(project_root).is_absolute():
+        # `Path("").resolve()` is the process CWD — for a hosted engine, the
+        # server's own checkout, which `git fetch`/`git pull` below would then
+        # operate on. Refuse instead of guessing.
+        return {"synced": False, "action": "error",
+                "error": f"git_sync_pre: project_root must be an absolute path "
+                         f"(got {project_root!r}) — refusing to resolve against "
+                         f"the process CWD"}
     root = Path(project_root).resolve()
 
     # ── Not a git repo → silent skip ──────────────────────────────────

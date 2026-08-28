@@ -5,6 +5,15 @@ from pathlib import Path
 
 def repo_validate(validations: list[dict], *, workspace_root: str = "",
                   project_root: str = "") -> dict:
+    if not project_root or not Path(project_root).is_absolute():
+        # `Path("")` is `PosixPath('.')`, so `proj.rglob(...)` below would walk
+        # the process CWD — for a hosted engine, the server's own checkout — and
+        # report a verdict about a tree that is not the project's.
+        return {"all_passed": False, "results": [],
+                "error": f"repo_validate: project_root must be an absolute path "
+                         f"(got {project_root!r}) — refusing to resolve against "
+                         f"the process CWD"}
+
     # Lazy-import ToolLoader to avoid circular imports
     import importlib.util
     spec = importlib.util.spec_from_file_location(

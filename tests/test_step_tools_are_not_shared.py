@@ -215,7 +215,8 @@ def test_adding_a_tools_dir_forgets_registered_callables_but_not_step_names(
 def test_the_cap_never_evicts_an_entry_that_could_still_be_running(sf, monkeypatch):
     """Insertion order would sacrifice the OLDEST entry — under load that is the
     longest-RUNNING claim, the one most likely to still need its tools. Only
-    entries past the stale threshold are eligible; if none are, keep them all."""
+    entries idle past the stale threshold are eligible; if none are, keep them
+    all."""
     monkeypatch.setattr(type(sf), "_STEP_TOOL_CAP", 2)
     for i in range(4):
         sf._set_step_tools(f"run{i}", "s", {"list": lambda: None}, 1)
@@ -233,16 +234,51 @@ def test_the_cap_never_evicts_an_entry_that_could_still_be_running(sf, monkeypat
     assert ("run4", "s") in sf._step_tools
 
 
-def test_a_reaped_claim_gives_its_tools_back(sf, tmp_path):
-    """The reaper is where an abandoned claim is KNOWN dead. Left to the cap,
-    a reaped step's closures sit in the map until it is claimed again — for a
-    run that never resumes, forever.
+def test_the_cap_measures_idleness_not_claim_age(sf, monkeypatch):
+    """The guard has to read the same clock staleness is measured on.
 
-    The claim is re-stamped with a dead owner first: `recover_stale_claims`
-    never reclaims a LIVE one, and the fixture's claim is owned by this very
-    process, so without that the reaper correctly does nothing and the test
-    would prove only that.
+    `recover_stale_claims` measures the ACTIVITY clock (`updated_at`,
+    heartbeated). A step that keeps working keeps that clock fresh and is never
+    reaped — while its CREATION stamp is by definition the oldest in the map. A
+    guard filtering on creation age therefore evicts exactly the entry it exists
+    to protect: the longest-running claim goes first.
+
+    Here the oldest entry is the one still CALLING its read tools. It must be
+    the last to go, not the first.
     """
+    monkeypatch.setattr(type(sf), "_STEP_TOOL_CAP", 2)
+    for i in range(3):
+        sf._set_step_tools(f"run{i}", "s", {"list": lambda: None}, 1)
+    # Everything is idle enough to be evictable…
+    for k, (epoch, fns, _) in list(sf._step_tools.items()):
+        sf._step_tools[k] = (epoch, fns, 0.0)
+
+    # …but run0, the one created first, is still using its read surface.
+    assert sf._step_tool_fn("run0", "s", "list") is not None
+
+    sf._set_step_tools("run3", "s", {"list": lambda: None}, 1)
+
+    assert ("run0", "s") in sf._step_tools, \
+        "the entry that just called a read tool was evicted first"
+
+
+def test_a_claim_whose_owner_is_gone_gives_its_tools_back(sf, tmp_path):
+    """Where an abandoned claim is KNOWN dead, reclaiming the entry is free.
+
+    The claim is re-stamped with an identity `owner_is_dead` reports True for:
+    this process's own boot id and pid, with a `start=` marker that cannot match
+    /proc — the recycled-pid case. Without a dead owner the reaper falls to the
+    lease, which is a different branch (see the test below).
+    """
+    import os
+    from skillflow.identity import _self_identity, owner_is_dead
+
+    me = _self_identity()
+    dead = (f"worker host={me['host']} pid={os.getpid()} "
+            f"boot={me.get('boot')} start=1")
+    if owner_is_dead(dead) is not True:
+        pytest.skip("owner liveness is not observable on this platform")
+
     _repo(tmp_path, "proj_a", "ONLY_IN_A.txt")
     sf.register_graph(_graph("ga"))
     run_a, _ = _claim(sf, "ga", "proj_a")
@@ -250,15 +286,61 @@ def test_a_reaped_claim_gives_its_tools_back(sf, tmp_path):
 
     with sf._tx() as conn:
         conn.execute(
-            "UPDATE skillflow_steps SET claimed_by = ?, claimed_at = ?, "
-            "updated_at = ? WHERE run_id = ? AND step_id = ?",
-            ("worker host=gone pid=999999", "2000-01-01 00:00:00",
-             "2000-01-01 00:00:00", run_a, "review"))
+            "UPDATE skillflow_steps SET claimed_by = ? "
+            "WHERE run_id = ? AND step_id = ?", (dead, run_a, "review"))
 
     reaped = sf.recover_stale_claims(stale_threshold_seconds=1)
 
     assert reaped, "the reaper did not reclaim; this test would prove nothing"
     assert (run_a, "review") not in sf._step_tools
+
+
+def test_a_lease_reaped_claim_keeps_its_read_surface(sf, tmp_path):
+    """A lease reap is a GUESS, and dropping the tools makes a wrong one fatal.
+
+    The reset UPDATE in `recover_stale_claims` writes status, version,
+    claimed_at, claimed_by and inputs_json — not `claim_epoch`, which is bumped
+    only in `claim_next_step` and `_claim_tool_step_in_tx`. So a worker the
+    lease condemned while it was still alive keeps an epoch that satisfies
+    `_epoch_holds`: `execute_tool` does not fence its calls, they arrive and
+    find nothing, and every read/search/list for the rest of that step answers
+    "this step has no read surface". The step then writes its output having read
+    nothing — silently.
+
+    `claimed_by` here carries a pid but no boot marker, so `owner_is_dead`
+    returns None (not determinable) and the lease is the only thing condemning
+    it — which is the whole point.
+    """
+    from skillflow.identity import owner_is_dead
+
+    unknown = "worker host=gone pid=999999"
+    assert owner_is_dead(unknown) is None, \
+        "this identity is meant to be undeterminable; the branch under test moved"
+
+    _repo(tmp_path, "proj_a", "ONLY_IN_A.txt")
+    sf.register_graph(_graph("ga"))
+    run_a, claimed = _claim(sf, "ga", "proj_a")
+
+    with sf._tx() as conn:
+        conn.execute(
+            "UPDATE skillflow_steps SET claimed_by = ?, claimed_at = ?, "
+            "updated_at = ? WHERE run_id = ? AND step_id = ?",
+            (unknown, "2000-01-01 00:00:00", "2000-01-01 00:00:00",
+             run_a, "review"))
+
+    assert sf.recover_stale_claims(stale_threshold_seconds=1), \
+        "the reaper did not reclaim; this test would prove nothing"
+
+    # The epoch the maybe-live executor still holds is unchanged — so nothing
+    # fences its calls, and they must still be served.
+    with sf._tx() as conn:
+        row = conn.execute(
+            "SELECT claim_epoch FROM skillflow_steps WHERE run_id = ? AND "
+            "step_id = ?", (run_a, "review")).fetchone()
+    assert (row["claim_epoch"] or 0) == claimed.token.claim_epoch
+
+    assert "ONLY_IN_A.txt" in _listing(sf, run_a), \
+        "a lease-reaped (possibly live) step lost its read surface"
 
 
 def test_a_tool_lookup_does_not_wait_on_an_engine_transaction(sf, tmp_path):

@@ -10,6 +10,16 @@ def repo_apply(source_dir: str, *, workspace_root: str = "",
                project_root: str = "",
                step_id: str = "", project_id: str = "",
                task_name: str = "", config_name: str = "", ignore=None) -> dict:
+    if not project_root or not Path(project_root).is_absolute():
+        # Never fall back to the process CWD. `Path("").resolve()` is that CWD,
+        # which for a hosted engine is the server's own checkout — this function
+        # then copies step output into it and runs `git add -A` + `git commit`
+        # below. A run that owns no repository is handed no project_root at all
+        # (core.py), and this is what that omission has to hit.
+        return {"applied": False, "files": [],
+                "error": f"repo_apply: project_root must be an absolute path "
+                         f"(got {project_root!r}) — refusing to resolve against "
+                         f"the process CWD"}
     src = Path(source_dir)
     if not src.is_absolute():
         src = Path(workspace_root) / source_dir

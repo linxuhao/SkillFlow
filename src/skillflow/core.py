@@ -1779,10 +1779,16 @@ class SkillFlow:
                     # code_root: the real code repo, so `from: repository`
                     # inline reads and context-source tools see the SAME tree
                     # the read tools serve (not the workspace's brief dir).
+                    # None from get_project_code_path means the run declares no
+                    # repo — forwarded as False, because ContextResolver reads
+                    # None as "not supplied" and falls back to
+                    # workspace_root/"project", the populated project BRIEF dir,
+                    # which it then labels "Repository".
+                    _ctx_code = self._workspace.get_project_code_path(
+                        run["project_id"])
                     resolver = ContextResolver(
                         config_path, self._tool_loader,
-                        code_root=self._workspace.get_project_code_path(
-                            run["project_id"]),
+                        code_root=_ctx_code if _ctx_code is not None else False,
                         # a `{source: {tool: X}}` context tool runs on behalf of
                         # THIS step → hand it the step's capability context too.
                         extra_tool_kwargs=self._capability_context(
@@ -2592,9 +2598,17 @@ class SkillFlow:
                 params.setdefault("workspace_root",
                                   str(self._workspace.get_project_path(row["project_id"])))
                 _cp = self._workspace.get_project_code_path(row["project_id"])
-                # "" for a repo-less run, never the string "None": a tool that
-                # needs a repo refuses an empty root with its own clear error.
-                params.setdefault("project_root", str(_cp) if _cp else "")
+                # A repo-less run gets NO project_root, not an empty one.
+                # `Path("").resolve()` is the process CWD, and the repo tools
+                # resolve straight from this value: `repo_apply` does
+                # `dst = Path(project_root).resolve()` (tools/repo_apply/impl.py),
+                # as do `git_sync_pre` and `repo_validate`. Handing them "" aimed
+                # a copy + `git add -A` + commit at whatever directory the server
+                # happens to run in. Omitted, `repo_apply`'s own guard (added
+                # alongside this) refuses, and a tool that declares the argument
+                # required raises TypeError — both loud, neither silent.
+                if _cp:
+                    params.setdefault("project_root", str(_cp))
 
         # Built-in step_commit: move tmp→step_dir atomically
         if tool_name == "step_commit":
@@ -2670,27 +2684,36 @@ class SkillFlow:
         # after_deliver checks against the project repo, not step output
         if hook_name == "after_deliver":
             check_dir = self._workspace.get_project_code_path(pid)
-            if check_dir is None:
-                # A run that owns no repository delivers nothing to one, so
-                # there is nothing here to check. Said out loud rather than
-                # passed silently: validating an invented directory succeeded or
-                # failed depending on whether it happened to exist, which is the
-                # kind of answer that reads as a verdict and is not one.
-                # `error` SINGULAR: this returns above the normalizer below, and
-                # the caller reads `hook_result.get("error", <generic>)` — an
-                # `errors` list here would be dropped and the step would fail
-                # with "Lifecycle hook 'after_deliver' failed" and no reason,
-                # which is the opposite of the point of saying anything.
-                return {"passed": False,
-                        "error": "after_deliver validation checks the code "
-                                 "repository, and this run declares none"}
         else:
             check_dir = self._workspace.get_step_dir(pid, gname, token.step_id)
 
-        from skillflow.step_validation import StepValidator
-        validator = StepValidator(self._tool_loader, check_dir, config_name=gname,
-                                  trace_sink=self._validation_trace_sink(token))
-        result = validator.validate(check_specs)
+        if check_dir is None:
+            # A run that owns no repository has nothing for after_deliver to
+            # check. Reported per spec rather than as one blanket refusal: only
+            # StepValidator honours a spec's own `on_failure`, and the caller
+            # resolves the HOOK-level policy from `hook_spec` — which for
+            # after_deliver is always a LIST, so `isinstance(hook_spec, dict)`
+            # is False and it resolves to "fail". A single {"passed": False}
+            # here therefore turns every after_deliver spec, including the ones
+            # that declare `on_failure: "warn"`, into an unretryable step
+            # failure. Routing each spec through its own declared policy keeps
+            # that promise while still saying why nothing was checked.
+            reason = ("after_deliver validation checks the code repository, "
+                      "and this run declares none")
+            errors, warnings = [], []
+            for spec in check_specs:
+                item = {"tool": spec.get("tool", "?"),
+                        "files": spec.get("files", []), "error": reason}
+                (warnings if spec.get("on_failure") == "warn"
+                 else errors).append(item)
+            result = {"passed": not errors, "errors": errors,
+                      "warnings": warnings}
+        else:
+            from skillflow.step_validation import StepValidator
+            validator = StepValidator(self._tool_loader, check_dir,
+                                      config_name=gname,
+                                      trace_sink=self._validation_trace_sink(token))
+            result = validator.validate(check_specs)
         # Normalize: StepValidator returns "errors" (plural list),
         # but callers expect "error" (singular string).
         if "errors" in result and "error" not in result:
@@ -3229,7 +3252,15 @@ class SkillFlow:
                             self._workspace.get_project_path(pid))
                     if not kwargs.get("project_root"):
                         _cp = self._workspace.get_project_code_path(pid)
-                        kwargs["project_root"] = str(_cp) if _cp else ""
+                        if _cp:
+                            kwargs["project_root"] = str(_cp)
+                        else:
+                            # Repo-less: drop the "" placeholder seeded above
+                            # rather than pass it on. `Path("").resolve()` is the
+                            # process CWD and repo_apply/git_sync_pre/
+                            # repo_validate each resolve this value directly, so
+                            # "" points a commit at the server's own checkout.
+                            kwargs.pop("project_root", None)
             except Exception:
                 # Best-effort default-filling, but a failure here leaves a tool
                 # without workspace_root/project_root → it misfires later with a
@@ -4832,6 +4863,10 @@ class SkillFlow:
             # emits no intra-run activity, so its updated_at == claimed_at and
             # its window is its timeout_seconds (0 = never stale), unchanged.
             stale = []
+            # Row ids whose owner the OS reported GONE, as opposed to the ones
+            # the lease alone condemned. Only the first group is safe to strip
+            # of its step-owned tool callables — see the drop below.
+            dead_owner_ids: set = set()
             for row in claimed:
                 # Ownership decides. The lease only answers where ownership
                 # cannot — these are different questions and only the first has
@@ -4865,6 +4900,7 @@ class SkillFlow:
                 owner_dead = owner_is_dead(row["claimed_by"])
                 if owner_dead is True:
                     stale.append(row)
+                    dead_owner_ids.add(row["id"])
                     continue
                 if owner_dead is False:
                     continue
@@ -4894,11 +4930,21 @@ class SkillFlow:
                 # SF-20: track stale recovery count to detect crash loops.
                 # If the same step instance has been recovered twice already,
                 # the worker keeps dying on it — fail it permanently.
-                # This claim is over either way — give its read tools back
-                # before the row is rewritten. Without this, a reaped step's
-                # closures sit in the map until that step is claimed again,
-                # which for a run that never resumes is forever.
-                self._drop_step_tools(row["run_id"], row["step_id"])
+                # Give the read tools back ONLY when the OS reported the owner
+                # gone. A lease-condemned claim may still be executing: the
+                # reset UPDATE below writes status/version/claimed_at/
+                # claimed_by/inputs_json and NOT claim_epoch (the epoch is
+                # bumped only in claim_next_step and _claim_tool_step_in_tx), so
+                # a falsely reaped worker still passes `_epoch_holds` and its
+                # tool calls are NOT fenced by execute_tool — they arrive, find
+                # nothing, and get "this step has no read surface" for the rest
+                # of the step. It then writes its output having read nothing,
+                # which is the silent degrade this whole area exists to prevent.
+                # For a dead owner nobody is left to call them, so dropping is
+                # what reclaims the entry promptly; the rest are bounded by the
+                # cap and overwritten on re-claim.
+                if row["id"] in dead_owner_ids:
+                    self._drop_step_tools(row["run_id"], row["step_id"])
                 inputs = self._deserialize(row["inputs_json"])
                 stale_count = inputs.get("_stale_recovery_count", 0) + 1
                 if stale_count >= 3:
@@ -5276,6 +5322,8 @@ class SkillFlow:
     def _set_step_tools(self, run_id: str, step_id: str, fns: dict,
                         epoch: int) -> None:
         with self._step_tools_lock:
+            # Third field is the LAST-USE stamp, refreshed by every lookup in
+            # `_step_tool_fn` — not the creation stamp. See the eviction guard.
             self._step_tools[(run_id, step_id)] = (epoch, fns, time.monotonic())
             if len(self._step_tools) > self._STEP_TOOL_CAP:
                 self._evict_step_tools_locked()
@@ -5283,40 +5331,60 @@ class SkillFlow:
     def _evict_step_tools_locked(self) -> None:
         """Last-resort bound, and it must never cost a LIVE step its tools.
 
-        Entries are released on confirm/fail and on stale recovery, so reaching
-        the cap means something is not ending steps at all. Evicting by plain
-        insertion order would then sacrifice the OLDEST entry — which under load
-        is the longest-RUNNING claim, exactly the one still using its tools (a
-        17-minute architect step is the shape that motivated this). Only entries
-        older than the stale threshold are eligible: past that, the step is
-        either finished or already reclaimed. If nothing is old enough, keep them
-        all and say so — a few closures of unbounded growth is a smaller failure
-        than silently blinding a step that is still working.
+        Entries are released on confirm/fail and when the reaper finds the owner
+        dead, so reaching the cap means something is not ending steps at all.
+        Evicting by plain insertion order would sacrifice the entry created
+        longest ago — which under load is the longest-RUNNING claim, exactly the
+        one most likely to still be using its tools (a 17-minute architect step
+        is the shape that motivated this).
+
+        Age is therefore measured on an ACTIVITY clock, as `recover_stale_claims`
+        measures it: the stamp is refreshed on every `_step_tool_fn` lookup, so
+        it says when this step last USED its read surface, not when it claimed.
+        Eviction takes the least recently used first, and only entries idle for
+        longer than the stale threshold are eligible at all — a step still
+        calling its read tools is never a candidate. If nothing is idle enough,
+        keep them all and say so: a few closures of unbounded growth is a
+        smaller failure than silently blinding a step that is still working.
+
+        (An agent that reads nothing after its claim keeps its creation stamp.
+        That is the same signal the reaper's own window would see — no tool call
+        and no trace — and the "keep them all" branch is what covers it.)
         """
         cutoff = time.monotonic() - max(float(self._stale_threshold or 0), 60.0)
-        evictable = [k for k, v in self._step_tools.items() if v[2] < cutoff]
-        for k in evictable:
+        evictable = sorted((v[2], k) for k, v in self._step_tools.items()
+                           if v[2] < cutoff)
+        for _stamp, k in evictable:
             del self._step_tools[k]
             if len(self._step_tools) <= self._STEP_TOOL_CAP:
                 break
         if len(self._step_tools) > self._STEP_TOOL_CAP:
             logging.getLogger("skillflow").warning(
-                "step tool map holds %d entries and none are older than the "
-                "stale threshold — steps are being claimed but never confirmed, "
-                "failed or reclaimed", len(self._step_tools))
+                "step tool map holds %d entries and none have been idle longer "
+                "than the stale threshold — steps are being claimed but never "
+                "confirmed, failed or reclaimed", len(self._step_tools))
 
     def _step_tool_fn(self, run_id: str, step_id: str, name: str):
         """The callable *this* step owns for *name*, or None.
 
-        Not epoch-checked: `execute_tool` already fences a reclaimed executor's
-        calls, and repeating that here would only be a second copy of the same
-        rule. The epoch stored beside the callables exists for RELEASE.
+        Also refreshes the entry's last-use stamp, which is what the eviction
+        guard reads: a step that is still calling its read tools must never be
+        the one the cap sacrifices.
+
+        Not epoch-checked: `execute_tool` fences a reclaimed executor's calls
+        when the host passes the claim's epoch, and repeating that here would
+        only be a second copy of the same rule. The epoch stored beside the
+        callables exists for RELEASE.
         """
         if not (run_id and step_id):
             return None
+        key = (run_id, step_id)
         with self._step_tools_lock:
-            entry = self._step_tools.get((run_id, step_id))
-        return entry[1].get(name) if entry else None
+            entry = self._step_tools.get(key)
+            if entry is None:
+                return None
+            self._step_tools[key] = (entry[0], entry[1], time.monotonic())
+        return entry[1].get(name)
 
     def _release_step_tools(self, run_id: str, step_id: str, epoch: int) -> None:
         """Drop this claim's callables — only if the entry is still ITS entry.
@@ -5336,14 +5404,20 @@ class SkillFlow:
                 del self._step_tools[key]
 
     def _drop_step_tools(self, run_id: str, step_id: str) -> None:
-        """Unconditional release, for the reaper only.
+        """Unconditional release, for a PROVABLY DEAD owner only.
 
-        `_release_step_tools` compares epochs because a caller there may be a
-        zombie. Stale recovery is the opposite case: it runs inside the engine
-        transaction, the step is 'claimed' at that instant so no new claim can be
-        in flight, and it is about to bump the epoch — whatever is stored is dead
-        by definition, and comparing against a token nobody holds would just
-        leave it behind.
+        `_release_step_tools` compares epochs because its caller may be a zombie
+        holding a superseded token; here there is no token to compare against.
+        The single caller is `recover_stale_claims`, and only on the branch
+        where `owner_is_dead` returned True — the OS reported that process gone,
+        so nothing is left to call these closures.
+
+        It must NOT be used on a lease-condemned claim. The reset UPDATE there
+        writes status/version/claimed_at/claimed_by/inputs_json and leaves
+        `claim_epoch` untouched (it is bumped only in `claim_next_step` and
+        `_claim_tool_step_in_tx`), so a live worker reaped by the lease still
+        satisfies `_epoch_holds` — its tool calls are not fenced, they simply
+        find nothing.
         """
         with self._step_tools_lock:
             self._step_tools.pop((run_id, step_id), None)
