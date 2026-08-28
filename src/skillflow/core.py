@@ -1835,9 +1835,12 @@ class SkillFlow:
                     ws_root = str(self._workspace.get_project_path(
                         run["project_id"]
                     ))
-                    code_root = str(self._workspace.get_project_code_path(
-                        run["project_id"]
-                    )) if self._workspace else ""
+                    # None when the run declares no code repo — the read surface
+                    # then attaches no `repo` layer at all, by decision rather
+                    # than by whether that directory happens to exist.
+                    _code_path = (self._workspace.get_project_code_path(
+                        run["project_id"]) if self._workspace else None)
+                    code_root = str(_code_path) if _code_path else ""
                     # Staging-first working tree: the current step's .tmp
                     # (create/edit output) shadows the repo baseline so a
                     # write-mode agent sees its own pending edits (no read
@@ -2578,8 +2581,10 @@ class SkillFlow:
                 )
                 params.setdefault("workspace_root",
                                   str(self._workspace.get_project_path(row["project_id"])))
-                params.setdefault("project_root",
-                                  str(self._workspace.get_project_code_path(row["project_id"])))
+                _cp = self._workspace.get_project_code_path(row["project_id"])
+                # "" for a repo-less run, never the string "None": a tool that
+                # needs a repo refuses an empty root with its own clear error.
+                params.setdefault("project_root", str(_cp) if _cp else "")
 
         # Built-in step_commit: move tmp→step_dir atomically
         if tool_name == "step_commit":
@@ -2655,6 +2660,15 @@ class SkillFlow:
         # after_deliver checks against the project repo, not step output
         if hook_name == "after_deliver":
             check_dir = self._workspace.get_project_code_path(pid)
+            if check_dir is None:
+                # A run that owns no repository delivers nothing to one, so
+                # there is nothing here to check. Said out loud rather than
+                # passed silently: validating an invented directory succeeded or
+                # failed depending on whether it happened to exist, which is the
+                # kind of answer that reads as a verdict and is not one.
+                return {"passed": False,
+                        "errors": ["after_deliver validation checks the code "
+                                   "repository, and this run declares none"]}
         else:
             check_dir = self._workspace.get_step_dir(pid, gname, token.step_id)
 
@@ -3199,8 +3213,8 @@ class SkillFlow:
                         kwargs["workspace_root"] = str(
                             self._workspace.get_project_path(pid))
                     if not kwargs.get("project_root"):
-                        kwargs["project_root"] = str(
-                            self._workspace.get_project_code_path(pid))
+                        _cp = self._workspace.get_project_code_path(pid)
+                        kwargs["project_root"] = str(_cp) if _cp else ""
             except Exception:
                 # Best-effort default-filling, but a failure here leaves a tool
                 # without workspace_root/project_root → it misfires later with a

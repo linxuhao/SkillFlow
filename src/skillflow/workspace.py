@@ -149,18 +149,32 @@ class WorkspaceManager:
         p.mkdir(parents=True, exist_ok=True)
         return p
 
-    def get_project_code_path(self, project_id: str) -> Path:
-        """Return the project's code repository root path.
+    def get_project_code_path(self, project_id: str) -> Path | None:
+        """The project's code repository root, or None if it HAS no code repo.
 
         Resolution order:
-        1. ``code_path_resolver(project_id)`` if it was provided and returns a
-           non-empty path — lets a host map a project to an arbitrary repo
-           (e.g. an 'existing' repo the project was created against).
+        1. ``code_path_resolver(project_id)``:
+           * a non-empty path → that repo (e.g. an 'existing' repo the project
+             was created against);
+           * ``False`` → the project has NO code repo. Returns None, and callers
+             must not substitute one;
+           * ``None`` / ``""`` → no opinion; fall through.
         2. ``_code_dir / project_id`` if ``code_dir`` was set.
         3. ``projects_base / project_id`` (default).
+
+        ``False`` is a distinct answer because ``None`` already means "no
+        opinion, use your default". Without the distinction a run that declares
+        it owns no repository still had the default path invented for it, and
+        the read surface attached that path as a ``repo`` source on nothing more
+        than an ``is_dir()`` check — i.e. correct only for as long as nothing
+        happened to create the directory. A step in one such run listed an
+        unrelated project's repository (2026-08-28); the empty invented
+        directory is what let the layer exist at all.
         """
         if self._code_path_resolver is not None:
             resolved = self._code_path_resolver(project_id)
+            if resolved is False:
+                return None
             if resolved:
                 return Path(resolved).expanduser().resolve()
         if self._code_dir:
