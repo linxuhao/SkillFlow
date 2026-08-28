@@ -30,10 +30,12 @@ class ToolLoader:
         self._tools_dirs: list[Path] = [Path(d) for d in tools_dirs]
         self._cache: dict[str, tuple[dict, Callable]] = {}
         self._tool_dir_cache: dict[str, Path] = {}  # name → which dir
-        # Names whose CALLABLE is owned by a step rather than by this loader
-        # (the unified read/search/list trio). Only the name is global here —
-        # see `declare_dynamic` for why the function must not be.
-        self._dynamic_names: set[str] = set()
+        # Names whose CALLABLE is owned by a STEP rather than by this loader
+        # (the unified read/search/list trio). Deliberately separate from
+        # `_cache`, and deliberately NOT cleared by `add_tools_dir`: adding a
+        # tools directory invalidates what this loader holds, and it holds
+        # nothing for these — their functions live on the claim that built them.
+        self._step_owned_names: set[str] = set()
 
     def add_tools_dir(self, path: Path):
         """Register an additional tools directory (searched last)."""
@@ -60,7 +62,7 @@ class ToolLoader:
         # Dynamic tools (registered via register_dynamic_tool, or declared
         # per-step via declare_dynamic) are also native
         if tool_dir is None and (name in self._cache
-                                 or name in self._dynamic_names):
+                                 or name in self._step_owned_names):
             return True
         return tool_dir is not None and tool_dir == self._tools_dirs[0]
 
@@ -74,7 +76,6 @@ class ToolLoader:
         step-owned callable for those.
         """
         self._cache[name] = (schema, fn)
-        self._dynamic_names.add(name)
 
     def declare_dynamic(self, name: str) -> None:
         """Record *name* as dynamically provided WITHOUT storing a callable.
@@ -87,11 +88,11 @@ class ToolLoader:
         keeps `is_native`/`is_dynamic` classifying these tools correctly — while
         the callable belongs to the claim that owns it (SkillFlow._step_tools).
         """
-        self._dynamic_names.add(name)
+        self._step_owned_names.add(name)
 
     def is_dynamic(self, name: str) -> bool:
         """True if the tool is dynamic (registered or declared), not on disk."""
-        if name not in self._cache and name not in self._dynamic_names:
+        if name not in self._cache and name not in self._step_owned_names:
             return False
         # Dynamic tools have no tool_dir on disk — we check by trying to find one
         return self._find_tool_dir(name) is None

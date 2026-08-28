@@ -154,3 +154,57 @@ def test_the_read_trio_is_never_left_in_the_shared_loader(sf, tmp_path):
         # way it did when the callable lived there (runner mode branches on it).
         assert sf._tool_loader.is_native(name)
     assert sf._step_scoped_names >= {"read", "search", "list"}
+
+
+# ── Release is a compare-and-delete, not a blind pop ──────────────────────
+
+def test_a_stale_executor_cannot_release_its_replacements_tools(sf, tmp_path):
+    """`(run_id, step_id)` names the STEP, not the claim.
+
+    `_assert_epoch` narrows the window in which a reclaimed executor can reach
+    the release, but assert and release are separate operations — a stall
+    between them lets the reaper hand the step to a replacement whose entry sits
+    under the same key. A blind pop would delete it, and the replacement would
+    run its whole step with no read surface: a silent degrade, which is the
+    exact failure shape this area exists to stop producing.
+    """
+    _repo(tmp_path, "proj_a", "ONLY_IN_A.txt")
+    sf.register_graph(_graph("ga"))
+    run_a, claimed = _claim(sf, "ga", "proj_a")
+    live_epoch = claimed.token.claim_epoch
+
+    # A stale claim generation tries to give the tools back.
+    sf._release_step_tools(run_a, "review", live_epoch - 1)
+    assert "ONLY_IN_A.txt" in _listing(sf, run_a), \
+        "a stale epoch released the live claim's tools"
+
+    # The owner's own release still works.
+    sf._release_step_tools(run_a, "review", live_epoch)
+    assert "ONLY_IN_A.txt" not in _listing(sf, run_a)
+
+
+# ── The loader keeps only NAMES, and only the right ones ──────────────────
+
+def test_adding_a_tools_dir_forgets_registered_callables_but_not_step_names(
+        tmp_path):
+    """`add_tools_dir` clears `_cache`, which is where a registered dynamic
+    tool's callable lives — so that name must stop counting as native, exactly
+    as before. A step-owned name has no callable in this loader to invalidate,
+    so it must survive: runner mode branches on `is_native` to decide between
+    executing a tool and delegating it to the agent.
+    """
+    from skillflow.tool_loader import ToolLoader
+    loader = ToolLoader(tmp_path / "native")
+    (tmp_path / "native").mkdir()
+
+    loader.register_dynamic_tool("registered", {"name": "registered"},
+                                 lambda **kw: {})
+    loader.declare_dynamic("list")
+    assert loader.is_native("registered") and loader.is_native("list")
+
+    loader.add_tools_dir(tmp_path / "extra")
+
+    assert not loader.is_native("registered"), \
+        "its callable was just discarded; it must not still read as native"
+    assert loader.is_native("list"), \
+        "a step-owned name has nothing in this loader to invalidate"

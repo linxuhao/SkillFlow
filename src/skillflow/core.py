@@ -1919,7 +1919,9 @@ class SkillFlow:
                                 self._step_scoped_names.add(name)
                                 step_fns[name] = fn
                         if step_fns:
-                            self._set_step_tools(run_id, node.id, step_fns)
+                            self._set_step_tools(
+                                run_id, node.id, step_fns,
+                                (step_row["claim_epoch"] or 0) if step_row else 0)
                 except Exception:
                     # Best-effort: the step still runs without read tools. But
                     # build_source_map handles missing paths gracefully, so an
@@ -2096,9 +2098,9 @@ class SkillFlow:
         # {step}/. A reclaimed executor reaching here would do both alongside
         # its replacement and only then be told it had lost the step.
         self._assert_epoch(token, "confirm_step")
-        # The claim is over — drop the read tools it owned. After the epoch
-        # assert, so a reclaimed executor cannot release its replacement's.
-        self._release_step_tools(token.run_id, token.step_id)
+        # The claim is over — drop the read tools it owned. Epoch-guarded, so a
+        # reclaimed executor cannot release its replacement's.
+        self._release_step_tools(token.run_id, token.step_id, token.claim_epoch)
         resolver = self._get_resolver_for_run(token.run_id)
         node = resolver.get_node(token.step_id)
 
@@ -2974,7 +2976,7 @@ class SkillFlow:
         # `version` from the row it is about to write, so it never detects a
         # reclaim on its own.)
         self._assert_epoch(token, "fail_step")
-        self._release_step_tools(token.run_id, token.step_id)
+        self._release_step_tools(token.run_id, token.step_id, token.claim_epoch)
         with self._tx() as conn:
             self._fail_step_in_tx(conn, token, error, retryable)
 
@@ -5258,9 +5260,10 @@ class SkillFlow:
 
     _STEP_TOOL_CAP = 512
 
-    def _set_step_tools(self, run_id: str, step_id: str, fns: dict) -> None:
+    def _set_step_tools(self, run_id: str, step_id: str, fns: dict,
+                        epoch: int) -> None:
         with self._lock:
-            self._step_tools[(run_id, step_id)] = fns
+            self._step_tools[(run_id, step_id)] = (epoch, fns)
             # A step whose host dies is never confirmed or failed, so its entry
             # is only replaced when that step is re-claimed. The cap bounds that
             # without a run-teardown hook; in normal operation the releases on
@@ -5269,15 +5272,34 @@ class SkillFlow:
                 self._step_tools.pop(next(iter(self._step_tools)))
 
     def _step_tool_fn(self, run_id: str, step_id: str, name: str):
-        """The callable *this* step owns for *name*, or None."""
+        """The callable *this* step owns for *name*, or None.
+
+        Not epoch-checked: `execute_tool` already fences a reclaimed executor's
+        calls, and repeating that here would only be a second copy of the same
+        rule. The epoch stored beside the callables exists for RELEASE.
+        """
         if not (run_id and step_id):
             return None
         with self._lock:
-            return (self._step_tools.get((run_id, step_id)) or {}).get(name)
+            entry = self._step_tools.get((run_id, step_id))
+        return entry[1].get(name) if entry else None
 
-    def _release_step_tools(self, run_id: str, step_id: str) -> None:
+    def _release_step_tools(self, run_id: str, step_id: str, epoch: int) -> None:
+        """Drop this claim's callables — only if the entry is still ITS entry.
+
+        Compare-and-delete, because `(run_id, step_id)` names the step, not the
+        claim. `_assert_epoch` narrows the window but cannot close it: it and the
+        release are separate operations, so a stalled executor that passes the
+        assert and is reclaimed one instruction later would otherwise delete its
+        REPLACEMENT's entry, and the replacement would run its whole step with no
+        read surface — a silent degrade, which is the failure mode this whole
+        area exists to stop producing.
+        """
+        key = (run_id, step_id)
         with self._lock:
-            self._step_tools.pop((run_id, step_id), None)
+            entry = self._step_tools.get(key)
+            if entry is not None and entry[0] == epoch:
+                del self._step_tools[key]
 
     def execute_tool(self, name: str, params: dict, *,
                      run_id: str = "", step_id: str = "",
