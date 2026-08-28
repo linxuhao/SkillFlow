@@ -96,11 +96,61 @@ def test_the_control_proves_the_test_can_tell_the_difference(tmp_path):
     assert "IN_THE_DEFAULT_REPO.txt" in _listing(sf)
 
 
-def test_a_tool_step_is_handed_an_empty_project_root_not_the_string_none(tmp_path):
-    """`str(None)` is "None", a path-shaped lie that a tool would try to open.
-    An empty root is refusable — tools already check for it."""
+def test_the_after_deliver_refusal_reaches_the_caller_as_a_readable_reason(tmp_path):
+    """The hook's own comment: callers expect `error` (singular string).
+
+    An `errors` list returns above the normalizer, and the consumer reads
+    `hook_result.get("error", f"Lifecycle hook '{hook_name}' failed")` — so a
+    plural key means the step fails with the generic sentence and the operator
+    is told nothing about why.
+    """
     sf = _engine(tmp_path, resolver=lambda pid: False)
-    ws = sf._workspace
-    assert ws.get_project_code_path("p1") is None
-    cp = ws.get_project_code_path("p1")
-    assert (str(cp) if cp else "") == ""
+    run_id = sf.create_run("g", project_id="p1")
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+    node = sf._get_resolver_for_run(run_id).get_node("work")
+
+    result = sf._execute_check_hook(claimed.token, node, "after_deliver",
+                                    [{"files": ["out.md"], "tool": "file_exists"}])
+
+    assert result["passed"] is False
+    # What the caller will actually surface, via its own .get(…, generic):
+    surfaced = result.get("error", "Lifecycle hook 'after_deliver' failed")
+    assert "declares none" in surfaced, surfaced
+
+
+def test_a_tool_step_is_handed_an_empty_project_root_not_the_string_none(tmp_path):
+    """`str(None)` is "None": a path-shaped lie a tool will try to open.
+
+    Driven through a real tool STEP, so it exercises `_execute_tool_inline`'s
+    argument filling. Asserting on `get_project_code_path` and then re-computing
+    `str(cp) if cp else ""` in the test would only restate the production
+    expression — it would keep passing after that call site was reverted.
+    """
+    seen = {}
+
+    def probe(project_root="", **_kw):
+        seen["project_root"] = project_root
+        return {"passed": True}
+
+    sf = _engine(tmp_path, resolver=lambda pid: False)
+    sf._tool_loader.register_dynamic_tool(
+        "probe", {"name": "probe", "description": "records its project_root"},
+        probe)
+    sf.register_graph(PipelineGraph(
+        name="withtool", begin="t",
+        steps=[
+            StepNode(id="t", step_type="tool", tool_name="probe",
+                     transitions=[Transition(to="done")]),
+            StepNode(id="done", step_type="gate", transitions=[]),
+        ],
+        end_conditions=EndConditions(combinator="or", conditions=[
+            EndCondition(type="node_reached", node="done", result="completed")])))
+
+    run_id = sf.create_run("withtool", project_id="p1")
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+
+    assert seen["project_root"] == "", \
+        f"tool step received {seen['project_root']!r}"

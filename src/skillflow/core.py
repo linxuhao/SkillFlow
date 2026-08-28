@@ -2666,9 +2666,14 @@ class SkillFlow:
                 # passed silently: validating an invented directory succeeded or
                 # failed depending on whether it happened to exist, which is the
                 # kind of answer that reads as a verdict and is not one.
+                # `error` SINGULAR: this returns above the normalizer below, and
+                # the caller reads `hook_result.get("error", <generic>)` — an
+                # `errors` list here would be dropped and the step would fail
+                # with "Lifecycle hook 'after_deliver' failed" and no reason,
+                # which is the opposite of the point of saying anything.
                 return {"passed": False,
-                        "errors": ["after_deliver validation checks the code "
-                                   "repository, and this run declares none"]}
+                        "error": "after_deliver validation checks the code "
+                                 "repository, and this run declares none"}
         else:
             check_dir = self._workspace.get_step_dir(pid, gname, token.step_id)
 
