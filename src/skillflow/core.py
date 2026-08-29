@@ -8,6 +8,7 @@ SQLite connection (single-worker model) with WAL mode for safety.
 from __future__ import annotations
 
 import calendar
+import hashlib
 import json
 import logging
 import os
@@ -45,6 +46,23 @@ from skillflow.exceptions import (
     ToolArgumentsUnavailable,
 )
 from skillflow.identity import owner_is_dead, worker_identity
+
+
+# ── Graph content identity ───────────────────────────────────────────
+
+def canonical_graph_json(graph: dict) -> str:
+    """One text form per graph CONTENT, whatever the authoring formatting.
+
+    `sort_keys` is what makes the digest stable across boots: without it a graph
+    that round-trips through YAML in a different key order hashes differently
+    and mints a version every restart, which is the failure this replaced.
+    """
+    return json.dumps(graph, sort_keys=True, ensure_ascii=False)
+
+
+def graph_digest(graph: dict) -> str:
+    return "sha256:" + hashlib.sha256(
+        canonical_graph_json(graph).encode("utf-8")).hexdigest()
 
 
 # ── Internal abort signal for intentional rollback within _tx ────────
@@ -317,6 +335,11 @@ class SkillFlow:
         # keeps manifests/prompt-fragments). See register_overlay/compose_config.
         self._overlays: dict[str, dict] = {}
         self._resolvers: dict[str, GraphResolver] = {}
+        # Resolvers for PINNED historical versions, keyed (name, version). Kept
+        # apart from `_resolvers` on purpose: that one is keyed by name alone and
+        # `register_graph` overwrites it, which is exactly the aliasing a pinned
+        # run has to be immune to.
+        self._pinned_resolvers: dict[tuple[str, int], GraphResolver] = {}
         # Capability registry: a step's `capability` keyword → a curated
         # toolset + a context provider the FRAMEWORK injects (folders, dirs).
         # Lets the host provision tools/state locations by declared purpose so
@@ -595,7 +618,15 @@ class SkillFlow:
 
     # ── Graph management ──────────────────────────────────────────
 
-    def register_graph(self, graph: PipelineGraph) -> None:
+    def register_graph(self, graph: PipelineGraph) -> int:
+        """Register (or update) a graph and return its content version.
+
+        A version is minted only when the CONTENT changes. Re-registering the
+        same graph — which every host does on every boot scan — returns the
+        existing version and writes no history row. That idempotence is what
+        makes the number mean "how many times this graph was edited" instead of
+        "how many times this process started".
+        """
         issues = graph.validate()
         if issues:
             raise GraphValidationError(issues)
@@ -609,15 +640,128 @@ class SkillFlow:
         resolver = GraphResolver(graph)
         self._graphs[graph.name] = graph
         self._resolvers[graph.name] = resolver
+        canonical = canonical_graph_json(graph.to_dict())
+        digest = graph_digest(graph.to_dict())
         with self._tx() as conn:
+            latest = conn.execute(
+                "SELECT version, digest FROM skillflow_graph_versions "
+                "WHERE name = ? ORDER BY version DESC LIMIT 1",
+                (graph.name,),
+            ).fetchone()
+            if latest and latest["digest"] == digest:
+                version = latest["version"]
+            else:
+                version = (latest["version"] + 1) if latest else 1
+                conn.execute(
+                    "INSERT INTO skillflow_graph_versions "
+                    "(name, version, yaml_text, digest) VALUES (?, ?, ?, ?)",
+                    (graph.name, version, canonical, digest),
+                )
             conn.execute(
                 """
                 INSERT OR REPLACE INTO skillflow_graphs (name, yaml_text, version, updated_at)
-                VALUES (?, ?, COALESCE((SELECT version + 1 FROM skillflow_graphs WHERE name=?), 1),
-                        datetime('now'))
+                VALUES (?, ?, ?, datetime('now'))
                 """,
-                (graph.name, json.dumps(graph.to_dict()), graph.name),
+                (graph.name, canonical, version),
             )
+        return version
+
+    # ── Graph version history ─────────────────────────────────────────
+
+    def list_graph_versions(self, name: str) -> list[dict]:
+        """Every recorded content version of *name*, newest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT version, digest, created_at FROM skillflow_graph_versions "
+                "WHERE name = ? ORDER BY version DESC",
+                (name,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_graph_version(self, name: str, version: int) -> dict | None:
+        """One historical version as ``{version, digest, created_at, graph}``."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT version, digest, created_at, yaml_text "
+                "FROM skillflow_graph_versions WHERE name = ? AND version = ?",
+                (name, int(version)),
+            ).fetchone()
+        if not row:
+            return None
+        return {"version": row["version"], "digest": row["digest"],
+                "created_at": row["created_at"],
+                "graph": json.loads(row["yaml_text"])}
+
+    def graph_version_for_run(self, run_id: str) -> dict:
+        """Which graph content a run is pinned to, and whether it is still latest.
+
+        ``version`` is None for a run created before pinning existed; such a run
+        resolves against the current definition, so ``is_latest`` is meaningless
+        and is reported as None rather than True.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT graph_name, graph_version, graph_digest "
+                "FROM skillflow_runs WHERE id = ?", (run_id,),
+            ).fetchone()
+            if not row:
+                raise SkillFlowError(f"Run '{run_id}' not found")
+            cur = self._conn.execute(
+                "SELECT MAX(version) AS v FROM skillflow_graph_versions WHERE name = ?",
+                (row["graph_name"],),
+            ).fetchone()
+        latest = cur["v"] if cur else None
+        pinned = row["graph_version"]
+        return {"graph_name": row["graph_name"], "version": pinned,
+                "digest": row["graph_digest"], "latest_version": latest,
+                "is_latest": None if pinned is None else pinned == latest}
+
+    def repin_run(self, run_id: str, version: int | None = None) -> dict:
+        """Move a run onto another graph version (default: the latest).
+
+        Pinning takes away the ability to hot-patch a run in flight by editing
+        its graph and re-registering — which was a real recovery action, not
+        only an accident: a node added mid-flight is how one live run was
+        unwedged. This gives that back as a deliberate, recorded operation
+        rather than a side effect of any edit landing anywhere.
+
+        The step rows are untouched. A node the new version adds has no row yet
+        and `claim_next_step` opens one; a node it removes leaves an orphaned
+        row, which is what `reactivate_run`'s resume guard is there to catch.
+        """
+        with self._tx() as conn:
+            row = conn.execute(
+                "SELECT graph_name, graph_version FROM skillflow_runs WHERE id = ?",
+                (run_id,)).fetchone()
+            if not row:
+                raise SkillFlowError(f"Run '{run_id}' not found")
+            name = row["graph_name"]
+            if version is None:
+                cur = conn.execute(
+                    "SELECT MAX(version) AS v FROM skillflow_graph_versions "
+                    "WHERE name = ?", (name,)).fetchone()
+                version = cur["v"] if cur else None
+                if version is None:
+                    raise SkillFlowError(
+                        f"Graph '{name}' has no version history to re-pin to")
+            target = conn.execute(
+                "SELECT version, digest FROM skillflow_graph_versions "
+                "WHERE name = ? AND version = ?", (name, int(version))).fetchone()
+            if not target:
+                raise SkillFlowError(
+                    f"Graph '{name}' has no version {version}")
+            conn.execute(
+                "UPDATE skillflow_runs SET graph_version = ?, graph_digest = ?, "
+                "updated_at = datetime('now') WHERE id = ?",
+                (target["version"], target["digest"], run_id))
+            self.notifications.publish_sync(
+                "run_repinned",
+                {"run_id": run_id, "graph_name": name,
+                 "from_version": row["graph_version"], "to_version": target["version"]},
+                run_id=run_id)
+        return {"run_id": run_id, "graph_name": name,
+                "from_version": row["graph_version"],
+                "to_version": target["version"], "digest": target["digest"]}
 
     def list_graphs(self) -> list[dict]:
         """Return all registered graphs as ``{name, version, description}``.
@@ -1069,7 +1213,29 @@ class SkillFlow:
                 missing.append(node.agent_config)
         return missing
 
-    def _get_resolver(self, graph_name: str) -> GraphResolver:
+    def _get_resolver(self, graph_name: str,
+                      version: int | None = None) -> GraphResolver:
+        if version is not None:
+            resolver = self._pinned_resolvers.get((graph_name, version))
+            if resolver is not None:
+                return resolver
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT yaml_text FROM skillflow_graph_versions "
+                    "WHERE name = ? AND version = ?", (graph_name, version)
+                ).fetchone()
+            if row:
+                graph = PipelineGraph._from_dict(json.loads(row["yaml_text"]))
+                resolver = GraphResolver(graph)
+                self._pinned_resolvers[(graph_name, version)] = resolver
+                return resolver
+            # The pinned version is missing (a restored or hand-edited DB).
+            # Falling through to the current definition is wrong, but refusing
+            # strands the run with no way to finish; say so and continue.
+            logging.getLogger("skillflow").warning(
+                "graph '%s' version %s is not in the version history — resolving "
+                "against the CURRENT definition instead. Runs pinned to it are "
+                "executing a graph they did not start with.", graph_name, version)
         resolver = self._resolvers.get(graph_name)
         if resolver is not None:
             return resolver
@@ -1087,13 +1253,27 @@ class SkillFlow:
         return resolver
 
     def _get_resolver_for_run(self, run_id: str) -> GraphResolver:
+        """The graph a run is PINNED to — not whatever is registered right now.
+
+        Resolving by name alone meant an edit landing mid-run retargeted the
+        run's remaining steps: its finished steps had been validated against one
+        set of rules and its next ones against another, silently.
+        """
         with self._lock:
             row = self._conn.execute(
-                "SELECT graph_name FROM skillflow_runs WHERE id = ?", (run_id,)
+                "SELECT graph_name, graph_version FROM skillflow_runs WHERE id = ?",
+                (run_id,)
             ).fetchone()
         if not row:
             raise SkillFlowError(f"Run '{run_id}' not found")
-        return self._get_resolver(row["graph_name"])
+        return self._get_resolver(row["graph_name"], version=row["graph_version"])
+
+    def _graph_for_run(self, run_id: str) -> PipelineGraph | None:
+        """The pinned graph, for callers that need the graph and not a resolver."""
+        try:
+            return self._get_resolver_for_run(run_id).graph
+        except Exception:
+            return None
 
     # ── Run lifecycle ──────────────────────────────────────────────
 
@@ -1110,12 +1290,21 @@ class SkillFlow:
             project_id = ctx.get("project_id")
 
         with self._tx() as conn:
+            # Pin the CONTENT, not just the name. NULL when the graph predates
+            # the version history (registered by an older build and not
+            # re-registered since) — the run then resolves by name, as before.
+            _v = conn.execute(
+                "SELECT version, digest FROM skillflow_graph_versions "
+                "WHERE name = ? ORDER BY version DESC LIMIT 1", (graph_name,)
+            ).fetchone()
             conn.execute(
                 """
-                INSERT INTO skillflow_runs (id, graph_name, graph_path, project_id, context_json, current_node, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                INSERT INTO skillflow_runs (id, graph_name, graph_path, graph_version, graph_digest, project_id, context_json, current_node, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
                 """,
-                (run_id, graph_name, graph_path, project_id, self._serialize(ctx), graph.begin),
+                (run_id, graph_name, graph_path,
+                 _v["version"] if _v else None, _v["digest"] if _v else None,
+                 project_id, self._serialize(ctx), graph.begin),
             )
             for node in graph.steps:
                 conn.execute(
@@ -1215,8 +1404,8 @@ class SkillFlow:
             # advance_run() return None forever (a silent deadlock). Fail loudly
             # so the caller can tell the user to start a fresh run. Raising here
             # rolls back the surrounding transaction, so no partial state lands.
-            if retry_step_id and self._get_resolver(
-                    run["graph_name"]).get_node(retry_step_id) is None:
+            if retry_step_id and self._get_resolver_for_run(
+                    run_id).get_node(retry_step_id) is None:
                 raise ValueError(
                     f"Cannot reactivate run {run_id}: its resume step "
                     f"'{retry_step_id}' no longer exists in graph "
@@ -1448,7 +1637,7 @@ class SkillFlow:
         if not run:
             return steps
         try:
-            graph = self._get_resolver(run["graph_name"]).graph
+            graph = self._get_resolver_for_run(run_id).graph
             node_pos = {node.id: i for i, node in enumerate(graph.steps)}
         except Exception:
             return steps  # graph gone/unloadable — creation order is still usable
@@ -1545,7 +1734,11 @@ class SkillFlow:
                 raise _TxRollback()
 
             graph_name = run["graph_name"]
-            resolver = self._get_resolver(graph_name)
+            resolver = self._get_resolver(graph_name, version=run["graph_version"])
+            # The graph THIS run is pinned to — not `self._graphs[graph_name]`,
+            # which register_graph overwrites. `resolver` is rebound to a
+            # ContextResolver further down, so keep the graph itself.
+            pinned_graph = resolver.graph
 
             if resolver.is_gate(run["current_node"]):
                 raise _TxRollback()
@@ -1843,8 +2036,7 @@ class SkillFlow:
                             node, run["graph_name"],
                             item_card=self._capability_item_card(
                                 node, run, loop_context),
-                            offers=getattr(self._graphs.get(run["graph_name"]),
-                                           "capabilities", None)))
+                            offers=getattr(pinned_graph, "capabilities", None)))
                     resolved = resolver.resolve(
                         node.context,
                         current_config=run["graph_name"],
@@ -2004,7 +2196,7 @@ class SkillFlow:
             # toolset merge COPIES first — a grant written into the shared agent
             # config cache leaks into every other step using that role.
             _item_card = self._capability_item_card(node, run, loop_context)
-            _offers = getattr(self._graphs.get(run["graph_name"]), "capabilities", []) or []
+            _offers = getattr(pinned_graph, "capabilities", []) or []
             _caps = self._capabilities_for(node, _item_card, _offers)
             if _caps and self._tool_loader:
                 for _cap_name, _cap in _caps:
@@ -2640,7 +2832,7 @@ class SkillFlow:
                 # and _deletions.json would never be found.
                 try:
                     _item = self._loop_item_for_step(
-                        token.run_id, self._get_resolver(row["graph_name"]),
+                        token.run_id, self._get_resolver_for_run(token.run_id),
                         token.step_id)
                 except Exception:
                     _item = None
@@ -2699,7 +2891,7 @@ class SkillFlow:
                         # Filtered by THIS step's own loop (any step type) — the
                         # old unfiltered LIMIT 1 could hand another loop's item
                         # to a multi-loop graph's hook.
-                        _res = self._get_resolver(row["graph_name"])
+                        _res = self._get_resolver_for_run(token.run_id)
                         _lid = _res.loop_of(token.step_id)
                         _it = self._current_item_of_loop(token.run_id, _lid) if _lid else None
                         if _it:
@@ -3275,7 +3467,9 @@ class SkillFlow:
         # declaration for a tool step that never went through an agent claim.
         for _ck, _cv in self._capability_context(
                 tool_node, graph_name,
-                offers=getattr(self._graphs.get(graph_name), "capabilities", None),
+                offers=getattr(self._graph_for_run(run_id) if run_id
+                               else self._graphs.get(graph_name),
+                               "capabilities", None),
                 names=self._granted_capabilities(run_id or "", tool_node.id)
                 or None).items():
             kwargs.setdefault(_ck, _cv)
@@ -3292,7 +3486,8 @@ class SkillFlow:
                     # messages / register_tool). Filtered by THIS tool step's own
                     # loop — the old unfiltered LIMIT 1 was multi-loop-ambiguous.
                     try:
-                        _lid = self._get_resolver(graph_name).loop_of(tool_node.id)
+                        _lid = (self._get_resolver_for_run(run_id) if run_id
+                                else self._get_resolver(graph_name)).loop_of(tool_node.id)
                         _it = self._current_item_of_loop(run_id, _lid) if _lid else None
                         if _it:
                             kwargs.setdefault("task_name", _it)
@@ -3554,14 +3749,17 @@ class SkillFlow:
         return self._current_item_of_loop(run_id, loop_id)
 
     def _gc_dropped_item_dirs(self, pid: str, gname: str, loop_step_id: str,
-                              items: list) -> None:
+                              items: list, run_id: str | None = None) -> None:
         """Remove this loop's AGENT body steps' per-item folders whose item is no
         longer in the manifest (best-effort; artifact history keeps every promoted
         iteration recoverable). Called only when the manifest actually changed."""
         import shutil
         from skillflow.workspace import _sanitize_item
         try:
-            resolver = self._get_resolver(gname)
+            # Which steps are loop BODY steps decides what gets deleted, so read
+            # it from the graph this run is pinned to.
+            resolver = (self._get_resolver_for_run(run_id) if run_id
+                        else self._get_resolver(gname))
         except Exception:
             return
         keep = {_sanitize_item(i) for i in items}
@@ -3760,7 +3958,7 @@ class SkillFlow:
                 _old = set()
             if _old and _old - set(items):
                 self._gc_dropped_item_dirs(run["project_id"], run["graph_name"],
-                                           loop_step_id, items)
+                                           loop_step_id, items, run["id"])
 
         if row is None:
             if not items:
@@ -3952,7 +4150,7 @@ class SkillFlow:
         item = None
         if run_id:
             try:
-                resolver = self._get_resolver(graph_name)
+                resolver = self._get_resolver_for_run(run_id)
                 item = self._loop_item_for_step(run_id, resolver, step_id)
             except Exception:
                 item = None
@@ -4966,7 +5164,8 @@ class SkillFlow:
                     f"Run '{run_id}' is not paused (status: '{run['status']}')"
                 )
 
-            resolver = self._get_resolver(run["graph_name"])
+            resolver = self._get_resolver(run["graph_name"],
+                                          version=run["graph_version"])
 
             # Find the last completed checkpoint step (completion order;
             # completed_at alone has 1s resolution so same-second completions
@@ -5535,7 +5734,7 @@ class SkillFlow:
             # contain none of THIS item's files, breaking revision-round edits.
             try:
                 item = self._loop_item_for_step(
-                    run_id, self._get_resolver(gname), step_id)
+                    run_id, self._get_resolver_for_run(run_id), step_id)
             except Exception:
                 item = None
             final_dir = self._workspace.get_step_dir(pid, gname, step_id, item=item)
@@ -6057,12 +6256,12 @@ class SkillFlow:
         if run_id and step_id:
             try:
                 _cgn = self._get_graph_name(run_id)
-                _cnode = self._get_resolver(_cgn).get_node(step_id)
+                _cres = self._get_resolver_for_run(run_id)
+                _cnode = _cres.get_node(step_id)
                 if _cnode is not None:
                     for _ck, _cv in self._capability_context(
                             _cnode, _cgn,
-                            offers=getattr(self._graphs.get(_cgn),
-                                           "capabilities", None),
+                            offers=getattr(_cres.graph, "capabilities", None),
                             names=self._granted_capabilities(run_id, step_id)
                             or None).items():
                         kwargs.setdefault(_ck, _cv)
@@ -6090,7 +6289,7 @@ class SkillFlow:
                     # flat parent full of sibling items).
                     try:
                         _item = self._loop_item_for_step(
-                            run_id, self._get_resolver(gname), step_id)
+                            run_id, self._get_resolver_for_run(run_id), step_id)
                     except Exception:
                         _item = None
                     kwargs.setdefault("step_tmp_dir",

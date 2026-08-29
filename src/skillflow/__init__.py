@@ -55,6 +55,7 @@ from skillflow.core import (
     ClaimedStep,
     StepResult,
     OutboxEvent,
+    graph_digest,
 )
 
 from skillflow.validation import OutputValidator
@@ -68,6 +69,7 @@ __all__ = [
     "SkillFlow",
     # Graph model
     "PipelineGraph",
+    "graph_digest",
     "GraphResolver",
     "StepNode",
     "Transition",

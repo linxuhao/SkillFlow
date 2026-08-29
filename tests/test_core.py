@@ -1915,6 +1915,10 @@ def test_node_added_mid_flight_is_claimable(sf):
         StepNode(id="a", step_type="agent", transitions=[Transition(to="b")]),
         StepNode(id="b", step_type="agent", transitions=[Transition(to=None)]),
     ]))
+    # Registering alone no longer reaches a run in flight — a run executes the
+    # version it started with. Adopting the new graph is now an explicit act,
+    # which is what this recovery always was.
+    sf.repin_run(rid)
     with sf._tx() as conn:
         conn.execute(
             "UPDATE skillflow_runs SET current_node = 'b' WHERE id = ?", (rid,))

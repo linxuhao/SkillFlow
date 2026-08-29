@@ -163,10 +163,12 @@ def test_reactivate_rejects_resume_step_removed_from_graph(sf: SkillFlow):
     assert sf.get_run(run_id)["status"] == "failed"
 
     # Graph changes underneath the run: the resume step (last-completed 'a') is
-    # gone. Re-registering overwrites the cached resolver, exactly as a process
-    # restart would after the YAML changed.
+    # gone. A pinned run only adopts the smaller graph when told to — and that
+    # is precisely when the guard has to fire: an operator re-pinning a failed
+    # run onto a graph that dropped its resume step.
     sf.register_graph(
         PipelineGraph(name="t", begin="x", steps=[_agent("x", [])]))
+    sf.repin_run(run_id)
 
     with pytest.raises(ValueError, match="no longer exists in graph"):
         sf.reactivate_run(run_id)

@@ -21,6 +21,30 @@ CREATE TABLE IF NOT EXISTS skillflow_graphs (
 );
 """
 
+# `skillflow_graphs` holds the CURRENT definition and is INSERT OR REPLACE'd, so
+# every re-registration destroyed the content it replaced. This is the history:
+# append-only, one row per distinct graph CONTENT, keyed by a digest of it.
+#
+# It exists so a run can be pinned. Before it, a run stored only `graph_name`,
+# and `_get_resolver_for_run` resolved that name to whatever was registered
+# *now* — an edit mid-run silently retargeted the run's remaining steps, and an
+# edit after it made the trace of a finished run describe a graph that no longer
+# existed. The version column on `skillflow_graphs` did not help: it was bumped
+# blindly on every registration, so it counted process restarts (312 of them in
+# one live deployment) rather than edits.
+SKILLFLOW_GRAPH_VERSIONS = """
+CREATE TABLE IF NOT EXISTS skillflow_graph_versions (
+    name        TEXT NOT NULL,
+    version     INTEGER NOT NULL,
+    -- Canonical (sort_keys) JSON of graph.to_dict(), so `digest` is verifiable
+    -- against what is stored here rather than being an unfalsifiable label.
+    yaml_text   TEXT NOT NULL,
+    digest      TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (name, version)
+);
+"""
+
 SKILLFLOW_PROJECTS = """
 CREATE TABLE IF NOT EXISTS skillflow_projects (
     id          TEXT PRIMARY KEY,
@@ -185,6 +209,7 @@ SKILLFLOW_INDEXES = [
 
 ALL_DDL: list[str] = [
     SKILLFLOW_GRAPHS,
+    SKILLFLOW_GRAPH_VERSIONS,
     SKILLFLOW_PROJECTS,
     SKILLFLOW_RUNS,
     SKILLFLOW_STEPS,
@@ -224,4 +249,15 @@ SKILLFLOW_MIGRATIONS: list[str] = [
     # guessing it from completion order would be wrong exactly where it matters
     # (a retried or looped-back body step).
     "ALTER TABLE skillflow_steps ADD COLUMN loop_item TEXT",
+    # SF-28: pin a run to the graph CONTENT it started with (see
+    # SKILLFLOW_GRAPH_VERSIONS). Rows written before this column existed stay
+    # NULL and keep resolving by name — the content they ran is not recoverable,
+    # and inventing a version for them would claim otherwise.
+    #
+    # First boot after this ships mints version 1 for every registered graph and
+    # writes it back to skillflow_graphs.version, so that column DROPS (312 → 1
+    # in the deployment above). That is the correction, not a loss: the old value
+    # counted registrations of content that was never kept.
+    "ALTER TABLE skillflow_runs ADD COLUMN graph_version INTEGER",
+    "ALTER TABLE skillflow_runs ADD COLUMN graph_digest TEXT",
 ]
