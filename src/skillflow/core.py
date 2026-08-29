@@ -365,12 +365,15 @@ class SkillFlow:
         # PAIR (step_instance_id, claim_epoch) — neither half identifies a claim
         # on its own:
         #
-        #   * `step_instance_id` names a `skillflow_steps` ROW, not a claim. Six
-        #     UPDATEs in this file reset a row to 'pending' (validation failure,
-        #     lifecycle retry, fail-retry, checkpoint reject, the reaper, the
-        #     re-run path) and `claim_next_step` then re-claims the SAME row,
-        #     bumping only `claim_epoch` — none of the six resets the epoch.
-        #     Successive claims of one row therefore share a row id.
+        #   * `step_instance_id` names a `skillflow_steps` ROW, not a claim.
+        #     SEVEN UPDATEs in this file reset a row to 'pending'
+        #     (`_handle_validation_failure`, `_handle_lifecycle_retry`,
+        #     `_fail_step_in_tx`'s retry branch, `_reopen_tool_step_in_tx`,
+        #     `reject_checkpoint`, `recover_stale_claims`, `reactivate_run`) and
+        #     `claim_next_step` then re-claims the SAME row, bumping only
+        #     `claim_epoch` — none of the seven writes `claim_epoch` at all; the
+        #     only two statements that do are the two claim paths, and both
+        #     increment. Successive claims of one row therefore share a row id.
         #   * `claim_epoch` restarts per row. Graph re-entry (a loop body, a
         #     Green/Red re-run) INSERTs a FRESH row whose first claim also yields
         #     `claim_epoch == 1`, so consecutive instances of one step share an
@@ -2638,11 +2641,18 @@ class SkillFlow:
                 # `Path("").resolve()` is the process CWD, and the repo tools
                 # resolve straight from this value: `repo_apply` does
                 # `dst = Path(project_root).resolve()` (tools/repo_apply/impl.py),
-                # as do `git_sync_pre` and `repo_validate`. Handing them "" aimed
-                # a copy + `git add -A` + commit at whatever directory the server
-                # happens to run in. Omitted, `repo_apply`'s own guard (added
-                # alongside this) refuses, and a tool that declares the argument
-                # required raises TypeError — both loud, neither silent.
+                # as do `git_sync_pre` and `repo_validate`. So the value must not
+                # arrive as "" — the danger is the empty STRING, not the key.
+                #
+                # Omitting buys exactly one thing, and it is worth being precise
+                # about which: a tool whose parameter has NO DEFAULT can then not
+                # be called at all, and `signature.bind` below turns that into a
+                # named `ToolArgumentsUnavailable` (`git_sync_pre(project_root:
+                # str)` is the one such tool here). For a tool that DEFAULTS the
+                # parameter to "" — `repo_apply`, `repo_validate`, `pytest` —
+                # omitting and passing "" are byte-identical inside the function,
+                # and the refusal comes entirely from the tool's own guard. Those
+                # guards are the safety; this line only avoids stepping on them.
                 if _cp:
                     params.setdefault("project_root", str(_cp))
 
@@ -3295,8 +3305,15 @@ class SkillFlow:
                             # Repo-less: drop the "" placeholder seeded above
                             # rather than pass it on. `Path("").resolve()` is the
                             # process CWD and repo_apply/git_sync_pre/
-                            # repo_validate each resolve this value directly, so
-                            # "" points a commit at the server's own checkout.
+                            # repo_validate each resolve this value directly.
+                            #
+                            # What the pop actually buys: a tool whose parameter
+                            # is REQUIRED cannot be called, and the caller sees
+                            # that as a TypeError instead of running against the
+                            # CWD. For a tool that defaults it to "" the pop
+                            # changes nothing the function can observe — those
+                            # refuse by their own guard, which is where the
+                            # safety on this path lives.
                             kwargs.pop("project_root", None)
             except Exception:
                 # Best-effort default-filling, but a failure here leaves a tool
@@ -3934,6 +3951,51 @@ class SkillFlow:
             return f.read_text(encoding="utf-8")
         return read
 
+    @staticmethod
+    def _tool_step_errored(node, tool_result: dict) -> str | None:
+        """The message a tool step must FAIL on, or None to carry on.
+
+        A tool step's result is also its routing flags, so the engine used to
+        take whatever edge matched and record the step 'completed' whatever the
+        tool said. For a plumbing tool that is the malignant case: `repo_apply`
+        refusing (it returns ``{"applied": False, "error": …}`` when it has no
+        project root) left the step completed, the run down this node's first
+        edge, and the run reporting success having committed nothing.
+
+        The signature-level guard (`ToolArgumentsUnavailable`) does not cover it.
+        That fires on `signature.bind`, so it only catches a tool whose parameter
+        is REQUIRED — `git_sync_pre(project_root: str)`. The three tools that
+        default it (`repo_apply`, `repo_validate`, `pytest`) bind fine and refuse
+        in their own body instead, which is a returned dict, not a raise.
+
+        DECLARED, never inferred, because each inference rule mis-classifies a
+        real config — both of these are shipped and deliberate:
+
+        * "truthy error always fails" would kill a GATE tool step whose verdict is
+          an error. `forge_lint` returns ``{passed: false, error: <lint issues>}``
+          and pipeline_forge routes it back to the emitter on ``passed: false``.
+        * "fails only if the edge it took carried no ``match``" would kill a step
+          whose author tolerates the error on purpose. AItelier's `git_push_post`
+          has one unconditional edge to `done` because a failed push must not fail
+          a run whose work `repo_apply` already committed locally — and its target
+          is single, so the tolerance cannot be spelled as a second matched edge
+          either (two edges A→B are legal, but say nothing the author means).
+
+        So the NODE says: ``tool_error: "route"`` for both of those, the "fail"
+        default for everything else. `passed` is deliberately NOT consulted — a
+        gate returning ``passed: false`` is routing, not failing, and the node
+        already had to opt into "route" to return an error at all.
+        """
+        if not isinstance(tool_result, dict):
+            return None
+        if getattr(node, "tool_error", "fail") == "route":
+            return None
+        error = tool_result.get("error")
+        if not error:
+            return None
+        return (f"{getattr(node, 'tool_name', '?')}: {error}"
+                if getattr(node, "tool_name", "") else str(error))
+
     def _complete_tool_step(self, run_id: str, step_id: str,
                             tool_result: dict, run_row: dict,
                             resolver) -> str | None:
@@ -3942,10 +4004,34 @@ class SkillFlow:
         Called AFTER _execute_tool_inline returns, inside a fresh _tx()
         so the write lock is only held during the fast DB update, not
         during the (potentially slow) tool itself.
+
+        A truthy ``error`` in the result is a STEP FAILURE unless the node
+        declares ``tool_error: "route"`` — see `_tool_step_errored`. Checked
+        BEFORE `_confirm_tool_in_tx`, which writes ``status = 'completed'``
+        unconditionally: a `repo_apply` step that copied and committed nothing
+        was otherwise recorded completed, the run took this node's first edge,
+        and it reported success having shipped nothing.
         """
+        node = resolver.get_node(step_id)
+        err = self._tool_step_errored(node, tool_result)
+        if err is not None:
+            self.trace(run_id, "tool_result", getattr(node, "tool_name", ""),
+                       {"source": "tool_step", "error": err,
+                        "tool_error": "fail"},
+                       step_id=step_id)
+            self._fail_tool_step_in_tx(run_id, step_id, err)
+            return None
         with self._tx() as conn:
             self._confirm_tool_in_tx(conn, run_id, step_id, tool_result)
             step_flags = tool_result
+            if node is not None and getattr(node, "tool_error", "fail") == "route":
+                # The node said an error is a legitimate outcome here, so make it
+                # ROUTABLE. Matching `error` itself is not usable: it holds a
+                # free-text message, so a graph cannot write an edge for "it
+                # errored" without knowing the wording. A copy — never mutate the
+                # result the row already stores.
+                step_flags = dict(tool_result)
+                step_flags["_tool_error"] = bool(tool_result.get("error"))
             fr = self._make_file_reader(
                 run_row["project_id"], run_row["graph_name"], step_id,
                 run_id=run_id)
@@ -4203,13 +4289,21 @@ class SkillFlow:
                               error: str) -> None:
         """Fail a claimed tool step AND its run, with no retry.
 
-        The sibling of `_reopen_tool_step_in_tx`, for a failure that cannot come
-        out differently next time (today: the tool's signature cannot bind the
-        arguments this step has). Reopening such a step spends three ticks
-        reproducing it, and confirming it would mark a step that never ran
-        'completed' — `_confirm_tool_in_tx` writes that status unconditionally,
-        and nothing turns an `error` key into a routing flag, so the run would
-        take this node's first edge and report success.
+        The sibling of `_reopen_tool_step_in_tx`, for a failure that a retry
+        cannot change. Two callers, and both are about a tool that did not do the
+        step's work:
+
+        * the tool's signature cannot bind the arguments this step has
+          (`ToolArgumentsUnavailable`) — the same graph, step and signature next
+          tick, so three reopens reproduce it exactly three times;
+        * the tool ran and reported a truthy ``error`` on a node that did not
+          declare ``tool_error: "route"`` (`_tool_step_errored`). Its cause is a
+          missing project root or a refusing git command, neither of which a
+          re-tick supplies.
+
+        Confirming either would mark a step that did nothing 'completed':
+        `_confirm_tool_in_tx` writes that status unconditionally, so the run
+        would take this node's first edge and report success.
 
         The RUN is failed, not just the step: marking only the step failed leaves
         `advance_run` free to re-resolve the predecessor's transition and open a
@@ -5460,9 +5554,22 @@ class SkillFlow:
         layer is the previous LOOP ITEM's directory: item B would read item A's
         output as its own and produce silently wrong work.
 
-        Unconditional and identity-free on purpose. This is the new owner of the
-        slot saying "mine now" — there is no earlier claim it could be robbing,
-        because a claim exists only after this point.
+        Unconditional and identity-free on purpose — but NOT because "no earlier
+        claim exists here", which was the justification written first and is
+        false: `recover_stale_claims`' lease branch resets a row to 'pending'
+        without touching `claim_epoch`, so a worker it condemned while still
+        alive can be holding this slot when the replacement claim arrives.
+        `_evict_ended_step_tools` spares exactly that entry, and this drops it.
+
+        The two are consistent even so, and it is the ORDER that makes them so.
+        The evictor runs while the row is still 'pending' at the reaped worker's
+        epoch — nobody has replaced it, `_epoch_holds` still admits its calls, and
+        blinding it would strand a step that is going to confirm. This runs after
+        `claim_next_step` has bumped `claim_epoch` for the new owner, at which
+        point the old worker is fenced: `_assert_epoch` rejects its confirm, its
+        output is discarded, and its remaining reads decide nothing. Robbing a
+        claim that can no longer commit costs nothing; blinding a claim that
+        still can is the bug the evictor avoids.
         """
         with self._step_tools_lock:
             self._step_tools.pop((run_id, step_id), None)
@@ -5578,9 +5685,10 @@ class SkillFlow:
         Compare-and-delete on the PAIR (instance id, claim epoch), because
         neither half names a claim alone. `(run_id, step_id)` names the step; the
         row id names one INSTANCE of it but is shared by every re-claim of that
-        row (six sites reset a row to 'pending' and `claim_next_step` re-claims
-        the same row, bumping only `claim_epoch` — none of them resets the epoch,
-        checked); the epoch distinguishes those re-claims but restarts at 1 on
+        row (seven sites reset a row to 'pending' — enumerated where
+        `_step_tools` is declared — and `claim_next_step` re-claims the same row,
+        bumping only `claim_epoch`; none of the seven writes the epoch at all);
+        the epoch distinguishes those re-claims but restarts at 1 on
         every fresh row, so it is shared by consecutive instances of one step.
 
         What each half actually buys, measured against the fence rather than
@@ -5637,6 +5745,25 @@ class SkillFlow:
         consulted, and if it answers that the run owns no code repository,
         ``project_root``/``workspace_root`` are OMITTED from the tool call rather
         than passed as empty strings.
+
+        Omission is not itself a safety mechanism, and the comments here used to
+        claim it was. ``Path("")`` is ``Path(".")``, so a tool that DEFAULTS the
+        parameter to ``""`` cannot tell an omitted argument from an empty one —
+        the two are byte-identical inside the function. Omitting buys exactly one
+        thing: a tool whose parameter has no default becomes uncallable, which
+        the tool-STEP path turns into a named `ToolArgumentsUnavailable` and this
+        path into a TypeError. Everything else is the tools' own guards
+        (``repo_apply``, ``repo_validate``, ``git_sync_pre``, ``pytest`` each
+        refuse a non-absolute root in their first lines).
+
+        Two skillflow tools still fall back to the process CWD when the value is
+        missing — ``tools/lint`` (``Path.cwd()``) and ``tools/file_exists``
+        (``Path("")``). Neither is reachable that way today: they appear only in
+        ``validation:`` / ``after_deliver`` specs, which run through
+        ``StepValidator`` with an explicit ``workspace_root``, and no shipped
+        agent config grants either to an agent. Pinned in
+        ``tests/test_repo_tools_refuse_the_process_cwd.py`` so it stays a
+        theoretical hazard rather than becoming a live one unnoticed.
 
         That applies to the LOADER branch only. The write families handled first
         — ``write_*``/``create_*``/``edit_*``/``delete_*`` and the generic
@@ -5876,10 +6003,13 @@ class SkillFlow:
                     "without a project root", run_id, name, exc_info=True)
                 project_root = ""
         kwargs = dict(params)
-        # OMITTED, never "": the resolver answering "this run owns no code
-        # repository" must reach the tool as an absent argument, so a tool that
-        # requires it raises and a tool that defaults it can refuse — both loud.
-        # Seeding "" is what aimed them at the CWD.
+        # Omitted, never "". A tool that REQUIRES either name then raises
+        # TypeError rather than running; a tool that defaults it to "" sees
+        # exactly what a `setdefault("")` would have given it — `Path("")` is
+        # `Path(".")` — and refuses (or does not) on its own guard alone. So this
+        # branch is not the safety; it is the absence of an argument the engine
+        # has no answer for. See the docstring for which tools still fall back to
+        # the CWD when the value is missing, and why none is reachable here.
         if project_root:
             kwargs.setdefault("workspace_root", project_root)
             kwargs.setdefault("project_root", project_root)

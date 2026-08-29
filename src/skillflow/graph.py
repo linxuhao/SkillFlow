@@ -90,6 +90,23 @@ class StepNode:
         (v2 fields — all default to empty/falsy for backward compat)
         tool_name: For ``step_type="tool"``: tool directory name.
         tool_params: Parameters passed to the tool function.
+        tool_error: For ``step_type="tool"``: what a truthy ``error`` key in the
+                    tool's result means. ``"fail"`` (default) fails the step and
+                    the run — the tool said it could not do its job, and the
+                    engine must not record a step that did nothing as
+                    ``completed``. ``"route"`` says an error is a legitimate
+                    outcome HERE, and synthesises a ``_tool_error: true`` flag so
+                    ``transitions`` can match on it.
+
+                    Declared rather than inferred because every inference rule
+                    mis-classifies a real config. "Truthy error always fails"
+                    breaks a gate tool step whose verdict IS an error
+                    (``forge_lint`` returns ``{passed: false, error: <issues>}``
+                    and its graph routes on ``passed``). "Fails only when the
+                    edge it took was unconditional" breaks a step the author
+                    deliberately tolerates (AItelier's ``git_push_post``: a push
+                    that fails must not fail a run whose work is already
+                    committed). Only the author knows which this node is.
         agent_config: For agent nodes: key into agent config YAML.
         context: List of context source specs for prompt assembly.
         output_mode: ``"content"`` (constrained write) or ``"write"`` (free).
@@ -127,6 +144,14 @@ class StepNode:
     output_schema_retries: int = 0
     tool_name: str = ""
     tool_params: dict = field(default_factory=dict)
+    # What a truthy ``error`` in a TOOL step's result means here. "fail"
+    # (default) — the tool reported it could not do its job, so the step and the
+    # run fail. "route" — an error is a legitimate outcome of this node (a gate
+    # whose verdict IS the error, or a step the graph deliberately tolerates);
+    # the flag ``_tool_error`` is synthesised so the transitions can see it.
+    # Declared, never inferred: see the ``tool_error`` note in StepNode's
+    # docstring for why every inference rule mis-classified a shipped config.
+    tool_error: str = "fail"
     agent_config: str = ""
     # v2: framework-provisioned toolset + injected context (host capability
     # registry). One of: a name ("stateful"), a list of names, or
@@ -315,6 +340,7 @@ class PipelineGraph:
                     output_schema_retries=s.get("output_schema_retries", 0),
                     tool_name=s.get("tool_name", ""),
                     tool_params=s.get("tool_params", {}),
+                    tool_error=s.get("tool_error", "fail"),
                     agent_config=s.get("agent_config", ""),
                     capability=s.get("capability", ""),
                     context=s.get("context", []),
@@ -396,6 +422,8 @@ class PipelineGraph:
                 sd["tool_name"] = s.tool_name
             if s.tool_params:
                 sd["tool_params"] = s.tool_params
+            if s.tool_error and s.tool_error != "fail":
+                sd["tool_error"] = s.tool_error
             if s.notify is not None:
                 sd["notify"] = s.notify
             if s.agent_config:

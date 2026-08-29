@@ -554,10 +554,14 @@ class ContextResolver:
                 # gets an empty name and silently answers about everything.
                 "config_name": current_config or "",
             }
-            # Omitted, not "", when the run declares no code repository: the
-            # tool's own default applies, and a tool that resolves the value
-            # (`Path(project_root).resolve()` is the process CWD for "") gets
-            # nothing to resolve instead of the server's own checkout.
+            # Omitted, not "", when the run declares no code repository. Note
+            # what that does and does not buy: a tool whose `project_root` has NO
+            # default becomes uncallable (a loud TypeError), while a tool that
+            # defaults it to "" cannot tell the two apart — `Path("")` is
+            # `Path(".")`, so omitting is byte-identical to passing "" inside the
+            # function, and only the tool's own guard keeps it off the process
+            # CWD. The reason to omit anyway is that "" is not an answer the
+            # engine has; it is the absence of one.
             if self._code_root is not None:
                 call_kwargs["project_root"] = str(self._code_root)
             # Add the reading step's capability context (e.g. state_dir), then

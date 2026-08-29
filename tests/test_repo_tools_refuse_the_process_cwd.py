@@ -136,3 +136,109 @@ def test_pytest_still_runs_a_file_under_a_real_workspace_root(tmp_path):
     result = pytest_tool("test_ours.py", workspace_root=str(tmp_path))
 
     assert result.get("verdict") == "passed", result
+
+
+# ── Omission is not a safety mechanism ────────────────────────────────────────
+#
+# core.py's comments used to say that OMITTING `project_root`/`workspace_root`
+# was louder than sending "" because "a tool that defaults it can refuse".
+# `Path("")` is `Path(".")`, so for any tool that defaults the parameter the two
+# are byte-identical inside the function. All the real safety here is in the
+# hand-written per-tool guards above, and these two tests pin the distinction so
+# the claim cannot quietly come back.
+
+def test_an_omitted_root_is_indistinguishable_from_an_empty_one(cwd_repo,
+                                                                tmp_path):
+    """The tools that DEFAULT the parameter cannot tell the two apart."""
+    src = tmp_path / "step_out"
+    src.mkdir()
+    (src / "generated.py").write_text("print('hi')", encoding="utf-8")
+
+    omitted = repo_apply(str(src), workspace_root=str(tmp_path))
+    empty = repo_apply(str(src), workspace_root=str(tmp_path), project_root="")
+
+    assert omitted == empty, (
+        "omitting project_root did something passing '' did not — if that is "
+        "now true, the comments in core.py that credit omission with safety can "
+        "be believed again")
+    assert omitted.get("applied") is False
+
+
+def test_only_a_required_parameter_makes_omission_load_bearing():
+    """What omitting DOES buy: a tool with no default cannot be called at all.
+
+    `git_sync_pre(project_root: str)` is the one such tool, and that is the case
+    `signature.bind` turns into `ToolArgumentsUnavailable` in the tool-step path.
+    """
+    import inspect
+
+    from skillflow.tools.git_sync_pre.impl import git_sync_pre as gsp
+
+    p = inspect.signature(gsp).parameters["project_root"]
+    assert p.default is inspect.Parameter.empty, (
+        "git_sync_pre grew a default for project_root — omitting it no longer "
+        "raises, so the ToolArgumentsUnavailable path it exercises is dead")
+    with pytest.raises(TypeError):
+        gsp()
+
+
+# ── Characterization: two skillflow tools still resolve the CWD ───────────────
+#
+# NOT a fix — a pin. `lint` and `file_exists` fall back to the process CWD when
+# they get no root. Neither is reachable that way today: both appear only in
+# `validation:` / `after_deliver` specs, which run through StepValidator with an
+# explicit workspace_root, and no shipped agent config grants either to an
+# agent. Recorded so that granting one becomes a change with a failing test.
+
+def test_lint_falls_back_to_the_process_cwd(cwd_repo):
+    from skillflow.tools.lint.impl import lint
+
+    (cwd_repo / "theirs.py").write_text("x = 1\n", encoding="utf-8")
+
+    result = lint(["theirs.py"], workspace_root="")
+
+    assert result["results"], (
+        "lint no longer reads the CWD — it grew a guard; update the inventory "
+        "in execute_tool's docstring")
+
+
+def test_file_exists_falls_back_to_the_process_cwd(cwd_repo):
+    from skillflow.tools.file_exists.impl import file_exists
+
+    (cwd_repo / "theirs.md").write_text("content", encoding="utf-8")
+
+    result = file_exists(["theirs.md"], workspace_root="")
+
+    assert result["all_passed"] is True, (
+        "file_exists no longer reads the CWD — it grew a guard; update the "
+        "inventory in execute_tool's docstring")
+
+
+def test_neither_is_offered_to_an_agent_by_a_shipped_graph():
+    """The reachability half of the claim above, for skillflow's own configs.
+
+    AItelier's side of the same question is pinned in
+    tests/unit/test_tool_root_guard_inventory.py.
+    """
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[1] / "src" / "skillflow"
+    offenders = []
+    for path in root.rglob("*.yaml"):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        for step in data.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            granted = (step.get("config") or {}).get("tools") or []
+            for name in ("lint", "file_exists"):
+                if name in granted:
+                    offenders.append((path.name, step.get("id"), name))
+    assert not offenders, (
+        f"a graph now grants a CWD-falling-back tool to an agent: {offenders}")

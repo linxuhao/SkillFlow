@@ -24,7 +24,13 @@ def _loopback_graph():
     return PipelineGraph(name="fb", begin="impl", steps=[
         StepNode(id="impl", step_type="agent",
                  transitions=[Transition(to="gate")]),
+        # `tool_error: "route"` because this gate's whole point is to return
+        # `{all_passed: False, error: <what is wrong>}` and have that error
+        # injected into the maker it loops back to. Without the declaration the
+        # engine fails the step and the run on the truthy `error` — the default
+        # that stops a plumbing tool's refusal from being recorded 'completed'.
         StepNode(id="gate", step_type="tool", tool_name="validate",
+                 tool_error="route",
                  transitions=[
                      Transition(to="done", match={"all_passed": True}),
                      Transition(to="impl", match={"all_passed": False},

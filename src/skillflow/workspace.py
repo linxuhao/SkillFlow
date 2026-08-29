@@ -167,9 +167,15 @@ class WorkspaceManager:
         it owns no repository still had the default path invented for it, and
         the read surface attached that path as a ``repo`` source on nothing more
         than an ``is_dir()`` check — i.e. correct only for as long as nothing
-        happened to create the directory. A step in one such run listed an
-        unrelated project's repository (2026-08-28); the empty invented
-        directory is what let the layer exist at all.
+        happened to create the directory. The hazard is that a repo-less run is
+        shown a ``Repository`` layer it never asked for, pointing at an empty
+        directory the engine made up.
+
+        Not the cause of the cross-project leak of 2026-08-28: that was a
+        name-keyed tool cache handing one project's read closures to another
+        project's step, so the victim saw the OTHER project's real repository.
+        Its own invented directory played no part. See
+        ``tool_loader.declare_dynamic`` for that account.
         """
         if self._code_path_resolver is not None:
             resolved = self._code_path_resolver(project_id)
