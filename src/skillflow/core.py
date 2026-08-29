@@ -361,11 +361,23 @@ class SkillFlow:
         # LOOKUP key is (run_id, step_id): that is all a tool call carries, and
         # skillflow allows at most one live claim per run, so the pair names the
         # step whose claim is in flight. IDENTITY, stored in the entry, is the
-        # `skillflow_steps` row id — the step INSTANCE. The two differ whenever a
-        # step runs more than once in a run (a loop body, a Green/Red re-run):
-        # each re-entry INSERTs a fresh row, so the same (run_id, step_id) is
-        # occupied by a succession of instances and only the row id tells them
-        # apart. Entry shape: (step_instance_id, {name: fn}, last_use_monotonic).
+        # PAIR (step_instance_id, claim_epoch) — neither half identifies a claim
+        # on its own:
+        #
+        #   * `step_instance_id` names a `skillflow_steps` ROW, not a claim. Six
+        #     UPDATEs in this file reset a row to 'pending' (validation failure,
+        #     lifecycle retry, fail-retry, checkpoint reject, the reaper, the
+        #     re-run path) and `claim_next_step` then re-claims the SAME row,
+        #     bumping only `claim_epoch` — none of the six resets the epoch.
+        #     Successive claims of one row therefore share a row id.
+        #   * `claim_epoch` restarts per row. Graph re-entry (a loop body, a
+        #     Green/Red re-run) INSERTs a FRESH row whose first claim also yields
+        #     `claim_epoch == 1`, so consecutive instances of one step share an
+        #     epoch.
+        #
+        # The pair is unique: the row id separates instances, the epoch separates
+        # re-claims within an instance. Entry shape:
+        # (step_instance_id, claim_epoch, {name: fn}).
         self._step_tools: dict[tuple[str, str], tuple] = {}
         # Its OWN lock, not the engine RLock. `_step_tool_fn` runs on the hot
         # path of every tool call, and `_tx` holds the engine lock for whole
@@ -384,14 +396,6 @@ class SkillFlow:
         self._step_scoped_names: set[str] = set()
         self._load_native_tools()
         self._stale_threshold = stale_threshold_seconds
-        # The threshold the HOST last passed to recover_stale_claims. There is no
-        # single "the stale threshold": the constructor takes one and the reaper
-        # takes another as an argument, and a host is free to pass a value it
-        # never handed the constructor. The step-tool evictor needs the number
-        # actually in force, and takes the larger of the two — erring toward
-        # keeping entries, because the failure it guards against is evicting a
-        # live step's read surface.
-        self._last_reap_threshold: float = 0.0
         self._workspace = None
         # Artifact history (ON by default): _step_commit commits each promoted
         # step output dir to a git repo at the workspace root, so a goal-loop
@@ -1704,6 +1708,16 @@ class SkillFlow:
                 claim_epoch=(step_row["claim_epoch"] or 0) if step_row else 0,
             )
 
+            # Drop whatever the PREVIOUS claim of this step left behind, before
+            # anything that can skip the re-bind below. That bind sits under
+            # three conditions (the step has context specs; the read-tool build
+            # did not raise; it yielded at least one callable), and on every one
+            # of those skip paths the old closures used to stay in the slot and
+            # serve this claim — their 'self'/'promoted' layer pointing at the
+            # previous LOOP ITEM's directory, so item B read item A's output as
+            # its own. Unconditional: this claim owns the slot from here on.
+            self._clear_step_tools(run_id, run["current_node"])
+
             # Inject resolved tool schemas if agent config is registered
             tool_schemas: dict = {}
             agent_cfg = None
@@ -1951,13 +1965,15 @@ class SkillFlow:
                         if step_fns:
                             self._set_step_tools(
                                 run_id, node.id, step_fns,
-                                step_row["id"] if step_row else 0)
+                                step_row["id"] if step_row else 0,
+                                (step_row["claim_epoch"] or 0) if step_row else 0)
                 except Exception:
-                    # Best-effort: the step still runs without read tools. But
-                    # build_source_map handles missing paths gracefully, so an
-                    # exception here is an unexpected wiring bug, not a routine
-                    # miss — log it (a silent pass once hid a TypeError that
-                    # dropped read tools for every step).
+                    # Best-effort: the step runs with NO read tools. Not "the
+                    # last claim's" — the slot was cleared unconditionally at
+                    # claim, above. build_source_map handles missing paths
+                    # gracefully, so an exception here is an unexpected wiring
+                    # bug, not a routine miss — log it (a silent pass once hid a
+                    # TypeError that dropped read tools for every step).
                     import logging
                     logging.getLogger("skillflow").warning(
                         "read tool registration failed for step %s; agent will "
@@ -2129,10 +2145,11 @@ class SkillFlow:
         # its replacement and only then be told it had lost the step.
         self._assert_epoch(token, "confirm_step")
         # The claim is over — drop the read tools it owned. Identity-guarded on
-        # the step INSTANCE, so a zombie executor cannot release the entry
-        # belonging to the instance that replaced it.
+        # (instance id, claim epoch), so neither a zombie executor of an earlier
+        # instance nor a superseded re-claim of the same row can release the
+        # entry belonging to the claim that replaced it.
         self._release_step_tools(token.run_id, token.step_id,
-                                 token.step_instance_id)
+                                 token.step_instance_id, token.claim_epoch)
         resolver = self._get_resolver_for_run(token.run_id)
         node = resolver.get_node(token.step_id)
 
@@ -3026,7 +3043,7 @@ class SkillFlow:
         # reclaim on its own.)
         self._assert_epoch(token, "fail_step")
         self._release_step_tools(token.run_id, token.step_id,
-                                 token.step_instance_id)
+                                 token.step_instance_id, token.claim_epoch)
         with self._tx() as conn:
             self._fail_step_in_tx(conn, token, error, retryable)
 
@@ -4842,11 +4859,6 @@ class SkillFlow:
         """
         if not run_id or not step_id:
             return
-        # Same signal, in memory: the step-tool evictor must see a write-mode
-        # step (which reads once, then edits for minutes) as alive. Not
-        # throttled with the DB write below — it is a dict update, and the
-        # throttle exists to spare the disk.
-        self._touch_step_tools(run_id, step_id)
         key = (run_id, step_id)
         now = time.time()
         last = self._hb_last.get(key, 0.0)
@@ -4883,13 +4895,6 @@ class SkillFlow:
     # ── Recovery ──────────────────────────────────────────────────
 
     def recover_stale_claims(self, stale_threshold_seconds: float = 300) -> list[str]:
-        # Remember the number actually in force. The step-tool evictor needs to
-        # know how long silence must last before a claim is presumed abandoned,
-        # and the host passes that here rather than to the constructor.
-        try:
-            self._last_reap_threshold = float(stale_threshold_seconds or 0)
-        except (TypeError, ValueError):
-            pass
         now_epoch = time.time()
         with self._tx() as conn:
             claimed = conn.execute(
@@ -5370,133 +5375,174 @@ class SkillFlow:
     _STEP_TOOL_CAP = 512
 
     def _set_step_tools(self, run_id: str, step_id: str, fns: dict,
-                        step_instance_id: int) -> None:
-        """Bind *fns* to the claim identified by *step_instance_id*.
+                        step_instance_id: int, claim_epoch: int) -> None:
+        """Bind *fns* to the claim identified by (instance id, claim epoch).
 
-        The instance id is the `skillflow_steps` row id — unique across the whole
-        table, so it names THIS claim and not merely this step.
+        Both halves are needed: the row id separates two INSTANCES of one step
+        (a loop body, a Green/Red re-run — each re-entry INSERTs a fresh row
+        whose first claim is epoch 1), and the epoch separates two CLAIMS of one
+        row (a validation failure or lifecycle retry resets the same row to
+        'pending' and `claim_next_step` re-claims it, bumping only the epoch).
         """
-        over = 0
         with self._step_tools_lock:
-            # Third field is the LAST-USE stamp, refreshed by `_touch_step_tools`
-            # on every read-tool call AND every heartbeat — not the creation
-            # stamp. See the eviction guard.
             self._step_tools[(run_id, step_id)] = (
-                int(step_instance_id or 0), fns, time.monotonic())
-            if len(self._step_tools) > self._STEP_TOOL_CAP:
-                over = self._evict_step_tools_locked()
-        if over:
-            # Deliberately OUTSIDE the lock. Logging is I/O behind a handler lock
-            # of its own; holding a lock that every tool call takes across it
-            # couples one step's read call to another's log flush.
-            logging.getLogger("skillflow").warning(
-                "step tool map holds %d entries and none have been idle longer "
-                "than the reap threshold — steps are being claimed but never "
-                "confirmed, failed or reclaimed", over)
+                int(step_instance_id or 0), int(claim_epoch or 0), fns)
+            over_cap = len(self._step_tools) > self._STEP_TOOL_CAP
+        if over_cap:
+            # Outside the lock: eviction reads the DB, and holding a lock every
+            # tool call takes across I/O would couple one step's reads to
+            # another step's bookkeeping.
+            self._evict_ended_step_tools()
 
-    def _evict_step_tools_locked(self) -> int:
+    def _clear_step_tools(self, run_id: str, step_id: str) -> None:
+        """Drop whatever (run_id, step_id) holds, unconditionally.
+
+        Called at CLAIM, before anything that can fail. The bind below happens
+        only when the step has context specs, the read-tool build succeeds and it
+        yields at least one callable — three ways to skip it, and on every one of
+        them the PREVIOUS claim's entry used to survive into the new claim. Those
+        closures capture the previous claim's source map, whose 'self'/'promoted'
+        layer is the previous LOOP ITEM's directory: item B would read item A's
+        output as its own and produce silently wrong work.
+
+        Unconditional and identity-free on purpose. This is the new owner of the
+        slot saying "mine now" — there is no earlier claim it could be robbing,
+        because a claim exists only after this point.
+        """
+        with self._step_tools_lock:
+            self._step_tools.pop((run_id, step_id), None)
+
+    def _evict_ended_step_tools(self) -> None:
         """Last-resort bound, and it must never cost a LIVE step its tools.
 
-        Returns the entry count if the map is still over the cap afterwards (the
-        caller logs that, outside the lock), else 0.
+        Entries are dropped at confirm/fail and overwritten at the next claim of
+        the same step, so exceeding the cap means claims are being abandoned
+        without ever reaching any of those. The only safe thing to drop is an
+        entry whose claim is provably OVER, and the DB is the one place that
+        knows: the step row is gone, is no longer 'claimed', or has been
+        re-claimed under a later epoch.
 
-        Entries are released on confirm/fail, so reaching the cap means something
-        is not ending steps at all. Evicting by plain insertion order would
-        sacrifice the entry created longest ago — which under load is the
-        longest-RUNNING claim, exactly the one most likely to still be using its
-        tools (a 17-minute architect step is the shape that motivated this).
+        Deliberately NOT an idle clock. An earlier version evicted entries idle
+        longer than the reap threshold and claimed that matched
+        `recover_stale_claims`; it does not. That reaper decides on OWNERSHIP
+        first — a claim whose owning process the OS reports alive is never
+        reaped, however long it has been silent — and an agent inside one long
+        generation turn traces nothing, so neither its lease clock nor a
+        read-tool clock moves while it works. An idle-clock evictor therefore
+        blinds exactly the step the reaper protects.
 
-        Age is therefore measured on the SAME activity clock
-        `recover_stale_claims` measures: `_touch_step_tools` refreshes the stamp
-        from `_heartbeat_step`, i.e. from `trace()` on every worker action, and
-        also from every read-tool lookup. That matters because the read tools
-        alone are not a liveness signal — a write-mode step reads its sources
-        once and then spends fifteen minutes on create/edit turns, which the
-        reaper sees as alive and a read-only clock would see as fifteen minutes
-        idle. Only entries idle by that clock for longer than the reap threshold
-        are eligible at all, and eviction takes the least recently used first.
-        If nothing is idle enough, keep them all and say so: a few closures of
-        unbounded growth is a smaller failure than silently blinding a step that
-        is still working.
-
-        The threshold is the LARGER of the constructor's and the one the host
-        last passed to `recover_stale_claims` — those are two different numbers
-        and a step is only provably abandoned once the bigger one has elapsed —
-        with a 60s floor for a host that reaps aggressively.
+        Best-effort: if the DB cannot be read, nothing is evicted. A few hundred
+        leaked closures are a smaller failure than a running step losing its
+        read surface.
         """
-        cutoff = time.monotonic() - max(float(self._stale_threshold or 0),
-                                        float(self._last_reap_threshold or 0),
-                                        60.0)
-        evictable = sorted((v[2], k) for k, v in self._step_tools.items()
-                           if v[2] < cutoff)
-        for _stamp, k in evictable:
-            del self._step_tools[k]
-            if len(self._step_tools) <= self._STEP_TOOL_CAP:
-                break
-        return (len(self._step_tools)
-                if len(self._step_tools) > self._STEP_TOOL_CAP else 0)
-
-    def _touch_step_tools(self, run_id: str, step_id: str) -> None:
-        """Mark this step's read surface as belonging to a step that is ALIVE.
-
-        Called from `_heartbeat_step` (every traced worker action) and from
-        `_step_tool_fn`, so the eviction stamp tracks the same activity the
-        reaper's lease tracks rather than read-tool traffic alone.
-        """
-        if not (run_id and step_id):
-            return
-        key = (run_id, step_id)
         with self._step_tools_lock:
-            entry = self._step_tools.get(key)
-            if entry is not None:
-                self._step_tools[key] = (entry[0], entry[1], time.monotonic())
+            snapshot = [(k, v[0], v[1]) for k, v in self._step_tools.items()]
+        live: dict[int, tuple[str, int]] = {}
+        ids = sorted({sid for _k, sid, _e in snapshot if sid})
+        try:
+            # `_ro`, never `_tx`. The only caller is `_set_step_tools`, and it
+            # runs lexically inside `claim_next_step`'s `with self._tx()` block.
+            # Measured: a nested `_tx` there happens to SUCCEED today, because
+            # something between the BEGIN and this point commits the connection
+            # — so this is not a live bug, it is a dependency on where a commit
+            # happens to fall. Were the transaction still open, the nested
+            # `BEGIN IMMEDIATE` would raise "cannot start a transaction within a
+            # transaction" (verified separately), the `except` below would
+            # swallow it, and the evictor would evict nothing forever while
+            # logging that the table could not be read. `_ro` takes the same
+            # RLock (re-entrant on this thread) and issues a plain SELECT, so it
+            # is correct either way.
+            with self._ro() as conn:
+                for i in range(0, len(ids), 400):
+                    chunk = ids[i:i + 400]
+                    qs = ",".join("?" * len(chunk))
+                    for row in conn.execute(
+                            f"SELECT id, status, claim_epoch FROM "
+                            f"skillflow_steps WHERE id IN ({qs})", chunk):
+                        live[row["id"]] = (row["status"],
+                                           row["claim_epoch"] or 0)
+        except Exception:
+            logging.getLogger("skillflow").warning(
+                "step tool map is over its cap but the step table could not be "
+                "read; evicting nothing", exc_info=True)
+            return
+        dead = []
+        for key, sid, epoch in snapshot:
+            row = live.get(sid)
+            if row is None or row[0] != "claimed" or row[1] != epoch:
+                dead.append((key, sid, epoch))
+        remaining = 0
+        with self._step_tools_lock:
+            for key, sid, epoch in dead:
+                entry = self._step_tools.get(key)
+                # Compare-and-delete: the slot may have been rebound by a new
+                # claim while the DB was being read.
+                if entry is not None and entry[0] == sid and entry[1] == epoch:
+                    del self._step_tools[key]
+            remaining = len(self._step_tools)
+        if remaining > self._STEP_TOOL_CAP:
+            logging.getLogger("skillflow").warning(
+                "step tool map holds %d entries and %d of them still name a "
+                "live claim — steps are being claimed but never confirmed, "
+                "failed or reclaimed", remaining, remaining - len(dead))
 
     def _step_tool_fn(self, run_id: str, step_id: str, name: str):
         """The callable *this* step owns for *name*, or None.
 
-        Also refreshes the entry's last-use stamp (see `_touch_step_tools`).
-
         Not identity-checked: a tool call carries no step_instance_id down this
         path, and `execute_tool` already fences a reclaimed executor's calls when
-        the host passes the claim's epoch. The instance id stored beside the
+        the host passes the claim's epoch. The identity stored beside the
         callables exists for RELEASE.
         """
         if not (run_id and step_id):
             return None
-        key = (run_id, step_id)
         with self._step_tools_lock:
-            entry = self._step_tools.get(key)
-            if entry is None:
-                return None
-            self._step_tools[key] = (entry[0], entry[1], time.monotonic())
-        return entry[1].get(name)
+            entry = self._step_tools.get((run_id, step_id))
+        return entry[2].get(name) if entry is not None else None
 
     def _release_step_tools(self, run_id: str, step_id: str,
-                            step_instance_id: int | None) -> None:
+                            step_instance_id: int | None,
+                            claim_epoch: int | None) -> None:
         """Drop this claim's callables — only if the entry is still ITS entry.
 
-        Compare-and-delete on the STEP INSTANCE id, because `(run_id, step_id)`
-        names the step and a step runs many times in a run: a loop body once per
-        item, a maker once per Green/Red round. Each re-entry INSERTs a fresh
-        `skillflow_steps` row whose `claim_epoch` starts at 0 and becomes 1 on
-        its first claim, so consecutive instances of one step are
-        indistinguishable by epoch — comparing it would let a late `fail_step`
-        from instance N's watchdog delete instance N+1's live entry, and N+1
-        would then run its whole step reading nothing. The row id is unique
-        across the table and is exactly "which claim".
+        Compare-and-delete on the PAIR (instance id, claim epoch), because
+        neither half names a claim alone. `(run_id, step_id)` names the step; the
+        row id names one INSTANCE of it but is shared by every re-claim of that
+        row (six sites reset a row to 'pending' and `claim_next_step` re-claims
+        the same row, bumping only `claim_epoch` — none of them resets the epoch,
+        checked); the epoch distinguishes those re-claims but restarts at 1 on
+        every fresh row, so it is shared by consecutive instances of one step.
 
-        A token carrying no instance id (0/None — a hand-built token, which
-        `_epoch_holds` also deliberately admits) releases NOTHING. It cannot
-        prove which claim it is, and the two failure modes are not symmetric:
-        deleting the wrong entry blinds a running step, while keeping one costs
-        a dict entry that the step's next claim overwrites and the cap bounds.
+        What each half actually buys, measured against the fence rather than
+        assumed:
+
+        * The INSTANCE id is what stops a zombie executor of instance N from
+          releasing instance N+1's entry. `_assert_epoch` does not: it re-reads
+          the zombie's OWN row, which nothing resets, so its token holds forever.
+        * The EPOCH matters only for a token `_assert_epoch` lets through with a
+          superseded claim, and there is exactly one such shape: `claim_epoch ==
+          0`, which `_epoch_holds` deliberately admits ("a hand-built token, or a
+          row that predates the column"). A host that does not forward epochs
+          confirms with 0; if its step was reset and re-claimed meanwhile, the
+          fence passes and an instance-id-only comparison deletes the LIVE
+          claim's entry. With a real forwarded epoch the fence already refuses
+          the call before it reaches here, so the pair guard is belt to that
+          brace, not a second brace.
+
+        A token carrying an incomplete identity — instance id or epoch 0/None —
+        therefore releases NOTHING: it cannot prove which claim it is. That is
+        safe rather than leaky because `_clear_step_tools` drops the slot
+        unconditionally at the NEXT claim of the same step, so an un-released
+        entry survives only until the step runs again, and the cap bounds the
+        rest.
         """
-        if not step_instance_id:
+        if not step_instance_id or not claim_epoch:
             return
         key = (run_id, step_id)
         with self._step_tools_lock:
             entry = self._step_tools.get(key)
-            if entry is not None and entry[0] == int(step_instance_id):
+            if (entry is not None and entry[0] == int(step_instance_id)
+                    and entry[1] == int(claim_epoch)):
                 del self._step_tools[key]
 
     def execute_tool(self, name: str, params: dict, *,
@@ -5509,6 +5555,11 @@ class SkillFlow:
         Resolves the allowed tool list from the graph node internally.
         Write tools write to the skillflow-managed draft directory.
         Read/exploration tools receive ``project_root`` as their workspace.
+
+        ``project_root=""`` means "the host has no opinion", never "the process
+        CWD": the code-path resolver is consulted, and if it answers that the run
+        owns no code repository, ``project_root``/``workspace_root`` are OMITTED
+        from the tool call rather than passed as empty strings.
 
         Every call + result is recorded to the durable run trace. Pass
         ``step_instance_id`` (from the claimed step's token) so each tool call
@@ -5690,14 +5741,47 @@ class SkillFlow:
         # step's.
         fn = self._step_tool_fn(run_id, step_id, name)
         if fn is None:
-            if name in self._step_scoped_names:
+            # Refuse only if the name is still DYNAMIC — i.e. nothing on disk
+            # answers to it. `_step_scoped_names` only ever grows, so a bare
+            # membership test would shadow a real tool directory named `read` /
+            # `search` / `list` for the rest of the process's life if one were
+            # ever added. `is_dynamic` re-checks the disk, so an on-disk tool
+            # wins and falls through to the loader below.
+            _is_dyn = getattr(self._tool_loader, "is_dynamic", None)
+            if name in self._step_scoped_names and (
+                    _is_dyn is None or _is_dyn(name)):
                 return {"error": f"Tool '{name}' is provided per step, and this "
                                  f"step has no read surface (or its claim has "
                                  f"already ended)."}
             fn = self._tool_loader.load_fn(name)
+        # `project_root=""` from the host means "no opinion", NOT "the process
+        # CWD" — so ask the code-path resolver, exactly as the tool-STEP path
+        # (`_claim_tool_step_in_tx`) and the lifecycle-hook path
+        # (`_execute_tool_hook`) already do. This path was the only one of the
+        # three that never consulted it, and it is the one agents call: the host
+        # sent "" for a repo-less run believing the resolver would be asked,
+        # `setdefault` forwarded "" into both roots, and a tool doing
+        # `Path(project_root or workspace_root).resolve()` got the process CWD —
+        # for a hosted engine, the server's own checkout.
+        if not project_root and run_id and self._workspace is not None:
+            try:
+                _pid = self._get_project_id(run_id)
+                _cp = (self._workspace.get_project_code_path(_pid)
+                       if _pid else None)
+                project_root = str(_cp) if _cp else ""
+            except Exception:
+                logging.getLogger("skillflow").warning(
+                    "could not resolve the code path for run %s; tool %r runs "
+                    "without a project root", run_id, name, exc_info=True)
+                project_root = ""
         kwargs = dict(params)
-        kwargs.setdefault("workspace_root", project_root or "")
-        kwargs.setdefault("project_root", project_root or "")
+        # OMITTED, never "": the resolver answering "this run owns no code
+        # repository" must reach the tool as an absent argument, so a tool that
+        # requires it raises and a tool that defaults it can refuse — both loud.
+        # Seeding "" is what aimed them at the CWD.
+        if project_root:
+            kwargs.setdefault("workspace_root", project_root)
+            kwargs.setdefault("project_root", project_root)
         if run_id:
             try:
                 kwargs.setdefault("config_name", self._get_graph_name(run_id))

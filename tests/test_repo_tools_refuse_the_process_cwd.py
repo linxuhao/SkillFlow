@@ -104,3 +104,35 @@ def test_repo_validate_refuses_an_empty_project_root(cwd_repo):
     assert "absolute path" in result.get("error", ""), result
     assert result.get("results") == [], \
         "it reported findings about the process CWD"
+
+
+def test_pytest_refuses_an_empty_workspace_root(cwd_repo):
+    """`pytest` resolves `(Path(workspace_root) / file)` — with "" that is the
+    process CWD, so a relative test path names the SERVER's own test file and
+    the tool runs and reports on it.
+
+    Reachable on a repo-less run: it has no workspace_root to give (the engine
+    omits the argument), and the `tool_creation` capability grants this tool to
+    exactly such runs (AItelier's pipeline_forge `t_tool_impl`).
+    """
+    from skillflow.tools.pytest.impl import pytest as pytest_tool
+
+    (cwd_repo / "test_theirs.py").write_text(
+        "def test_theirs():\n    assert True\n", encoding="utf-8")
+
+    result = pytest_tool("test_theirs.py", workspace_root="")
+
+    assert result.get("verdict") == "failed"
+    assert "absolute path" in result.get("feedback", ""), result
+
+
+def test_pytest_still_runs_a_file_under_a_real_workspace_root(tmp_path):
+    """The control: the guard must not have broken the tool it protects."""
+    from skillflow.tools.pytest.impl import pytest as pytest_tool
+
+    (tmp_path / "test_ours.py").write_text(
+        "def test_ours():\n    assert True\n", encoding="utf-8")
+
+    result = pytest_tool("test_ours.py", workspace_root=str(tmp_path))
+
+    assert result.get("verdict") == "passed", result

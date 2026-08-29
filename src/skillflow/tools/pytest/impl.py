@@ -7,7 +7,20 @@ from pathlib import Path
 
 
 def pytest(file: str, *, workspace_root: str = "") -> dict:
-    full = (Path(workspace_root) / file).resolve()
+    if not workspace_root or not Path(workspace_root).is_absolute():
+        # `Path("") / file` resolves against the process CWD — for a hosted
+        # engine, the server's own checkout, whose real test files this would
+        # then run and report on. A run that declares no code repository has no
+        # workspace_root to give (the engine omits the argument), and
+        # `tool_creation` grants this tool to steps of exactly such runs.
+        if not Path(file).is_absolute():
+            return {"verdict": "failed",
+                    "feedback": f"pytest: workspace_root must be an absolute "
+                                f"path (got {workspace_root!r}) to resolve "
+                                f"{file!r} — refusing to resolve against the "
+                                f"process CWD"}
+    full = (Path(workspace_root) / file).resolve() if workspace_root \
+        else Path(file).resolve()
 
     if not full.exists():
         return {"verdict": "failed", "feedback": f"File not found: {file}"}

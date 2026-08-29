@@ -14,6 +14,8 @@ reviewer then wrote findings about), because that project claimed a step while
 the reviewer was still running.
 """
 
+from dataclasses import replace
+
 import pytest
 
 from skillflow.core import SkillFlow, StepResult
@@ -156,6 +158,52 @@ def test_the_read_trio_is_never_left_in_the_shared_loader(sf, tmp_path):
     assert sf._step_scoped_names >= {"read", "search", "list"}
 
 
+# ── A claim owns its slot even when it binds nothing ──────────────────────
+
+@pytest.mark.parametrize("break_it", ["raise", "no_read_fns"])
+def test_a_claim_that_binds_no_read_tools_is_not_served_the_last_claims(
+        sf, tmp_path, monkeypatch, break_it):
+    """The bind sits under three conditions; on every skip the slot must be EMPTY.
+
+    `_set_step_tools` is reached only when the step has context specs, the
+    read-tool build did not raise, and it produced at least one callable. On any
+    of those three skip paths the PREVIOUS claim's entry used to stay in the slot
+    and answer this claim's reads — and entries only leave at confirm/fail, so a
+    claim ended by the reaper, a timeout or a lifecycle failure leaves one behind.
+
+    For a loop body that is not a cosmetic leak: the stale closures'
+    'self'/'promoted' layer is the previous ITEM's directory, so item B reads
+    item A's output as its own and produces silently wrong work — with no error
+    anywhere, because a read that returns the wrong file returns successfully.
+    """
+    _repo(tmp_path, "proj_a", "ONLY_IN_A.txt")
+    sf.register_graph(_graph("ga"))
+    run_a, first = _claim(sf, "ga", "proj_a")
+    assert "ONLY_IN_A.txt" in _listing(sf, run_a), "no read surface to inherit"
+
+    # Instance 1 ends WITHOUT confirm/fail — reaped, timed out, or dropped.
+    with sf._tx() as conn:
+        conn.execute(
+            "UPDATE skillflow_steps SET status = 'completed' WHERE id = ?",
+            (first.token.step_instance_id,))
+
+    # Instance 2's read-tool build fails, each of the two silent ways.
+    if break_it == "raise":
+        def _boom(*a, **k):
+            raise RuntimeError("wiring bug")
+        monkeypatch.setattr("skillflow.read_tools.build_source_map", _boom)
+    else:
+        monkeypatch.setattr("skillflow.read_tools.make_read_tool_fns",
+                            lambda *a, **k: {})
+
+    second = sf.claim_next_step(run_a)
+    assert second is not None, "the step did not re-enter; this proves nothing"
+
+    out = sf.execute_tool("list", {}, run_id=run_a, step_id="review")
+    assert "ONLY_IN_A.txt" not in str(out), \
+        "the new claim was served the previous claim's closures"
+
+
 # ── Release is a compare-and-delete on the STEP INSTANCE ──────────────────
 
 def _reenter(sf, run_id: str, step_id: str):
@@ -206,28 +254,75 @@ def test_a_late_release_cannot_blind_the_next_instance_of_the_same_step(
         "a finished instance's release took the live instance's read surface"
 
 
+def test_an_unfenced_token_cannot_blind_a_later_claim_of_the_SAME_row(
+        sf, tmp_path):
+    """The other collision: one ROW, two claims.
+
+    Six sites reset a row to 'pending' (validation failure, lifecycle retry,
+    fail-retry, checkpoint reject, the reaper…) and `claim_next_step` re-claims
+    that SAME row, bumping only `claim_epoch`. So a row id is shared by every
+    re-claim of it and cannot name a claim either.
+
+    Reached here through the one shape `_assert_epoch` lets past with a
+    superseded claim: `claim_epoch == 0`, which `_epoch_holds` deliberately
+    admits ("a hand-built token, or a row that predates the column") — i.e. a
+    host that does not forward epochs. With a forwarded epoch the fence refuses
+    the call before release, which is exactly why this test builds the unfenced
+    token instead of pretending the fenced path is broken.
+    """
+    _repo(tmp_path, "proj_a", "ONLY_IN_A.txt")
+    sf.register_graph(_graph("ga"))
+    run_a, first = _claim(sf, "ga", "proj_a")
+
+    # The row goes back to pending and is re-claimed — same row, next epoch.
+    with sf._tx() as conn:
+        conn.execute(
+            "UPDATE skillflow_steps SET status = 'pending', "
+            "version = version + 1 WHERE id = ?",
+            (first.token.step_instance_id,))
+    second = sf.claim_next_step(run_a)
+    assert second is not None
+    assert second.token.step_instance_id == first.token.step_instance_id, \
+        "not a re-claim of one row; the test is not exercising the collision"
+    assert second.token.claim_epoch == first.token.claim_epoch + 1
+
+    # The superseded worker confirms with an UNFENCED token: same row, epoch 0.
+    stale = replace(first.token, claim_epoch=0)
+    sf._assert_epoch(stale, "probe")          # documents that the fence admits it
+    sf.fail_step(stale, "a host that does not forward claim epochs")
+
+    assert "ONLY_IN_A.txt" in _listing(sf, run_a), \
+        "an unfenced token released the live re-claim's read surface"
+
+
 def test_the_owning_instance_can_still_release_its_own_tools(sf, tmp_path):
     """The guard must not become a refusal to release at all."""
     _repo(tmp_path, "proj_a", "ONLY_IN_A.txt")
     sf.register_graph(_graph("ga"))
     run_a, claimed = _claim(sf, "ga", "proj_a")
 
-    sf._release_step_tools(run_a, "review", claimed.token.step_instance_id)
+    sf._release_step_tools(run_a, "review", claimed.token.step_instance_id,
+                           claimed.token.claim_epoch)
     assert "ONLY_IN_A.txt" not in _listing(sf, run_a)
 
 
-def test_a_token_with_no_instance_id_releases_nothing(sf, tmp_path):
+def test_a_token_with_half_an_identity_releases_nothing(sf, tmp_path):
     """A hand-built token — the shape `_epoch_holds` deliberately admits — cannot
-    say which claim it is. The two mistakes are not symmetric: releasing the
-    wrong entry blinds a running step, keeping one costs a dict entry that the
-    next claim of that step overwrites and the cap bounds. So it keeps it.
+    say which claim it is, with EITHER half missing. The two mistakes are not
+    symmetric: releasing the wrong entry blinds a running step, keeping one costs
+    a dict entry that the next claim of that step clears and the cap bounds. So
+    it keeps it.
     """
     _repo(tmp_path, "proj_a", "ONLY_IN_A.txt")
     sf.register_graph(_graph("ga"))
-    run_a, _ = _claim(sf, "ga", "proj_a")
+    run_a, claimed = _claim(sf, "ga", "proj_a")
+    inst = claimed.token.step_instance_id
+    epoch = claimed.token.claim_epoch
 
-    sf._release_step_tools(run_a, "review", 0)
-    sf._release_step_tools(run_a, "review", None)
+    sf._release_step_tools(run_a, "review", 0, epoch)
+    sf._release_step_tools(run_a, "review", None, epoch)
+    sf._release_step_tools(run_a, "review", inst, 0)
+    sf._release_step_tools(run_a, "review", inst, None)
 
     assert "ONLY_IN_A.txt" in _listing(sf, run_a), \
         "an unidentifiable token released a live claim's tools"
@@ -262,109 +357,156 @@ def test_adding_a_tools_dir_forgets_registered_callables_but_not_step_names(
 
 # ── Bounding must not blind a live step ───────────────────────────────────
 
-def test_the_cap_never_evicts_an_entry_that_could_still_be_running(sf, monkeypatch):
-    """Insertion order would sacrifice the OLDEST entry — under load that is the
-    longest-RUNNING claim, the one most likely to still need its tools. Only
-    entries idle past the stale threshold are eligible; if none are, keep them
-    all."""
-    monkeypatch.setattr(type(sf), "_STEP_TOOL_CAP", 2)
-    for i in range(4):
-        sf._set_step_tools(f"run{i}", "s", {"list": lambda: None}, 1)
 
-    assert len(sf._step_tools) == 4, \
-        "young entries were evicted; a live step just lost its read surface"
-
-    # Age the first one past the threshold, then trip the cap again.
-    k = ("run0", "s")
-    epoch, fns, _ = sf._step_tools[k]
-    sf._step_tools[k] = (epoch, fns, 0.0)
-    sf._set_step_tools("run4", "s", {"list": lambda: None}, 1)
-
-    assert k not in sf._step_tools
-    assert ("run4", "s") in sf._step_tools
+def _claim_n(sf, tmp_path, n: int) -> list:
+    """*n* independent runs, each with a live claim and its own read surface."""
+    out = []
+    for i in range(n):
+        pid = f"proj_{i}"
+        _repo(tmp_path, pid, f"ONLY_IN_{i}.txt")
+        gname = f"g{i}"
+        sf.register_graph(_graph(gname))
+        out.append(_claim(sf, gname, pid))
+    return out
 
 
-def test_the_cap_measures_idleness_not_claim_age(sf, monkeypatch):
-    """The guard has to read the same clock staleness is measured on.
+def test_the_cap_never_evicts_an_entry_whose_claim_is_still_live(
+        sf, tmp_path, monkeypatch):
+    """The invariant the evictor has to keep, stated where it can be checked.
 
-    `recover_stale_claims` measures the ACTIVITY clock (`updated_at`,
-    heartbeated). A step that keeps working keeps that clock fresh and is never
-    reaped — while its CREATION stamp is by definition the oldest in the map. A
-    guard filtering on creation age therefore evicts exactly the entry it exists
-    to protect: the longest-running claim goes first.
-
-    Here the oldest entry is the one still CALLING its read tools. It must be
-    the last to go, not the first.
+    Every entry here belongs to a claim that is still `status='claimed'` at its
+    recorded epoch. None of them may go, however far over the cap the map is —
+    a evicted entry means a step that is still working reads nothing for the
+    rest of its step while believing it read everything.
     """
-    monkeypatch.setattr(type(sf), "_STEP_TOOL_CAP", 2)
-    for i in range(3):
-        sf._set_step_tools(f"run{i}", "s", {"list": lambda: None}, 1)
-    # Everything is idle enough to be evictable…
-    for k, (epoch, fns, _) in list(sf._step_tools.items()):
-        sf._step_tools[k] = (epoch, fns, 0.0)
+    monkeypatch.setattr(type(sf), "_STEP_TOOL_CAP", 1)
+    claims = _claim_n(sf, tmp_path, 3)
+    assert len(sf._step_tools) == 3, "the fixture did not build three claims"
 
-    # …but run0, the one created first, is still using its read surface.
-    assert sf._step_tool_fn("run0", "s", "list") is not None
+    sf._evict_ended_step_tools()
 
-    sf._set_step_tools("run3", "s", {"list": lambda: None}, 1)
-
-    assert ("run0", "s") in sf._step_tools, \
-        "the entry that just called a read tool was evicted first"
+    assert len(sf._step_tools) == 3, \
+        "a live claim lost its read surface to the cap"
+    for i, (run_id, _c) in enumerate(claims):
+        assert f"ONLY_IN_{i}.txt" in _listing(sf, run_id)
 
 
-def test_a_step_that_writes_instead_of_reading_still_counts_as_alive(
-        sf, monkeypatch):
-    """Read-tool traffic alone is not a liveness signal.
+def test_a_step_silent_inside_one_long_generation_turn_keeps_its_tools(
+        sf, tmp_path, monkeypatch):
+    """The specific shape an idle clock gets wrong.
 
-    `recover_stale_claims` measures `updated_at`, heartbeated by `_heartbeat_step`
-    from `trace()` on EVERY worker action. A write-mode step reads its sources
-    once and then spends fifteen minutes on create/edit turns: alive to the
-    reaper, and — if the eviction stamp only moved on read/search/list — fully
-    idle to the evictor, which would then evict a running step's read surface.
-    Two clocks claiming to be one.
+    An earlier evictor dropped entries idle longer than the reap threshold and
+    said that matched `recover_stale_claims`. It does not: that reaper decides on
+    OWNERSHIP first — `owner_is_dead is False` skips the row before any clock is
+    read — so a claim whose process the OS reports alive is never reaped however
+    long it has been silent. An agent inside one long generation turn traces
+    nothing, so neither its lease clock nor a read-tool clock moves WHILE IT
+    WORKS. An idle-clock evictor therefore blinds exactly the step the reaper
+    protects.
+
+    Here nothing has touched the entry since the claim, and the reaper — asked
+    with a threshold of zero, which makes every claim maximally overdue —
+    still refuses to reap it. So must the evictor.
     """
-    monkeypatch.setattr(type(sf), "_STEP_TOOL_CAP", 2)
-    for i in range(3):
-        sf._set_step_tools(f"run{i}", "s", {"list": lambda: None}, i + 1)
-    for k, (inst, fns, _) in list(sf._step_tools.items()):
-        sf._step_tools[k] = (inst, fns, 0.0)
+    monkeypatch.setattr(type(sf), "_STEP_TOOL_CAP", 0)
+    (run_id, _c), = _claim_n(sf, tmp_path, 1)
 
-    # run0 has not read anything since its claim — it has been WRITING, and every
-    # traced action heartbeats it.
-    sf._heartbeat_step("run0", "s")
+    assert sf.recover_stale_claims(stale_threshold_seconds=0) == [], \
+        "the reaper reclaimed this claim; it is not the protected shape"
 
-    sf._set_step_tools("run3", "s", {"list": lambda: None}, 4)
+    sf._evict_ended_step_tools()
 
-    assert ("run0", "s") in sf._step_tools, \
-        "a step that was writing (not reading) lost its read surface"
+    assert "ONLY_IN_0.txt" in _listing(sf, run_id), \
+        "a live-but-silent step lost its read surface"
 
 
-def test_the_evictor_honours_the_threshold_the_host_actually_reaps_with(sf):
-    """There is no single "the stale threshold": the constructor takes one, and
-    `recover_stale_claims` takes another as an argument. An entry idle for less
-    than the number actually in force is not abandoned, whichever of the two is
-    larger — so the evictor takes the max.
+def test_the_cap_drops_an_entry_whose_claim_has_ENDED(sf, tmp_path,
+                                                      monkeypatch):
+    """…and it must actually drop something, or it is not a bound at all.
+
+    A row that is no longer 'claimed' is a claim that is over, whatever left it
+    that way.
     """
-    assert sf._stale_threshold == 300          # the fixture's constructor value
-    sf.recover_stale_claims(stale_threshold_seconds=4000)
+    monkeypatch.setattr(type(sf), "_STEP_TOOL_CAP", 1)
+    claims = _claim_n(sf, tmp_path, 2)
+    (run0, c0), (run1, _c1) = claims
+    with sf._tx() as conn:
+        conn.execute("UPDATE skillflow_steps SET status = 'completed' "
+                     "WHERE id = ?", (c0.token.step_instance_id,))
 
-    sf._set_step_tools("run0", "s", {"list": lambda: None}, 1)
-    k = ("run0", "s")
-    inst, fns, _ = sf._step_tools[k]
-    # Idle for an hour: past the constructor's 300s, well inside the host's 4000.
-    sf._step_tools[k] = (inst, fns, sf._step_tools[k][2] - 3600)
+    sf._evict_ended_step_tools()
 
-    object.__setattr__(sf, "_STEP_TOOL_CAP", 0)
-    over = None
-    with sf._step_tools_lock:
-        over = sf._evict_step_tools_locked()
-
-    assert k in sf._step_tools, \
-        "evicted against the constructor's threshold while the host reaps at 4000s"
-    assert over == 1, "an over-cap map must be reported so the caller can log it"
+    assert (run0, "review") not in sf._step_tools, \
+        "an ended claim's closures were kept"
+    assert (run1, "review") in sf._step_tools, \
+        "the live claim was evicted alongside the ended one"
 
 
-def test_the_over_cap_warning_is_not_emitted_under_the_map_lock(sf):
+def test_the_cap_drops_an_entry_superseded_by_a_later_claim_of_one_row(
+        sf, tmp_path, monkeypatch):
+    """Same row, still 'claimed', but at a LATER epoch — the entry belongs to a
+    claim that has been replaced, so it is over too."""
+    monkeypatch.setattr(type(sf), "_STEP_TOOL_CAP", 0)
+    (run0, c0), = _claim_n(sf, tmp_path, 1)
+    key = (run0, "review")
+    inst, epoch, fns = sf._step_tools[key]
+    # Stamp the entry with the PREVIOUS epoch, as a superseded claim's would be,
+    # while the row stays claimed at the current one.
+    sf._step_tools[key] = (inst, epoch - 1, fns)
+
+    sf._evict_ended_step_tools()
+
+    assert key not in sf._step_tools, \
+        "a superseded claim's closures survived; the next lookup gets them"
+
+
+def test_an_unreadable_step_table_evicts_nothing(sf, tmp_path, monkeypatch):
+    """Best-effort: not knowing which claims ended is not a licence to guess.
+    A few hundred leaked closures cost memory; a wrong eviction costs a running
+    step its eyes."""
+    monkeypatch.setattr(type(sf), "_STEP_TOOL_CAP", 0)
+    (run0, _c0), = _claim_n(sf, tmp_path, 1)
+
+    def _boom(*a, **k):
+        raise RuntimeError("database is locked")
+    monkeypatch.setattr(sf, "_ro", _boom)
+
+    sf._evict_ended_step_tools()
+
+    assert (run0, "review") in sf._step_tools
+
+
+def test_the_cap_is_enforced_through_a_REAL_claim_not_only_when_called_directly(
+        sf, tmp_path, monkeypatch):
+    """Every other test here calls `_evict_ended_step_tools()` directly.
+
+    Its only real caller is `_set_step_tools`, reached from inside
+    `claim_next_step` — where the connection state is not the same as in a bare
+    call, and where the evictor's best-effort `except` would turn any DB problem
+    into "evicted nothing", silently and forever. This one therefore goes
+    through a claim, so the cap is pinned on the path that actually runs it.
+
+    (It does NOT discriminate between `_ro` and `_tx` today: a nested `_tx`
+    there happens to succeed, because something earlier in `claim_next_step`
+    commits the connection. `_ro` is used because it is correct regardless of
+    where that commit falls — see the comment on the read.)
+    """
+    monkeypatch.setattr(type(sf), "_STEP_TOOL_CAP", 1)
+    (run0, c0), = _claim_n(sf, tmp_path, 1)
+    with sf._tx() as conn:                       # instance 1 ends, unreleased
+        conn.execute("UPDATE skillflow_steps SET status = 'completed' "
+                     "WHERE id = ?", (c0.token.step_instance_id,))
+
+    _repo(tmp_path, "proj_1", "ONLY_IN_1.txt")
+    sf.register_graph(_graph("g1"))
+    _claim(sf, "g1", "proj_1")                   # this claim trips the cap
+
+    assert (run0, "review") not in sf._step_tools, \
+        "the cap never fired: the evictor cannot read the step table from " \
+        "inside the claim transaction"
+
+
+def test_the_over_cap_warning_is_not_emitted_under_the_map_lock(sf, tmp_path):
     """`_step_tools_lock` is documented as held across dict operations only, and
     it is taken on the hot path of every read-tool call. Logging is I/O behind a
     handler lock of its own; emitting under this one couples one step's read call
@@ -386,7 +528,7 @@ def test_the_over_cap_warning_is_not_emitted_under_the_map_lock(sf):
     logger.addHandler(probe)
     try:
         object.__setattr__(sf, "_STEP_TOOL_CAP", 0)
-        sf._set_step_tools("run0", "s", {"list": lambda: None}, 1)
+        _claim_n(sf, tmp_path, 1)      # claiming trips the cap → warning
     finally:
         logger.removeHandler(probe)
 
@@ -506,3 +648,37 @@ def test_a_tool_lookup_does_not_wait_on_an_engine_transaction(sf, tmp_path):
         t.start()
         assert done.wait(timeout=2.0), \
             "tool lookup blocked on the engine lock held by another thread"
+
+
+# ── the per-step refusal must not shadow a real on-disk tool ──────────────
+
+def test_a_real_tool_directory_named_read_is_not_shadowed(sf, tmp_path):
+    """`_step_scoped_names` only ever grows, so a bare membership test would
+    refuse a genuine `read` tool for the rest of the process's life if one were
+    ever added to a tools directory. `is_dynamic` re-checks the disk, so an
+    on-disk tool wins.
+
+    (There is no such tool today — the names are the unified trio. This pins the
+    refusal to "nothing on disk answers to it" rather than to a name list.)
+    """
+    _repo(tmp_path, "proj_a", "ONLY_IN_A.txt")
+    sf.register_graph(_graph("ga"))
+    run_a, claimed = _claim(sf, "ga", "proj_a")
+    sf.confirm_step(claimed.token, StepResult(outputs={}, flags={}))
+    # With no step surface, `read` is refused as step-scoped…
+    assert "per step" in sf.execute_tool(
+        "read", {}, run_id=run_a, step_id="review").get("error", "")
+
+    # …until a real tool directory provides one.
+    tools_dir = tmp_path / "tools" / "read"
+    tools_dir.mkdir(parents=True)
+    (tools_dir / "tool.yaml").write_text(
+        "name: read\ndescription: an on-disk read tool\nentrypoint: impl.read\n"
+        "parameters: {}\n", encoding="utf-8")
+    (tools_dir / "impl.py").write_text(
+        "def read(**kw):\n    return {'from_disk': True}\n", encoding="utf-8")
+    sf._tool_loader.add_tools_dir(tools_dir.parent)
+
+    out = sf.execute_tool("read", {}, run_id=run_a, step_id="review")
+    assert out.get("from_disk") is True, \
+        f"the step-scoped refusal shadowed a real on-disk tool: {out}"

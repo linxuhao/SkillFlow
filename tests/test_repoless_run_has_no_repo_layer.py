@@ -389,3 +389,109 @@ def test_the_project_root_token_still_fabricates_a_path_on_a_repoless_run(tmp_pa
         f"the token no longer fabricates a path (got {got!r}) — the repo tools' " \
         f"comments say it does; update them together"
     assert _P(got) == (tmp_path / "projects" / "p1")
+
+
+# ── the AGENT tool path — the fourth invocation path ─────────────────────
+#
+# `SkillFlow.execute_tool` is the path an agent's own tool calls take. It was
+# the only one of the four that never consulted the code-path resolver: it did
+# `kwargs.setdefault("project_root", project_root or "")` with whatever the host
+# passed. AItelier's host passes "" for a repo-less run — believing, per a
+# comment written one round earlier, that the resolver would then be asked — so
+# "" went into BOTH roots and every tool doing
+# `Path(project_root or workspace_root).resolve()` got the process CWD.
+
+_MISSING = object()
+
+
+def _probe_engine(tmp_path, resolver):
+    seen = {}
+
+    # Sentinel defaults, not `**kw`: this path filters kwargs on
+    # `k in sig.parameters` WITHOUT the VAR_KEYWORD exemption its two siblings
+    # have (a documented, deliberately out-of-scope inconsistency), so a
+    # `**kw`-only probe is handed nothing and would prove nothing. The sentinels
+    # still separate "handed an empty string" from "handed nothing".
+    def probe(workspace_root=_MISSING, project_root=_MISSING, **_kw):
+        seen["workspace_root"] = workspace_root
+        seen["project_root"] = project_root
+        seen["_ran"] = True
+        return {"ok": True}
+
+    sf = _engine(tmp_path, resolver=resolver)
+    sf._tool_loader.register_dynamic_tool(
+        "probe", {"name": "probe", "description": "records its kwargs"}, probe)
+    sf.register_agent_config("worker", tools=["read_file", "probe"])
+    run_id = sf.create_run("g", project_id="p1")
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    sf.claim_next_step(run_id)
+    return sf, run_id, seen
+
+
+def test_an_agent_invoked_tool_on_a_repoless_run_gets_no_roots_at_all(tmp_path):
+    """Neither root, and specifically not "" — that is the CWD."""
+    sf, run_id, seen = _probe_engine(tmp_path, resolver=lambda pid: False)
+
+    sf.execute_tool("probe", {}, run_id=run_id, step_id="work", project_root="")
+
+    assert seen.get("_ran"), "the probe never ran; this proves nothing"
+    assert seen["project_root"] is _MISSING, \
+        f"agent tool received project_root={seen['project_root']!r}"
+    assert seen["workspace_root"] is _MISSING, \
+        f"agent tool received workspace_root={seen['workspace_root']!r}"
+
+
+def test_an_empty_project_root_from_the_host_means_ask_the_resolver(tmp_path):
+    """The control, and the second half of the fix.
+
+    "" from the host is "no opinion", so the resolver decides — exactly as the
+    tool-STEP and lifecycle-hook paths already did. A project that HAS a repo
+    must get it even when the host under-specifies, otherwise the fix above is
+    indistinguishable from "agent tools never get a project root".
+    """
+    sf, run_id, seen = _probe_engine(tmp_path, resolver=lambda pid: None)
+
+    sf.execute_tool("probe", {}, run_id=run_id, step_id="work", project_root="")
+
+    assert seen.get("project_root") == str(tmp_path / "projects" / "p1"), \
+        f"the resolver was not consulted (got {seen.get('project_root')!r})"
+
+
+def test_an_explicit_project_root_from_the_host_still_wins(tmp_path):
+    """The other control: a host that knows the answer is not second-guessed."""
+    sf, run_id, seen = _probe_engine(tmp_path, resolver=lambda pid: False)
+    explicit = str(tmp_path / "elsewhere")
+
+    sf.execute_tool("probe", {}, run_id=run_id, step_id="work",
+                    project_root=explicit)
+
+    assert seen.get("project_root") == explicit
+
+
+def test_dir_tree_never_labels_the_workspace_as_the_repository(tmp_path):
+    """`{source: {tool: dir_tree}}` on a repo-less run.
+
+    context.py omits `project_root` for such a run but still passes
+    `workspace_root`, and dir_tree's root was `project_root or workspace_root` —
+    so it rendered the DPS workspace under its "# repo root (write paths are
+    relative to here)" header, telling the agent its own step directories were
+    the repository.
+    """
+    from skillflow.tools.dir_tree.impl import dir_tree
+
+    ws = tmp_path / "ws"
+    (ws / "work.tmp").mkdir(parents=True)
+    (ws / "work.tmp" / "IN_THE_WORKSPACE.txt").write_text("x", encoding="utf-8")
+
+    out = dir_tree(workspace_root=str(ws), project_root="")
+
+    assert out["tree"] == "", out
+    assert "repo root" not in out["tree"]
+
+    # Control: given a real repo it still renders one.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mod.py").write_text("x", encoding="utf-8")
+    out2 = dir_tree(workspace_root=str(ws), project_root=str(repo))
+    assert "repo root" in out2["tree"] and "mod.py" in out2["tree"]
