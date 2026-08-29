@@ -247,10 +247,7 @@ class RunnerService:
         registered now, which is a different graph once a config is edited.
         """
         names: set = set()
-        graph = None
-        if run_id:
-            fn = getattr(self.sf, "_graph_for_run", None)
-            graph = fn(run_id) if fn else None
+        graph = self.sf._graph_for_run(run_id) if run_id else None
         if graph is None:
             graph = getattr(self.sf, "_graphs", {}).get(graph_name)
         if graph is None:

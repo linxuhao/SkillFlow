@@ -343,10 +343,6 @@ class SkillFlow:
         # (name, version) pairs already reported as missing from the history, so
         # the fallback warns once instead of once per resolver lookup.
         self._pinned_missing: set[tuple[str, int]] = set()
-        # run_id → (graph_name, graph_version). A run's pin is immutable except
-        # through `repin_run`, which evicts. Keeps `_get_resolver_for_run` off
-        # the engine lock on the agent tool-call hot path.
-        self._run_pin_cache: dict[str, tuple[str, int | None]] = {}
         # Capability registry: a step's `capability` keyword → a curated
         # toolset + a context provider the FRAMEWORK injects (folders, dirs).
         # Lets the host provision tools/state locations by declared purpose so
@@ -795,8 +791,6 @@ class SkillFlow:
                 "UPDATE skillflow_runs SET graph_version = ?, graph_digest = ?, "
                 "updated_at = datetime('now') WHERE id = ?",
                 (target["version"], target["digest"], run_id))
-            # The only place a pin changes, so the only place that must evict.
-            self._run_pin_cache.pop(run_id, None)
             self.notifications.publish_sync(
                 "run_repinned",
                 {"run_id": run_id, "graph_name": name,
@@ -1312,33 +1306,14 @@ class SkillFlow:
         run's remaining steps: its finished steps had been validated against one
         set of rules and its next ones against another, silently.
         """
-        # Memoized like `_get_graph_name`, and for the same reason: this is now
-        # on the agent tool-call path (twice per call) and on every advance_run,
-        # where it replaced a lock-free dict lookup. Taking the engine RLock and
-        # running a SELECT there makes one project's tool calls wait on another
-        # project's transaction — the exact contention `_step_tools_lock` was
-        # given its own lock to avoid. A run's pin changes only in `repin_run`,
-        # which evicts this.
-        pin = self._run_pin_cache.get(run_id)
-        if pin is None:
-            # Read AND memoize under the same lock. `repin_run` evicts from
-            # inside its transaction, which also holds this lock, so the write
-            # must be in here too — otherwise: this thread reads v1, releases
-            # the lock, `repin_run` UPDATEs to v2 and pops a key that is not
-            # there yet, and then this thread installs the stale v1. Nothing
-            # evicts it again, because the only evictor has already run. The run
-            # executes v1 forever while the DB and the tool's return value both
-            # say v2 — the recovery reports success and does nothing.
-            with self._lock:
-                row = self._conn.execute(
-                    "SELECT graph_name, graph_version FROM skillflow_runs "
-                    "WHERE id = ?", (run_id,)
-                ).fetchone()
-                if not row:
-                    raise SkillFlowError(f"Run '{run_id}' not found")
-                pin = (row["graph_name"], row["graph_version"])
-                self._run_pin_cache[run_id] = pin
-        return self._get_resolver(pin[0], version=pin[1])
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT graph_name, graph_version FROM skillflow_runs "
+                "WHERE id = ?", (run_id,)
+            ).fetchone()
+        if not row:
+            raise SkillFlowError(f"Run '{run_id}' not found")
+        return self._get_resolver(row["graph_name"], version=row["graph_version"])
 
     def _graph_for_run(self, run_id: str) -> PipelineGraph | None:
         """The pinned graph, for callers that need the graph and not a resolver."""
@@ -1638,10 +1613,6 @@ class SkillFlow:
                 ).fetchall()
             ]
             for run_id in run_ids:
-                # A deleted run must stop answering from the memo — otherwise
-                # `_get_resolver_for_run` keeps serving its pin instead of
-                # raising "Run not found", and the dict grows without bound.
-                self._run_pin_cache.pop(run_id, None)
                 conn.execute("DELETE FROM skillflow_steps WHERE run_id = ?", (run_id,))
                 conn.execute("DELETE FROM skillflow_edge_counts WHERE run_id = ?", (run_id,))
                 conn.execute("DELETE FROM skillflow_loop_state WHERE run_id = ?", (run_id,))
@@ -3355,11 +3326,12 @@ class SkillFlow:
         with self._tx() as conn:
             self._fail_step_in_tx(conn, token, error, retryable)
 
-    # How many times one step instance may be released back to pending before
-    # the releases are treated as the problem. Same shape and same reason as the
-    # reaper's `_stale_recovery_count`: a cause that recurs forever would
-    # otherwise re-run the step forever, at full LLM cost, with nothing said.
-    MAX_CLAIM_RELEASES = 3
+    # A release is never capped — see `release_claim`. This is only how often
+    # the warning repeats, so a repeatedly-killed driver is visible without one
+    # line per cancellation. (It was `MAX_CLAIM_RELEASES` and the comment
+    # claimed the reaper's `_stale_recovery_count` shape; that one FAILS the
+    # step at 3, this one has never capped anything.)
+    RELEASE_WARN_EVERY = 3
 
     def release_claim(self, token: ClaimToken, reason: str) -> dict:
         """Return a claimed step to `pending` WITHOUT spending its retry budget.
@@ -3386,7 +3358,7 @@ class SkillFlow:
         Releases are counted in the `release_count` COLUMN, monotonically. That
         count is the RECORD: it is what tells an operator afterwards that nine
         disconnects, not one bad step, is what happened here. Every
-        `MAX_CLAIM_RELEASES`-th release logs a warning, because re-running a
+        `RELEASE_WARN_EVERY`-th release logs a warning, because re-running a
         step is expensive and a repeatedly-killed driver needs looking at — but
         a warning is how you say that, not a dead run.
 
@@ -3395,7 +3367,7 @@ class SkillFlow:
         `_error`/`_validation_error`/`_feedback`, so a counter kept there is
         erased by the very event it is counting.
 
-        Returns ``{released, releases, failed}``.
+        Returns ``{released, releases}``.
         """
         self._assert_epoch(token, "release_claim")
         self._release_step_tools(token.run_id, token.step_id,
@@ -3407,7 +3379,7 @@ class SkillFlow:
             if not row or row["status"] != "claimed":
                 # Already resolved by someone else — nothing to hand back, and
                 # rewriting it to pending would undo their work.
-                return {"released": False, "releases": 0, "failed": False,
+                return {"released": False, "releases": 0,
                         "note": f"step is {row['status'] if row else 'missing'}"}
             releases = (row["release_count"] or 0) + 1
             # A cancellation NEVER touches `retry_count`, and never ends the
@@ -3428,7 +3400,7 @@ class SkillFlow:
             # step's. Re-running is expensive, so every cap-multiple says so
             # loudly — an operator with a repeatedly-cancelled step needs to
             # know, and losing a run is never the way to tell them.
-            if releases % self.MAX_CLAIM_RELEASES == 0:
+            if releases % self.RELEASE_WARN_EVERY == 0:
                 logging.getLogger("skillflow").warning(
                     "step '%s' (instance %s) has now been released by its "
                     "executor %s times without completing. Something is "
@@ -3446,7 +3418,7 @@ class SkillFlow:
                 WHERE id = ? AND status = 'claimed'
                 """,
                 (reason, releases, token.step_instance_id))
-        return {"released": True, "releases": releases, "failed": False}
+        return {"released": True, "releases": releases}
 
     def _fail_step_in_tx(self, conn: sqlite3.Connection, token: ClaimToken,
                          error: str, retryable: bool) -> None:
@@ -6115,7 +6087,7 @@ class SkillFlow:
         row id names one INSTANCE of it but is shared by every re-claim of that
         row (eight sites reset a row to 'pending' — enumerated where
         `_step_tools` is declared — and `claim_next_step` re-claims the same row,
-        bumping only `claim_epoch`; none of the seven writes the epoch at all);
+        bumping only `claim_epoch`; none of the eight writes the epoch at all);
         the epoch distinguishes those re-claims but restarts at 1 on
         every fresh row, so it is shared by consecutive instances of one step.
 

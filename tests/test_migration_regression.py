@@ -178,7 +178,6 @@ def test_reactivate_rejects_resume_step_removed_from_graph(sf: SkillFlow):
     with sf._tx() as conn:
         conn.execute("UPDATE skillflow_runs SET graph_version = NULL, "
                      "graph_digest = NULL WHERE id = ?", (run_id,))
-    sf._run_pin_cache.pop(run_id, None)
 
     with pytest.raises(ValueError, match="no longer exists in graph"):
         sf.reactivate_run(run_id)
