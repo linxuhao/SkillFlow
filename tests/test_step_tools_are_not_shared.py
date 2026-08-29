@@ -460,6 +460,53 @@ def test_the_cap_drops_an_entry_superseded_by_a_later_claim_of_one_row(
         "a superseded claim's closures survived; the next lookup gets them"
 
 
+def test_the_cap_spares_the_entry_the_lease_reaper_deliberately_spared(
+        sf, tmp_path, monkeypatch):
+    """The evictor and the reaper must agree about a lease-reset row.
+
+    `recover_stale_claims`' lease branch resets a possibly-still-alive worker's
+    row to 'pending' WITHOUT bumping `claim_epoch`, and leaves the entry alone on
+    purpose (`test_a_lease_reaped_claim_keeps_its_read_surface`): the worker's
+    epoch still satisfies `_epoch_holds`, so nothing fences its tool calls and
+    they must still be served.
+
+    An evictor that reads "ended" as `status != 'claimed'` deletes exactly that
+    entry — the two halves of this file then contradict each other, and the
+    worker the reaper protected reads nothing for the rest of its step while
+    believing it read everything.
+    """
+    from skillflow.identity import owner_is_dead
+
+    unknown = "worker host=gone pid=999999"
+    assert owner_is_dead(unknown) is None, \
+        "this identity is meant to be undeterminable; the branch under test moved"
+
+    monkeypatch.setattr(type(sf), "_STEP_TOOL_CAP", 0)
+    (run0, claimed), = _claim_n(sf, tmp_path, 1)
+
+    with sf._tx() as conn:
+        conn.execute(
+            "UPDATE skillflow_steps SET claimed_by = ?, claimed_at = ?, "
+            "updated_at = ? WHERE run_id = ? AND step_id = ?",
+            (unknown, "2000-01-01 00:00:00", "2000-01-01 00:00:00",
+             run0, "review"))
+    assert sf.recover_stale_claims(stale_threshold_seconds=1), \
+        "the reaper did not reclaim; this test would prove nothing"
+
+    with sf._tx() as conn:
+        row = conn.execute(
+            "SELECT status, claim_epoch FROM skillflow_steps WHERE run_id = ? "
+            "AND step_id = ?", (run0, "review")).fetchone()
+    assert row["status"] == "pending", "the reaper no longer resets to pending"
+    assert (row["claim_epoch"] or 0) == claimed.token.claim_epoch, \
+        "the reaper now bumps the epoch; the unfenced-worker premise moved"
+
+    sf._evict_ended_step_tools()
+
+    assert "ONLY_IN_0.txt" in _listing(sf, run0), \
+        "the evictor dropped the entry the reaper deliberately spared"
+
+
 def test_an_unreadable_step_table_evicts_nothing(sf, tmp_path, monkeypatch):
     """Best-effort: not knowing which claims ended is not a licence to guess.
     A few hundred leaked closures cost memory; a wrong eviction costs a running

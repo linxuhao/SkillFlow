@@ -42,6 +42,7 @@ from skillflow.exceptions import (
     StepVersionConflict,
     StaleClaimFenced,
     SkillFlowError,
+    ToolArgumentsUnavailable,
 )
 from skillflow.identity import owner_is_dead, worker_identity
 
@@ -3328,14 +3329,21 @@ class SkillFlow:
         if sig is not None:
             # Does the call even BIND? A tool that declares an argument the
             # engine could not supply — `git_sync_pre(project_root: str)` on a
-            # run that declares no code repository, where project_root is
-            # deliberately omitted above — otherwise raises TypeError out of the
-            # call below. That exception escapes `claim_next_step` (only the
-            # signature inspection was guarded), the caller reopens the step to
-            # pending, and the next tick raises the identical TypeError: the run
-            # never advances and never fails, which for a one-project-per-tick
-            # poller stalls every other project too. A routable error dict is
-            # what the graph can act on, and it says which argument is missing.
+            # run whose code-path resolver answers "no code repository", where
+            # project_root is deliberately omitted above — would otherwise raise
+            # a bare TypeError out of `fn(**kwargs)` below, and the caller's
+            # generic `except` would reopen the step to pending and re-raise. It
+            # is bounded (`_reopen_tool_step_in_tx` fails the run on the third
+            # crash) but it spends three ticks reproducing a failure that cannot
+            # change, and the diagnosis lands in a traceback rather than in the
+            # run's error.
+            #
+            # So: name the missing argument, and raise a DETERMINISTIC-failure
+            # exception the caller fails the step and run on directly. NOT an
+            # error dict — `_confirm_tool_in_tx` marks a tool step 'completed'
+            # whatever the result contains and nothing turns an `error` key into
+            # a routing flag, so returning one records a step that never ran as
+            # completed and sends the run down this node's first edge.
             try:
                 sig.bind(**kwargs)
             except TypeError as exc:
@@ -3345,7 +3353,7 @@ class SkillFlow:
                 self.trace(run_id, "tool_result", tool_node.tool_name,
                            {"source": "tool_step", "error": err},
                            step_id=tool_node.id)
-                return {"error": err}
+                raise ToolArgumentsUnavailable(err)
         result = fn(**kwargs)
         if not isinstance(result, dict):
             result = {"output": result}
@@ -4191,6 +4199,45 @@ class SkillFlow:
                 (self._serialize(inputs), row["id"]),
             )
 
+    def _fail_tool_step_in_tx(self, run_id: str, step_id: str,
+                              error: str) -> None:
+        """Fail a claimed tool step AND its run, with no retry.
+
+        The sibling of `_reopen_tool_step_in_tx`, for a failure that cannot come
+        out differently next time (today: the tool's signature cannot bind the
+        arguments this step has). Reopening such a step spends three ticks
+        reproducing it, and confirming it would mark a step that never ran
+        'completed' — `_confirm_tool_in_tx` writes that status unconditionally,
+        and nothing turns an `error` key into a routing flag, so the run would
+        take this node's first edge and report success.
+
+        The RUN is failed, not just the step: marking only the step failed leaves
+        `advance_run` free to re-resolve the predecessor's transition and open a
+        fresh instance of the same tool node (the reasoning `_reopen_tool_step_in_tx`
+        records for its own 3-crash cap).
+        """
+        with self._tx() as conn:
+            row = conn.execute(
+                "SELECT id FROM skillflow_steps WHERE run_id = ? AND "
+                "step_id = ? AND status = 'claimed' ORDER BY id DESC LIMIT 1",
+                (run_id, step_id),
+            ).fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE skillflow_steps SET status = 'failed', "
+                    "version = version + 1, last_error = ?, claimed_at = NULL, "
+                    "claimed_by = NULL, updated_at = datetime('now') "
+                    "WHERE id = ?",
+                    (error, row["id"]),
+                )
+            self._fail_run_in_tx(conn, run_id, error)
+            self.notifications.publish_sync(
+                "step_failed",
+                {"run_id": run_id, "step_id": step_id, "error": error,
+                 "retryable": False},
+                step_id=step_id, run_id=run_id,
+            )
+
     def advance_run(self, run_id: str) -> str | None:
         # Recover stale claims before any traversal
         self.recover_stale_claims(self._stale_threshold)
@@ -4233,6 +4280,14 @@ class SkillFlow:
                         tool_result = self._execute_tool_inline(
                             tool_node, run_id=run_id,
                             graph_name=run_row["graph_name"])
+                    except ToolArgumentsUnavailable as exc:
+                        # The tool could not be CALLED. Deterministic — the next
+                        # tick binds the same arguments against the same
+                        # signature — so reopening it only reproduces the
+                        # failure, and confirming it would record a step that
+                        # never ran as completed. Fail the step and the run.
+                        self._fail_tool_step_in_tx(run_id, current, str(exc))
+                        return None
                     except Exception:
                         # Don't leave a crashed tool wedged in 'claimed'.
                         self._reopen_tool_step_in_tx(run_id, current)
@@ -5419,8 +5474,23 @@ class SkillFlow:
         the same step, so exceeding the cap means claims are being abandoned
         without ever reaching any of those. The only safe thing to drop is an
         entry whose claim is provably OVER, and the DB is the one place that
-        knows: the step row is gone, is no longer 'claimed', or has been
-        re-claimed under a later epoch.
+        knows: the step row is gone, it has been re-claimed under a LATER epoch,
+        or it reached a terminal status ('completed' / 'failed') at this entry's
+        epoch.
+
+        'pending' at the SAME epoch is NOT over, and this is the case that costs
+        a live step its eyes. `recover_stale_claims`' lease branch resets a row
+        to 'pending' precisely when it CANNOT prove the owner is dead, and it
+        rewrites status/version/claimed_at/claimed_by/inputs_json but NOT
+        `claim_epoch` — so a worker the lease condemned while it was still alive
+        keeps an epoch that satisfies `_epoch_holds`, `execute_tool` does not
+        fence its calls, and they arrive here expecting to be served. The reaper
+        spares that entry deliberately (`test_a_lease_reaped_claim_keeps_its_read_surface`);
+        a `status != 'claimed'` test here would delete the very entry it spared.
+
+        Any other status is spared too, for the same reason: this decides whether
+        to BLIND a step, so an unrecognised status must not read as "over". The
+        cost of sparing is bounded by the cap and reported by the warning below.
 
         Deliberately NOT an idle clock. An earlier version evicted entries idle
         longer than the reap threshold and claimed that matched
@@ -5469,7 +5539,7 @@ class SkillFlow:
         dead = []
         for key, sid, epoch in snapshot:
             row = live.get(sid)
-            if row is None or row[0] != "claimed" or row[1] != epoch:
+            if row is None or row[1] != epoch or row[0] in ("completed", "failed"):
                 dead.append((key, sid, epoch))
         remaining = 0
         with self._step_tools_lock:
@@ -5519,15 +5589,21 @@ class SkillFlow:
         * The INSTANCE id is what stops a zombie executor of instance N from
           releasing instance N+1's entry. `_assert_epoch` does not: it re-reads
           the zombie's OWN row, which nothing resets, so its token holds forever.
-        * The EPOCH matters only for a token `_assert_epoch` lets through with a
-          superseded claim, and there is exactly one such shape: `claim_epoch ==
-          0`, which `_epoch_holds` deliberately admits ("a hand-built token, or a
-          row that predates the column"). A host that does not forward epochs
-          confirms with 0; if its step was reset and re-claimed meanwhile, the
-          fence passes and an instance-id-only comparison deletes the LIVE
-          claim's entry. With a real forwarded epoch the fence already refuses
-          the call before it reaches here, so the pair guard is belt to that
-          brace, not a second brace.
+        * The EPOCH separates two CLAIMS of one row, and matters wherever
+          `_assert_epoch` lets a superseded token through. `_epoch_holds` admits
+          three shapes, not one: the token's own `claim_epoch` is 0/None (a
+          hand-built token, or a host that does not forward epochs); the row it
+          names is gone; or the row's stored `claim_epoch` is 0/NULL. The first
+          never reaches the comparison — the guard below returns early on an
+          incomplete identity — so the epoch's real work is the remaining two,
+          plus every case where the fence was not consulted at all. With real
+          forwarded epochs on both sides the fence refuses the call before it
+          gets here, so there the pair guard is belt to that brace.
+
+          It is a CHEAP belt, and that is the argument for keeping it: this
+          comparison is the difference between releasing an entry and blinding
+          whichever claim currently owns the slot, and it costs one integer
+          compare.
 
         A token carrying an incomplete identity — instance id or epoch 0/None —
         therefore releases NOTHING: it cannot prove which claim it is. That is
@@ -5557,9 +5633,18 @@ class SkillFlow:
         Read/exploration tools receive ``project_root`` as their workspace.
 
         ``project_root=""`` means "the host has no opinion", never "the process
-        CWD": the code-path resolver is consulted, and if it answers that the run
-        owns no code repository, ``project_root``/``workspace_root`` are OMITTED
-        from the tool call rather than passed as empty strings.
+        CWD". For a tool reached through the ToolLoader the code-path resolver is
+        consulted, and if it answers that the run owns no code repository,
+        ``project_root``/``workspace_root`` are OMITTED from the tool call rather
+        than passed as empty strings.
+
+        That applies to the LOADER branch only. The write families handled first
+        — ``write_*``/``create_*``/``edit_*``/``delete_*`` and the generic
+        ``create``/``edit``/``write`` — return before the resolver is reached and
+        pass ``project_root or ""`` on as an edit BASELINE (``source_dir``). An
+        empty baseline there is not a CWD hazard: ``skillflow.write_tools``
+        treats it as "no source", and every write still lands in the step's tmp
+        directory, which comes from the workspace manager.
 
         Every call + result is recorded to the durable run trace. Pass
         ``step_instance_id`` (from the claimed step's token) so each tool call
@@ -5745,8 +5830,15 @@ class SkillFlow:
             # answers to it. `_step_scoped_names` only ever grows, so a bare
             # membership test would shadow a real tool directory named `read` /
             # `search` / `list` for the rest of the process's life if one were
-            # ever added. `is_dynamic` re-checks the disk, so an on-disk tool
-            # wins and falls through to the loader below.
+            # ever added. `is_dynamic` re-checks the disk, so on THIS branch an
+            # on-disk tool wins and falls through to the loader below.
+            #
+            # Only on this branch. A step that HOLDS an entry for the name never
+            # gets here, so its closure shadows an on-disk tool of the same name
+            # unconditionally. That is the intended precedence — the step's own
+            # read surface is what the step was granted — but it is a shadow, not
+            # a negotiation, and adding a `read`/`search`/`list` tool directory
+            # would not take it back.
             _is_dyn = getattr(self._tool_loader, "is_dynamic", None)
             if name in self._step_scoped_names and (
                     _is_dyn is None or _is_dyn(name)):
@@ -5755,14 +5847,23 @@ class SkillFlow:
                                  f"already ended)."}
             fn = self._tool_loader.load_fn(name)
         # `project_root=""` from the host means "no opinion", NOT "the process
-        # CWD" — so ask the code-path resolver, exactly as the tool-STEP path
-        # (`_claim_tool_step_in_tx`) and the lifecycle-hook path
-        # (`_execute_tool_hook`) already do. This path was the only one of the
-        # three that never consulted it, and it is the one agents call: the host
-        # sent "" for a repo-less run believing the resolver would be asked,
-        # `setdefault` forwarded "" into both roots, and a tool doing
-        # `Path(project_root or workspace_root).resolve()` got the process CWD —
-        # for a hosted engine, the server's own checkout.
+        # CWD" — so ask the code-path resolver, as the tool-STEP path
+        # (`_execute_tool_inline`) and the lifecycle-hook path
+        # (`_execute_tool_hook`) do. (`_claim_tool_step_in_tx` is a pure
+        # status CAS and never touches tool arguments.) This path was the only
+        # one of the three that never consulted the resolver, and it is the one
+        # agents call: the host sends "" for a repo-less run, `setdefault`
+        # forwarded it into both roots, and a tool doing
+        # `Path(project_root or workspace_root).resolve()` would get the process
+        # CWD — for a hosted engine, the server's own checkout.
+        #
+        # The three paths agree about `project_root` ONLY. They deliberately
+        # disagree about `workspace_root`: the two step paths set it to the DPS
+        # workspace (`get_project_path`) and this one sets it to the code repo,
+        # because an agent-invoked tool is handed one root and read tools take
+        # their tree from it. A tool that reads `workspace_root` therefore gets
+        # different trees depending on which path invoked it — recorded here
+        # because it is a live inconsistency, not a thing this change fixed.
         if not project_root and run_id and self._workspace is not None:
             try:
                 _pid = self._get_project_id(run_id)

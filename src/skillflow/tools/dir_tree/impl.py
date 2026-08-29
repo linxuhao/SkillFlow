@@ -10,11 +10,15 @@ def dir_tree(config_name: str = "", *, workspace_root: str = "",
     """Return the project repository's tree, or an empty tree if it has none.
 
     ``workspace_root`` is accepted (every context/tool call supplies it) but is
-    NOT a fallback root. It used to be: ``project_root or workspace_root``. On a
-    run that declares no code repository the engine omits ``project_root``, so
-    that fallback rendered the DPS WORKSPACE under the "repo root (write paths
-    are relative to here)" header — telling the agent its own step directories
-    were the repository.
+    NOT a fallback root. It used to be — ``project_root or workspace_root`` —
+    and that branch was dead: ``ContextResolver`` always passed a real
+    ``project_root``, and every engine fill site set one too, so nothing ever
+    reached the fallback. It is removed here because this same body of work
+    creates the value that WOULD reach it: a run declaring no code repository,
+    for which the engine now omits ``project_root``. Left in place, the fallback
+    would have rendered the DPS WORKSPACE under the "repo root (write paths are
+    relative to here)" header — telling the agent its own step directories were
+    the repository.
     """
     parts = []
 

@@ -69,6 +69,22 @@ class OutputValidationError(SkillFlowError):
     """
 
 
+class ToolArgumentsUnavailable(SkillFlowError):
+    """A tool step declares a parameter the engine cannot supply.
+
+    Raised by the tool-step path when ``signature.bind`` shows the call cannot
+    be made at all — e.g. ``git_sync_pre(project_root: str)`` on a run whose
+    code-path resolver answers "this run owns no code repository", so the engine
+    deliberately supplies no ``project_root``.
+
+    Deterministic by construction: the graph, the step and the missing argument
+    are all the same on the next tick, so retrying reproduces it exactly. The
+    caller therefore fails the step AND the run instead of reopening the step to
+    pending — and must never confirm it as completed, which would record a step
+    that never ran and route the run down the node's first edge.
+    """
+
+
 class NoMatchingTransition(SkillFlowError):
     """No transition matched the step's result flags.
 

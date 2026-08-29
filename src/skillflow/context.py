@@ -487,9 +487,16 @@ class ContextResolver:
         if self._code_root is None:
             # The run declares no code repository, so there is nothing here to
             # read. Reported rather than silently empty: a `from: repository`
-            # spec on a repo-less run is a config mistake, and the previous
-            # answer — the project brief dir, presented as "Repository" — was a
-            # wrong answer that looked like a right one.
+            # spec on a repo-less run is a config mistake, and saying so is
+            # cheaper to diagnose than an empty injection.
+            #
+            # No repo-less run reached this branch before, because there was no
+            # `False` answer to reach it with: `code_root` came from
+            # `get_project_code_path`, which always returned a path. What the
+            # fallback above WOULD have done, had `False` been threaded in
+            # without this branch, is hand back `workspace_root/"project"` — the
+            # populated project BRIEF directory — labelled "Repository". That is
+            # a hazard of the new answer, not a history.
             logging.getLogger("skillflow.context").warning(
                 "from:repository on a run that declares no code repository — "
                 "nothing injected")

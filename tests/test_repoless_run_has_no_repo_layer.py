@@ -298,21 +298,25 @@ def test_the_context_control_proves_a_real_repo_is_still_served(tmp_path):
     assert "IN THE REAL REPO" in str(claimed.inputs.get("_resolved_context", {}))
 
 
-def test_a_tool_that_requires_project_root_fails_routably_not_by_crashing(tmp_path):
-    """Omitting `project_root` must not turn into an unhandled TypeError.
+def test_a_tool_that_cannot_be_called_fails_the_step_and_the_run(tmp_path):
+    """A tool step that never ran must not be recorded as completed.
 
-    `git_sync_pre(project_root: str)` declares it as a REQUIRED positional. On a
-    repo-less run the engine deliberately supplies nothing for it, and
-    `result = fn(**kwargs)` in the tool-step path is unguarded — the surrounding
-    `try` covers only the signature inspection. The TypeError escapes
-    `claim_next_step`, whose handler reopens the step to `pending`, so the next
-    tick raises the identical TypeError: the run neither advances nor fails. With
-    a poller that advances one project per tick, that stalls every other project
-    too.
+    `git_sync_pre(project_root: str)` declares it as REQUIRED. On a repo-less run
+    the engine deliberately supplies nothing for it, so the call cannot bind.
 
-    (The engine's pop is CONDITIONAL — `if not kwargs.get("project_root")` — so a
-    config whose tool_params name `$PROJECT_ROOT` is unaffected either way; this
-    is about the step that supplies nothing.)
+    Two wrong answers are possible here and this test rules out both.
+
+    * `result = fn(**kwargs)` raising a bare TypeError. Bounded, but the caller's
+      generic handler reopens the step to pending and the next tick binds the
+      same arguments against the same signature, so it costs three ticks
+      (`_reopen_tool_step_in_tx`'s crash cap) to reach a failure that was already
+      certain, and the diagnosis is a traceback rather than the run's error.
+    * Returning an error DICT. `_confirm_tool_in_tx` sets `status='completed'`
+      unconditionally and nothing synthesises an `error` key into a routing flag,
+      so a step that never ran is recorded as done and `resolve_transition` takes
+      the node's first edge — here, straight to `done`, i.e. a repo-less run
+      reporting a git sync it never performed and then COMPLETING SUCCESSFULLY.
+      That is the failure this assertion exists to catch.
     """
     sf = _engine(tmp_path, resolver=lambda pid: False)
     sf.register_graph(PipelineGraph(
@@ -327,20 +331,26 @@ def test_a_tool_that_requires_project_root_fails_routably_not_by_crashing(tmp_pa
 
     run_id = sf.create_run("syncing", project_id="p1")
     sf.start_run(run_id)
-    sf.advance_run(run_id)
+    sf.advance_run(run_id)              # must not raise
     sf.claim_next_step(run_id)          # must not raise
 
     with sf._tx() as conn:
         row = conn.execute(
-            "SELECT status, outputs_json FROM skillflow_steps "
+            "SELECT status, last_error FROM skillflow_steps "
             "WHERE run_id = ? AND step_id = 'sync' ORDER BY id DESC LIMIT 1",
+            (run_id,)).fetchone()
+        run = conn.execute(
+            "SELECT status, error_reason FROM skillflow_runs WHERE id = ?",
             (run_id,)).fetchone()
 
     assert row is not None, "the tool step never ran; this test proves nothing"
-    assert row["status"] != "pending", \
-        "the step was reopened — the next tick will raise the same TypeError"
-    out = sf._deserialize(row["outputs_json"])
-    assert "project_root" in (out.get("error") or ""), out
+    assert row["status"] == "failed", (
+        f"a tool step that could not be called is {row['status']!r} — "
+        f"'completed' means the run advanced on work that never happened")
+    assert "project_root" in (row["last_error"] or ""), row["last_error"]
+    assert run["status"] == "failed", (
+        f"the run is {run['status']!r}; a step that could not run must not "
+        f"leave the run advancing or reporting success")
 
 
 def test_the_project_root_token_still_fabricates_a_path_on_a_repoless_run(tmp_path):
