@@ -163,12 +163,22 @@ def test_reactivate_rejects_resume_step_removed_from_graph(sf: SkillFlow):
     assert sf.get_run(run_id)["status"] == "failed"
 
     # Graph changes underneath the run: the resume step (last-completed 'a') is
-    # gone. A pinned run only adopts the smaller graph when told to — and that
-    # is precisely when the guard has to fire: an operator re-pinning a failed
-    # run onto a graph that dropped its resume step.
+    # gone.
+    #
+    # Reached through a LEGACY (unpinned) run, which is the path that still
+    # leads here. A pinned run resolves the version it started with, and
+    # `repin_run` now refuses a target missing the run's current node — so the
+    # remaining way to face a graph without your resume step is to have no pin
+    # at all, i.e. a run created before pinning existed. (An earlier version of
+    # this test used `repin_run` and claimed that was "precisely when the guard
+    # has to fire"; it is not — this guard lives in `reactivate_run` and only
+    # runs on reactivation of a FAILED run, which re-pinning never triggers.)
     sf.register_graph(
         PipelineGraph(name="t", begin="x", steps=[_agent("x", [])]))
-    sf.repin_run(run_id)
+    with sf._tx() as conn:
+        conn.execute("UPDATE skillflow_runs SET graph_version = NULL, "
+                     "graph_digest = NULL WHERE id = ?", (run_id,))
+    sf._run_pin_cache.pop(run_id, None)
 
     with pytest.raises(ValueError, match="no longer exists in graph"):
         sf.reactivate_run(run_id)

@@ -343,6 +343,10 @@ class SkillFlow:
         # (name, version) pairs already reported as missing from the history, so
         # the fallback warns once instead of once per resolver lookup.
         self._pinned_missing: set[tuple[str, int]] = set()
+        # run_id → (graph_name, graph_version). A run's pin is immutable except
+        # through `repin_run`, which evicts. Keeps `_get_resolver_for_run` off
+        # the engine lock on the agent tool-call hot path.
+        self._run_pin_cache: dict[str, tuple[str, int | None]] = {}
         # Capability registry: a step's `capability` keyword → a curated
         # toolset + a context provider the FRAMEWORK injects (folders, dirs).
         # Lets the host provision tools/state locations by declared purpose so
@@ -729,13 +733,22 @@ class SkillFlow:
         unwedged. This gives that back as a deliberate, recorded operation
         rather than a side effect of any edit landing anywhere.
 
-        The step rows are untouched. A node the new version adds has no row yet
-        and `claim_next_step` opens one; a node it removes leaves an orphaned
-        row, which is what `reactivate_run`'s resume guard is there to catch.
+        The step rows are untouched: a node the new version adds simply has no
+        row yet and `claim_next_step` opens one.
+
+        REFUSES a target that does not contain the run's `current_node`. That is
+        not a theoretical guard — it is the only thing standing between this call
+        and a silent permanent wedge. `claim_next_step` resolves an unknown
+        `current_node` to `None` and rolls back, `advance_run` keeps returning
+        the same node, and the run stays `running` with nothing logged and no
+        event: indistinguishable from idle, forever. (`reactivate_run` has a
+        resume-step guard, but it only fires when reactivating a FAILED run, so
+        it never sees this.)
         """
         with self._tx() as conn:
             row = conn.execute(
-                "SELECT graph_name, graph_version FROM skillflow_runs WHERE id = ?",
+                "SELECT graph_name, graph_version, current_node "
+                "FROM skillflow_runs WHERE id = ?",
                 (run_id,)).fetchone()
             if not row:
                 raise SkillFlowError(f"Run '{run_id}' not found")
@@ -754,10 +767,22 @@ class SkillFlow:
             if not target:
                 raise SkillFlowError(
                     f"Graph '{name}' has no version {version}")
+            node_now = row["current_node"]
+            if node_now:
+                probe = self._get_resolver(name, version=target["version"])
+                if probe.get_node(node_now) is None:
+                    raise SkillFlowError(
+                        f"Refusing to re-pin run {run_id} to '{name}' v"
+                        f"{target['version']}: it has no step '{node_now}', "
+                        f"which is where the run currently is. The run would "
+                        f"stop advancing with no error. Re-pin to a version "
+                        f"that still has that step, or start a fresh run.")
             conn.execute(
                 "UPDATE skillflow_runs SET graph_version = ?, graph_digest = ?, "
                 "updated_at = datetime('now') WHERE id = ?",
                 (target["version"], target["digest"], run_id))
+            # The only place a pin changes, so the only place that must evict.
+            self._run_pin_cache.pop(run_id, None)
             self.notifications.publish_sync(
                 "run_repinned",
                 {"run_id": run_id, "graph_name": name,
@@ -1273,14 +1298,25 @@ class SkillFlow:
         run's remaining steps: its finished steps had been validated against one
         set of rules and its next ones against another, silently.
         """
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT graph_name, graph_version FROM skillflow_runs WHERE id = ?",
-                (run_id,)
-            ).fetchone()
-        if not row:
-            raise SkillFlowError(f"Run '{run_id}' not found")
-        return self._get_resolver(row["graph_name"], version=row["graph_version"])
+        # Memoized like `_get_graph_name`, and for the same reason: this is now
+        # on the agent tool-call path (twice per call) and on every advance_run,
+        # where it replaced a lock-free dict lookup. Taking the engine RLock and
+        # running a SELECT there makes one project's tool calls wait on another
+        # project's transaction — the exact contention `_step_tools_lock` was
+        # given its own lock to avoid. A run's pin changes only in `repin_run`,
+        # which evicts this.
+        pin = self._run_pin_cache.get(run_id)
+        if pin is None:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT graph_name, graph_version FROM skillflow_runs "
+                    "WHERE id = ?", (run_id,)
+                ).fetchone()
+            if not row:
+                raise SkillFlowError(f"Run '{run_id}' not found")
+            pin = (row["graph_name"], row["graph_version"])
+            self._run_pin_cache[run_id] = pin
+        return self._get_resolver(pin[0], version=pin[1])
 
     def _graph_for_run(self, run_id: str) -> PipelineGraph | None:
         """The pinned graph, for callers that need the graph and not a resolver."""
@@ -3314,10 +3350,13 @@ class SkillFlow:
         Retries are for a step that ran and was wrong; this is for a step that
         never got its answer heard.
 
-        Releases ARE counted, in the `release_count` COLUMN — after
-        `MAX_CLAIM_RELEASES` the step is failed for real, because a driver that
-        cannot survive one step is a fault, not a hiccup, and re-running forever
-        hides it. A column rather than a key in `inputs_json`: a re-claim
+        Releases ARE counted, in the `release_count` COLUMN — on the
+        `MAX_CLAIM_RELEASES`-th one the step stops being released and is failed
+        RETRYABLY instead, because a driver that cannot survive one step is a
+        fault, not a hiccup, and re-running forever at full LLM cost hides it.
+        Retryably, not terminally: ending the run there would destroy the step's
+        staged output, which is the loss this method exists to prevent.
+        A column rather than a key in `inputs_json`: a re-claim
         rebuilds that dict from freshly resolved context and preserves only
         `_error`/`_validation_error`/`_feedback`, so a counter kept there is
         erased by the very event it is counting.
@@ -3338,13 +3377,22 @@ class SkillFlow:
                         "note": f"step is {row['status'] if row else 'missing'}"}
             releases = (row["release_count"] or 0) + 1
             if releases >= self.MAX_CLAIM_RELEASES:
+                # `retryable=True` — hand it to the ORDINARY failure path, do not
+                # end it here. `retryable=False` goes straight to the
+                # retries-exhausted branch, which with no `on_error` transition
+                # marks the whole RUN failed: a user who refreshed the page three
+                # times would lose the entire run, and with it the step's already
+                # staged output — the exact loss this method was written to
+                # prevent, arrived at by a longer road. Spending ONE retry is the
+                # right price for "your driver keeps dying"; the step's own
+                # max_retries then decides, with the run's error handling intact.
                 conn.execute(
                     "UPDATE skillflow_steps SET release_count = ? WHERE id = ?",
                     (releases, token.step_instance_id))
                 self._fail_step_in_tx(
                     conn, token,
                     f"executor released this claim {releases} times without "
-                    f"completing it (last: {reason})", retryable=False)
+                    f"completing it (last: {reason})", retryable=True)
                 return {"released": False, "releases": releases, "failed": True}
             conn.execute(
                 """
@@ -5205,9 +5253,27 @@ class SkillFlow:
                 """,
                 (feedback, feedback, step_row["id"]),
             )
+            # The redirect target must exist in the graph THIS RUN is pinned to.
+            #
+            # Hosts compute `redirect_to` from the graph by NAME — i.e. from the
+            # CURRENT definition — so once a run is pinned the two can name
+            # different graphs. Reachable in one sitting: a run pauses at a
+            # checkpoint, the config is edited and re-registered, the user
+            # clicks Reject, and `redirect_to` is a node that exists only in the
+            # newer version. Writing it would leave `claim_next_step` resolving
+            # `current_node` to None and rolling back on every tick — the run
+            # stays `running` forever with nothing logged, which is exactly what
+            # an idle run looks like. Fail loudly instead; the caller can show it.
+            _target = redirect_to or step_id
+            if self._get_resolver_for_run(run_id).get_node(_target) is None:
+                raise SkillFlowError(
+                    f"Cannot reject checkpoint '{step_id}' of run {run_id} into "
+                    f"'{_target}': that step is not in the graph version this "
+                    f"run is pinned to. The config changed since the run "
+                    f"started — re-pin the run or start a fresh one.")
             conn.execute(
                 "UPDATE skillflow_runs SET current_node = ?, status = 'running', updated_at = datetime('now') WHERE id = ?",
-                (redirect_to or step_id, run_id),
+                (_target, run_id),
             )
             # When redirecting, inject feedback into the redirect target
             if redirect_to:

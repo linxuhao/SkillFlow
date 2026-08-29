@@ -281,7 +281,7 @@ class SkillTool:
         tool_name = ""
         tool_params = {}
         try:
-            resolver = self.sf._get_resolver(self.graph_name)
+            resolver = self.sf._get_resolver_for_run(self.run_id)
             node = resolver.get_node(claimed.step_id)
             if node and node.step_type == "tool":
                 tool_name = node.tool_name
@@ -330,7 +330,12 @@ class SkillTool:
         pid = self.sf._get_project_id(self.run_id)
         gname = self.sf._get_graph_name(self.run_id)
         try:
-            resolver = self.sf._get_resolver(self.graph_name)
+            # The graph THIS RUN is pinned to. Resolved by NAME the runner would
+            # read a different graph than the engine handed it the step from —
+            # and this one decides which files get STAGED (node.output_fixed),
+            # so an edit landing mid-run made the engine validate one output
+            # contract while the runner staged another.
+            resolver = self.sf._get_resolver_for_run(self.run_id)
             node = resolver.get_node(step_id)
             if not node or not node.output_fixed:
                 return
@@ -422,7 +427,7 @@ class SkillTool:
             completed = [s for s in steps if s.get("status") == "completed"]
             if completed:
                 last_step_id = completed[-1]["step_id"]
-                resolver = self.sf._get_resolver(self.graph_name)
+                resolver = self.sf._get_resolver_for_run(self.run_id)
                 node = resolver.get_node(last_step_id)
                 if node and node.checkpoint:
                     checkpoint_step_id = last_step_id

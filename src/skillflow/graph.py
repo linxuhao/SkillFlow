@@ -434,15 +434,25 @@ class PipelineGraph:
                 sd["context"] = s.context
             if s.output_mode:
                 sd["output_mode"] = s.output_mode
-                if (s.output_fixed or s.output_allow_full_write
-                        or s.output_carry_forward):
-                    sd["output"] = {}
-                    if s.output_fixed:
-                        sd["output"]["fixed"] = s.output_fixed
-                    if s.output_allow_full_write:
-                        sd["output"]["allow_full_write"] = True
-                    if s.output_carry_forward:
-                        sd["output"]["carry_forward"] = True
+            # NOT nested under `output_mode`. `mode` is optional in the YAML, so
+            # a step that declares `output: {fixed: …}` without it round-tripped
+            # to a step declaring NOTHING — losing its output contract, its
+            # allow_full_write and its carry_forward in silence.
+            #
+            # That was survivable while the round-trip only happened in a worker
+            # that reloaded the graph from the DB. It is not now: a run pinned to
+            # a version always rebuilds its resolver from the stored JSON, so
+            # every pinned run would execute the lossy copy. None of the shipped
+            # configs omit `mode`, but a generated one may.
+            if (s.output_fixed or s.output_allow_full_write
+                    or s.output_carry_forward):
+                sd["output"] = {}
+                if s.output_fixed:
+                    sd["output"]["fixed"] = s.output_fixed
+                if s.output_allow_full_write:
+                    sd["output"]["allow_full_write"] = True
+                if s.output_carry_forward:
+                    sd["output"]["carry_forward"] = True
             if s.validation:
                 sd["validation"] = s.validation
             if s.lifecycle:

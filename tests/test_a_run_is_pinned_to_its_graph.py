@@ -191,10 +191,14 @@ def test_releasing_a_claim_does_not_spend_the_retry_budget(sf):
     assert sf.claim_next_step(run_id) is not None, "the step is claimable again"
 
 
-def test_releases_are_counted_and_eventually_fail_the_step(sf):
-    """A cause that recurs forever would otherwise re-run the step forever, at
-    full LLM cost, saying nothing. Same 3-strike shape as the reaper's
-    `_stale_recovery_count`."""
+def test_at_the_cap_it_stops_releasing_and_spends_one_retry(sf):
+    """A cause that recurs forever would otherwise re-run the step forever at
+    full LLM cost, saying nothing. But the cap must NOT end the run: terminal
+    failure there destroys the step's staged output, which is the loss this
+    whole mechanism exists to prevent — the motivating case is a user who
+    refreshed the page while a FINISHED step was waiting to be confirmed. So the
+    cap hands the step to the ordinary retry path and lets max_retries decide.
+    """
     sf.register_graph(_graph("g"))
     run_id = sf.create_run("g", project_id="p1")
     sf.start_run(run_id)
@@ -208,11 +212,38 @@ def test_releases_are_counted_and_eventually_fail_the_step(sf):
 
     assert [o["released"] for o in outs] == [True, True, False]
     assert outs[-1]["failed"] is True
-    final = sf._conn.execute(
-        "SELECT status, last_error FROM skillflow_steps WHERE run_id = ? "
-        "AND step_id = 'a' ORDER BY id DESC LIMIT 1", (run_id,)).fetchone()
-    assert final["status"] == "failed"
-    assert "released this claim" in final["last_error"]
+    row = sf._conn.execute(
+        "SELECT status, retry_count, last_error FROM skillflow_steps "
+        "WHERE run_id = ? AND step_id = 'a' ORDER BY id DESC LIMIT 1",
+        (run_id,)).fetchone()
+    assert "released this claim" in row["last_error"]
+    assert row["retry_count"] == 1, "the cap should cost exactly one retry"
+    assert row["status"] == "pending", "the step is still runnable"
+    assert sf.get_run(run_id)["status"] == "running", \
+        "the cap ended the whole run — it must not"
+
+
+def test_repinning_onto_a_version_missing_the_current_node_is_refused(sf):
+    """The silent-wedge path. `claim_next_step` resolves an unknown
+    `current_node` to None and rolls back; `advance_run` keeps returning the
+    same node; the run stays `running` with nothing logged. That is
+    indistinguishable from idle, forever — so refuse at the only door to it."""
+    sf.register_graph(_graph("g"))
+    run_id = sf.create_run("g", project_id="p1")
+    sf.start_run(run_id)
+    # v2 drops step 'a', which is where the run is.
+    sf.register_graph(PipelineGraph(
+        name="g", begin="done",
+        steps=[StepNode(id="done", step_type="gate", transitions=[])],
+        end_conditions=EndConditions(combinator="or", conditions=[
+            EndCondition(type="node_reached", node="done",
+                         result="completed")])))
+
+    with pytest.raises(Exception, match="no step 'a'"):
+        sf.repin_run(run_id)
+
+    assert sf.graph_version_for_run(run_id)["version"] == 1
+    assert sf.claim_next_step(run_id) is not None, "the run still advances"
 
 
 def test_releasing_a_step_someone_else_already_resolved_is_a_no_op(sf):
