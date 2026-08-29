@@ -191,47 +191,14 @@ def test_releasing_a_claim_does_not_spend_the_retry_budget(sf):
     assert sf.claim_next_step(run_id) is not None, "the step is claimable again"
 
 
-def test_at_the_cap_it_stops_releasing_and_spends_one_retry(sf):
-    """A cause that recurs forever would otherwise re-run the step forever at
-    full LLM cost, saying nothing. But the cap must NOT end the run: terminal
-    failure there destroys the step's staged output, which is the loss this
-    whole mechanism exists to prevent — the motivating case is a user who
-    refreshed the page while a FINISHED step was waiting to be confirmed. So the
-    cap hands the step to the ordinary retry path and lets max_retries decide.
+def test_cancellations_never_touch_the_retry_budget(sf):
+    """The budget is for failures that are the STEP's. Spending it on client
+    disconnects means a step quietly loses its resilience to real ones and then
+    dies on the next genuine transient error — destroying the staged output this
+    exists to protect. Two earlier shapes of this code did that, by different
+    routes; the second only after the budget ran out, which made it look fixed.
     """
-    sf.register_graph(_graph("g"))
-    run_id = sf.create_run("g", project_id="p1")
-    sf.start_run(run_id)
-
-    outs = []
-    for _ in range(3):
-        c = sf.claim_next_step(run_id)
-        if c is None:
-            break
-        outs.append(sf.release_claim(c.token, "driver cancelled"))
-
-    assert [o["released"] for o in outs] == [True, True, False]
-    assert outs[-1]["failed"] is True
-    row = sf._conn.execute(
-        "SELECT status, retry_count, last_error FROM skillflow_steps "
-        "WHERE run_id = ? AND step_id = 'a' ORDER BY id DESC LIMIT 1",
-        (run_id,)).fetchone()
-    assert "released this claim" in row["last_error"]
-    assert row["retry_count"] == 1, "the cap should cost exactly one retry"
-    assert row["status"] == "pending", "the step is still runnable"
-    assert sf.get_run(run_id)["status"] == "running", \
-        "the cap ended the whole run — it must not"
-
-
-def test_a_cancellation_never_fails_the_run_even_with_no_retries_left(sf):
-    """`retryable=True` is ANDed with the budget check — at
-    `retry_count == max_retries` `_fail_step_in_tx` fails the RUN whatever the
-    flag says. And that is an ordinary state: it is where every step waits after
-    exhausting retries, and the state operators resume runs from. Three
-    cancellations there would destroy the step's staged output and kill the run,
-    which is the loss this whole mechanism exists to prevent.
-    """
-    sf.register_graph(_graph("g", retries=2))
+    sf.register_graph(_graph("g", retries=3))
     run_id = sf.create_run("g", project_id="p1")
     sf.start_run(run_id)
 
@@ -242,52 +209,64 @@ def test_a_cancellation_never_fails_the_run_even_with_no_retries_left(sf):
             c = sf.claim_next_step(run_id)
         return c
 
-    for i in range(2):                      # spend the budget on real failures
-        sf.fail_step(claim().token, f"real failure {i}", retryable=True)
-    spent = sf._conn.execute(
-        "SELECT retry_count, max_retries FROM skillflow_steps WHERE run_id = ? "
-        "AND step_id = 'a' ORDER BY id DESC LIMIT 1", (run_id,)).fetchone()
-    assert spent["retry_count"] == spent["max_retries"], "budget not exhausted"
-
-    for _ in range(4):                      # now the driver keeps dying
+    for _ in range(9):                       # nine restarts / disconnects
         c = claim()
         assert c is not None, "the step stopped being claimable"
         assert sf.release_claim(c.token, "driver cancelled")["released"] is True
 
+    row = sf._conn.execute(
+        "SELECT retry_count, release_count FROM skillflow_steps WHERE run_id = ? "
+        "AND step_id = 'a' ORDER BY id DESC LIMIT 1", (run_id,)).fetchone()
+    assert row["retry_count"] == 0, "cancellations spent the retry budget"
+    assert row["release_count"] == 9, "the count is the record; it must survive"
+    assert sf.get_run(run_id)["status"] == "running"
+
+    # And the budget is still all there for a real failure.
+    for i in range(3):
+        sf.fail_step(claim().token, f"real failure {i}", retryable=True)
     assert sf.get_run(run_id)["status"] == "running", \
-        "a cancellation killed the run"
+        "a genuine failure exhausted the budget early — cancellations ate it"
 
 
-def test_the_release_counter_resets_when_it_is_charged_to_a_retry(sf):
-    """Left high, every LATER cancellation takes the cap branch too — one retry
-    each — so the run died on the sixth instead of surviving. Cancellations are
-    not independent: one apscheduler shutdown cancels every gathered tick, so a
-    server restart is +1 on whichever step was in flight."""
+def test_the_repeated_release_is_reported(sf, caplog):
+    """Re-running a step is expensive, so a repeatedly-killed driver has to be
+    visible. A warning is how you say that — never a dead run."""
     sf.register_graph(_graph("g"))
     run_id = sf.create_run("g", project_id="p1")
     sf.start_run(run_id)
 
-    def claim():
-        c = sf.claim_next_step(run_id)
-        if c is None:
-            sf.advance_run(run_id)
-            c = sf.claim_next_step(run_id)
-        return c
+    with caplog.at_level("WARNING", logger="skillflow"):
+        for _ in range(3):
+            c = sf.claim_next_step(run_id) or (
+                sf.advance_run(run_id), sf.claim_next_step(run_id))[1]
+            sf.release_claim(c.token, "driver cancelled")
 
-    for _ in range(3):
-        sf.release_claim(claim().token, "driver cancelled")
-    row = sf._conn.execute(
-        "SELECT retry_count, release_count FROM skillflow_steps WHERE run_id = ? "
-        "AND step_id = 'a' ORDER BY id DESC LIMIT 1", (run_id,)).fetchone()
-    assert row["retry_count"] == 1, "the cap should cost exactly one retry"
-    assert row["release_count"] == 0, "the counter stayed high"
+    assert "released by its executor 3 times" in caplog.text
+    assert "NOT being charged" in caplog.text
 
-    # The next two are free again, not one-retry-each.
-    for _ in range(2):
-        assert sf.release_claim(claim().token, "again")["released"] is True
-    assert sf._conn.execute(
-        "SELECT retry_count FROM skillflow_steps WHERE run_id = ? AND "
-        "step_id = 'a' ORDER BY id DESC LIMIT 1", (run_id,)).fetchone()[0] == 1
+
+def test_repinning_from_a_null_current_node_is_still_guarded(sf):
+    """NULL is routine — every retryable `_fail_step_in_tx` clears it and
+    `recover_stale_claims` clears it unconditionally — so it is the state an
+    operator is most likely re-pinning FROM. Skipping the guard there let a
+    re-pin return success and kill the run on its next advance."""
+    sf.register_graph(_graph("g"))
+    run_id = sf.create_run("g", project_id="p1")
+    sf.start_run(run_id)
+    c = sf.claim_next_step(run_id)
+    sf.confirm_step(c.token, StepResult(outputs={}))       # 'a' completed
+    with sf._tx() as conn:
+        conn.execute("UPDATE skillflow_runs SET current_node = NULL WHERE id = ?",
+                     (run_id,))
+    sf.register_graph(PipelineGraph(
+        name="g", begin="done",
+        steps=[StepNode(id="done", step_type="gate", transitions=[])],
+        end_conditions=EndConditions(combinator="or", conditions=[
+            EndCondition(type="node_reached", node="done",
+                         result="completed")])))
+
+    with pytest.raises(Exception, match="no step 'a'"):
+        sf.repin_run(run_id)
 
 
 def test_repinning_onto_a_version_missing_the_current_node_is_refused(sf):
