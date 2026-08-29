@@ -3955,12 +3955,20 @@ class SkillFlow:
     def _tool_step_errored(node, tool_result: dict) -> str | None:
         """The message a tool step must FAIL on, or None to carry on.
 
-        A tool step's result is also its routing flags, so the engine used to
-        take whatever edge matched and record the step 'completed' whatever the
-        tool said. For a plumbing tool that is the malignant case: `repo_apply`
-        refusing (it returns ``{"applied": False, "error": …}`` when it has no
-        project root) left the step completed, the run down this node's first
-        edge, and the run reporting success having committed nothing.
+        A tool step's result is also its routing flags, so without this the
+        engine takes whatever edge matched and records the step 'completed'
+        whatever the tool said. For a plumbing tool that is the malignant shape:
+        a refusal returns ``{"applied": False, "error": …}``, which is a
+        perfectly serviceable set of routing flags, so the run goes down this
+        node's first edge and reports success having done none of the work.
+
+        This is a DEFENCE for a shape a graph author can write, not a failure
+        that was observed. `repo_apply` and `repo_validate` — the two tools whose
+        refusal would look like that — appear in every shipped config only as
+        ``lifecycle: on_deliver`` hooks, and `_execute_tool_hook` has mapped a
+        truthy ``error`` to ``passed: False`` since long before either tool grew
+        a refusal branch. A ``step_type: tool`` node naming one is legal, and
+        nothing stopped it from being written.
 
         The signature-level guard (`ToolArgumentsUnavailable`) does not cover it.
         That fires on `signature.bind`, so it only catches a tool whose parameter
@@ -4008,9 +4016,11 @@ class SkillFlow:
         A truthy ``error`` in the result is a STEP FAILURE unless the node
         declares ``tool_error: "route"`` — see `_tool_step_errored`. Checked
         BEFORE `_confirm_tool_in_tx`, which writes ``status = 'completed'``
-        unconditionally: a `repo_apply` step that copied and committed nothing
-        was otherwise recorded completed, the run took this node's first edge,
-        and it reported success having shipped nothing.
+        unconditionally: a tool step that did none of its work would otherwise
+        be recorded completed, the run would take this node's first edge, and it
+        would report success having shipped nothing. A defence for a writable
+        shape — no shipped config puts a refusing plumbing tool on a
+        ``step_type: tool`` node; see `_tool_step_errored`.
         """
         node = resolver.get_node(step_id)
         err = self._tool_step_errored(node, tool_result)
@@ -4297,9 +4307,12 @@ class SkillFlow:
           (`ToolArgumentsUnavailable`) — the same graph, step and signature next
           tick, so three reopens reproduce it exactly three times;
         * the tool ran and reported a truthy ``error`` on a node that did not
-          declare ``tool_error: "route"`` (`_tool_step_errored`). Its cause is a
-          missing project root or a refusing git command, neither of which a
-          re-tick supplies.
+          declare ``tool_error: "route"`` (`_tool_step_errored`). The errors that
+          reach here are of the kind a re-tick cannot change — a missing project
+          root, a git command that refuses — which is why this path retries
+          nothing. No shipped config reaches it: it is a defence for a shape a
+          graph author can write (see `_tool_step_errored`), not a failure that
+          was observed.
 
         Confirming either would mark a step that did nothing 'completed':
         `_confirm_tool_in_tx` writes that status unconditionally, so the run
