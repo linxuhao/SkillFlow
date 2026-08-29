@@ -1550,6 +1550,20 @@ class SkillFlow:
             if resolver.is_gate(run["current_node"]):
                 raise _TxRollback()
 
+            # A LOOP node is a control node too — no agent_config — so claiming
+            # it hands the host's runner a step it can only fail with "Agent
+            # config '' not found". `advance_run` leaves `current_node` on one
+            # whenever `_resolve_loop` returns None (a loop whose transitions all
+            # target its own body, so `_route_done` finds no exit), and unlike
+            # its sibling at the tool fast-path that branch fails nothing — the
+            # run simply sits there, still `running`. That was harmless while a
+            # silent advance ended the tick; a caller that reacts to the silence
+            # by asking us to claim (AItelier's wedge recovery, 2026-08-29) turns
+            # an idle wait into a failed run. Refuse, as for a gate: the caller's
+            # own "nothing claimable" branch then says so with a reason.
+            if resolver.is_loop(run["current_node"]):
+                raise _TxRollback()
+
             node = resolver.get_node(run["current_node"])
             if not node:
                 raise _TxRollback()

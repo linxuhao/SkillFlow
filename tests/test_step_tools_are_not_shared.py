@@ -729,3 +729,39 @@ def test_a_real_tool_directory_named_read_is_not_shadowed(sf, tmp_path):
     out = sf.execute_tool("read", {}, run_id=run_a, step_id="review")
     assert out.get("from_disk") is True, \
         f"the step-scoped refusal shadowed a real on-disk tool: {out}"
+
+
+def test_a_loop_node_is_refused_like_a_gate(sf, tmp_path):
+    """A caller that reacts to `advance_run`'s silence by asking us to claim
+    must not be handed a control node.
+
+    `advance_run` leaves `current_node` on a loop whenever `_resolve_loop`
+    returns None, and that branch fails nothing — the run sits there, still
+    `running`. Claiming it hands the host's runner a step with no
+    `agent_config`, which it can only fail. Refusing is what lets the caller's
+    own "nothing claimable" branch report a reason instead.
+    """
+    from skillflow.graph import LoopConfig
+
+    sf.register_graph(PipelineGraph(
+        name="gl", begin="each",
+        steps=[
+            StepNode(id="each", step_type="loop",
+                     loop=LoopConfig(source={"step": "seed", "file": "items.json"},
+                                     item_as="item"),
+                     transitions=[Transition(to="work")]),
+            StepNode(id="work", step_type="agent", agent_config="reviewer",
+                     transitions=[Transition(to="done")]),
+            StepNode(id="done", step_type="gate", transitions=[]),
+        ],
+        end_conditions=EndConditions(combinator="or", conditions=[
+            EndCondition(type="node_reached", node="done", result="completed")])))
+    run_id = sf.create_run("gl", project_id="proj_a")
+    sf.start_run(run_id)
+
+    with sf._tx() as conn:
+        conn.execute("UPDATE skillflow_runs SET current_node='each' WHERE id=?",
+                     (run_id,))
+
+    assert sf.claim_next_step(run_id) is None, \
+        "a loop node was claimed; the runner can only fail it"
