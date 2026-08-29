@@ -206,7 +206,13 @@ class RunnerService:
         # exact set of names this run's GRAPH can generate, plus registered
         # native tools. Anything outside that set is a host tool: redirect it
         # instead of returning a confusing "not allowed".
-        known = (name in self._graph_tool_names(run.get("graph_name", ""))
+        # From the graph THIS RUN is pinned to. `_graphs[name]` is the CURRENT
+        # definition, so after a config edit this gate could accept a tool the
+        # run's own version never offers, or redirect one it does — deciding
+        # which tool names a live agent may call from a graph the run is not
+        # executing.
+        known = (name in self._graph_tool_names(run.get("graph_name", ""),
+                                                run.get("id", ""))
                  or self._loader_has(name))
         if not known:
             return {"error": (
@@ -233,11 +239,20 @@ class RunnerService:
             project_root=project_root,
         )
 
-    def _graph_tool_names(self, graph_name: str) -> set:
+    def _graph_tool_names(self, graph_name: str, run_id: str = "") -> set:
         """Every tool name this graph can generate (write/create/edit slots,
-        finish_step, context read tools) across all its nodes."""
+        finish_step, context read tools) across all its nodes.
+
+        Prefers the graph the RUN is pinned to; `_graphs[name]` is whatever is
+        registered now, which is a different graph once a config is edited.
+        """
         names: set = set()
-        graph = getattr(self.sf, "_graphs", {}).get(graph_name)
+        graph = None
+        if run_id:
+            fn = getattr(self.sf, "_graph_for_run", None)
+            graph = fn(run_id) if fn else None
+        if graph is None:
+            graph = getattr(self.sf, "_graphs", {}).get(graph_name)
         if graph is None:
             return names
         from skillflow.write_tools import generate_write_tool_schemas
