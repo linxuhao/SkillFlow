@@ -260,4 +260,15 @@ SKILLFLOW_MIGRATIONS: list[str] = [
     # counted registrations of content that was never kept.
     "ALTER TABLE skillflow_runs ADD COLUMN graph_version INTEGER",
     "ALTER TABLE skillflow_runs ADD COLUMN graph_digest TEXT",
+    # SF-29: how many times this instance was handed back by `release_claim`
+    # (an executor that went away, not a step that failed).
+    #
+    # A COLUMN, not a key in inputs_json, because a re-claim rebuilds
+    # inputs_json from freshly resolved context and carries forward only
+    # `_error`, `_validation_error` and `_feedback` (claim_next_step ~1914).
+    # Anything else written there is erased by the next claim — which is why the
+    # reaper's `_stale_recovery_count` cannot actually count across reclaims
+    # either, and why a counter whose whole job is to survive one must not live
+    # in that dict.
+    "ALTER TABLE skillflow_steps ADD COLUMN release_count INTEGER NOT NULL DEFAULT 0",
 ]

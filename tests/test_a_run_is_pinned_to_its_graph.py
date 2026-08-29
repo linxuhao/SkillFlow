@@ -14,7 +14,7 @@ identical `updated_at`, none of them edited 312 times.
 
 import pytest
 
-from skillflow.core import SkillFlow, graph_digest
+from skillflow.core import SkillFlow, StepResult, graph_digest
 from skillflow.graph import (
     PipelineGraph, StepNode, Transition, EndConditions, EndCondition,
 )
@@ -150,18 +150,84 @@ def test_repinning_to_a_version_that_does_not_exist_is_refused(sf):
     assert sf.graph_version_for_run(run_id)["version"] == 1
 
 
-def test_a_missing_pinned_version_does_not_strand_the_run(sf, caplog):
-    """A restored or hand-edited DB. Refusing to resolve leaves the run with no
-    way to finish; resolving silently would hide that it changed graphs."""
+def test_the_pin_names_the_graph_the_step_rows_were_built_from(sf):
+    """`register_graph` publishes to `_graphs` BEFORE its transaction, so "the
+    latest version row" and "the graph create_run just used" can disagree — the
+    in-memory graph survives a failed transaction. Pinning by digest keeps the
+    run's rows and its resolver on one graph; pinning "latest" would not."""
+    sf.register_graph(_graph("g"))                      # v1, committed
+    # An edit whose transaction never landed: the in-memory graph is the new
+    # one, the history still ends at v1.
+    edited = _graph("g", retries=9)
+    sf._graphs["g"] = edited
+    sf._resolvers["g"] = __import__("skillflow.graph", fromlist=["GraphResolver"]
+                                    ).GraphResolver(edited)
+
+    run_id = sf.create_run("g", project_id="p1")
+
+    assert sf.graph_version_for_run(run_id)["version"] is None, \
+        "pinned v1 while building the run from the unversioned edited graph"
+    # NULL resolves by name, which is the graph the rows came from.
+    assert sf._get_resolver_for_run(run_id).get_node("a").max_retries == 9
+
+
+def test_releasing_a_claim_does_not_spend_the_retry_budget(sf):
+    """A cancelled driver is not a failed step. `fail_step(retryable=True)`
+    increments retry_count, so three cancellations would kill a healthy step
+    with an error blaming it for what the client did."""
     sf.register_graph(_graph("g"))
     run_id = sf.create_run("g", project_id="p1")
-    sf.register_graph(_graph("g", retries=9))
-    with sf._tx() as conn:
-        conn.execute("DELETE FROM skillflow_graph_versions WHERE name='g' AND version=1")
-    sf._pinned_resolvers.clear()
+    sf.start_run(run_id)
+    claimed = sf.claim_next_step(run_id)
 
-    with caplog.at_level("WARNING", logger="skillflow"):
-        node = sf._get_resolver_for_run(run_id).get_node("a")
+    out = sf.release_claim(claimed.token, "driver cancelled")
 
-    assert node is not None
-    assert "version history" in caplog.text
+    row = sf._conn.execute(
+        "SELECT status, retry_count FROM skillflow_steps WHERE id = ?",
+        (claimed.token.step_instance_id,)).fetchone()
+    assert out["released"] is True
+    assert row["status"] == "pending"
+    assert row["retry_count"] == 0, "a cancellation spent a retry"
+    assert sf.claim_next_step(run_id) is not None, "the step is claimable again"
+
+
+def test_releases_are_counted_and_eventually_fail_the_step(sf):
+    """A cause that recurs forever would otherwise re-run the step forever, at
+    full LLM cost, saying nothing. Same 3-strike shape as the reaper's
+    `_stale_recovery_count`."""
+    sf.register_graph(_graph("g"))
+    run_id = sf.create_run("g", project_id="p1")
+    sf.start_run(run_id)
+
+    outs = []
+    for _ in range(3):
+        c = sf.claim_next_step(run_id)
+        if c is None:
+            break
+        outs.append(sf.release_claim(c.token, "driver cancelled"))
+
+    assert [o["released"] for o in outs] == [True, True, False]
+    assert outs[-1]["failed"] is True
+    final = sf._conn.execute(
+        "SELECT status, last_error FROM skillflow_steps WHERE run_id = ? "
+        "AND step_id = 'a' ORDER BY id DESC LIMIT 1", (run_id,)).fetchone()
+    assert final["status"] == "failed"
+    assert "released this claim" in final["last_error"]
+
+
+def test_releasing_a_step_someone_else_already_resolved_is_a_no_op(sf):
+    """The driver's cancellation can race its own replacement. Rewriting a
+    completed step to `pending` would undo work that landed."""
+    sf.register_graph(_graph("g"))
+    run_id = sf.create_run("g", project_id="p1")
+    sf.start_run(run_id)
+    claimed = sf.claim_next_step(run_id)
+    sf.confirm_step(claimed.token, StepResult(outputs={}))
+
+    out = sf.release_claim(claimed.token, "driver cancelled")
+
+    assert out["released"] is False
+    row = sf._conn.execute(
+        "SELECT status FROM skillflow_steps WHERE id = ?",
+        (claimed.token.step_instance_id,)).fetchone()
+    assert row["status"] == "completed"

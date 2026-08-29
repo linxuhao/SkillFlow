@@ -340,6 +340,9 @@ class SkillFlow:
         # `register_graph` overwrites it, which is exactly the aliasing a pinned
         # run has to be immune to.
         self._pinned_resolvers: dict[tuple[str, int], GraphResolver] = {}
+        # (name, version) pairs already reported as missing from the history, so
+        # the fallback warns once instead of once per resolver lookup.
+        self._pinned_missing: set[tuple[str, int]] = set()
         # Capability registry: a step's `capability` keyword → a curated
         # toolset + a context provider the FRAMEWORK injects (folders, dirs).
         # Lets the host provision tools/state locations by declared purpose so
@@ -389,12 +392,13 @@ class SkillFlow:
         # on its own:
         #
         #   * `step_instance_id` names a `skillflow_steps` ROW, not a claim.
-        #     SEVEN UPDATEs in this file reset a row to 'pending'
+        #     EIGHT UPDATEs in this file reset a row to 'pending'
         #     (`_handle_validation_failure`, `_handle_lifecycle_retry`,
         #     `_fail_step_in_tx`'s retry branch, `_reopen_tool_step_in_tx`,
-        #     `reject_checkpoint`, `recover_stale_claims`, `reactivate_run`) and
+        #     `reject_checkpoint`, `recover_stale_claims`, `reactivate_run`,
+        #     `release_claim`) and
         #     `claim_next_step` then re-claims the SAME row, bumping only
-        #     `claim_epoch` — none of the seven writes `claim_epoch` at all; the
+        #     `claim_epoch` — none of the eight writes `claim_epoch` at all; the
         #     only two statements that do are the two claim paths, and both
         #     increment. Successive claims of one row therefore share a row id.
         #   * `claim_epoch` restarts per row. Graph re-entry (a loop body, a
@@ -1232,10 +1236,20 @@ class SkillFlow:
             # The pinned version is missing (a restored or hand-edited DB).
             # Falling through to the current definition is wrong, but refusing
             # strands the run with no way to finish; say so and continue.
-            logging.getLogger("skillflow").warning(
-                "graph '%s' version %s is not in the version history — resolving "
-                "against the CURRENT definition instead. Runs pinned to it are "
-                "executing a graph they did not start with.", graph_name, version)
+            #
+            # Once per (name, version), not once per lookup. This runs several
+            # times per tick against a run that will keep missing forever, which
+            # is ~100 identical WARNINGs a minute — the volume that evicts real
+            # events from the log window. The resolver itself is deliberately
+            # NOT cached under the pinned key: the fallback is "whatever is
+            # current", and current can change.
+            if (graph_name, version) not in self._pinned_missing:
+                self._pinned_missing.add((graph_name, version))
+                logging.getLogger("skillflow").warning(
+                    "graph '%s' version %s is not in the version history — "
+                    "resolving against the CURRENT definition instead. Runs "
+                    "pinned to it are executing a graph they did not start "
+                    "with.", graph_name, version)
         resolver = self._resolvers.get(graph_name)
         if resolver is not None:
             return resolver
@@ -1289,13 +1303,28 @@ class SkillFlow:
         if project_id is None:
             project_id = ctx.get("project_id")
 
+        # Pin the version whose content IS `graph` — the one the step rows below
+        # are built from — never merely "the latest row".
+        #
+        # `register_graph` publishes to `self._graphs` BEFORE its transaction, so
+        # "latest row" and "the graph _get_resolver just handed us" can disagree:
+        # durably if that transaction failed (the in-memory graph stays, no
+        # version row is ever written), and transiently because scheduler ticks
+        # run in threads and can land between the two. Pinning the wrong one puts
+        # a run's step rows and its resolver on different graphs — precisely the
+        # disagreement this whole mechanism exists to prevent, and if the two
+        # differ on `begin` or a node id the run wedges on a node that looks
+        # perfectly valid in the DB.
+        _digest = graph_digest(graph.to_dict())
         with self._tx() as conn:
-            # Pin the CONTENT, not just the name. NULL when the graph predates
-            # the version history (registered by an older build and not
-            # re-registered since) — the run then resolves by name, as before.
+            # No row for this exact content means it was never versioned (an
+            # older build, or a registration whose transaction failed). NULL is
+            # then the RIGHT pin, not a fallback: it resolves by name, which
+            # returns the very graph these rows are being built from.
             _v = conn.execute(
                 "SELECT version, digest FROM skillflow_graph_versions "
-                "WHERE name = ? ORDER BY version DESC LIMIT 1", (graph_name,)
+                "WHERE name = ? AND digest = ? ORDER BY version DESC LIMIT 1",
+                (graph_name, _digest)
             ).fetchone()
             conn.execute(
                 """
@@ -3263,6 +3292,71 @@ class SkillFlow:
                                  token.step_instance_id, token.claim_epoch)
         with self._tx() as conn:
             self._fail_step_in_tx(conn, token, error, retryable)
+
+    # How many times one step instance may be released back to pending before
+    # the releases are treated as the problem. Same shape and same reason as the
+    # reaper's `_stale_recovery_count`: a cause that recurs forever would
+    # otherwise re-run the step forever, at full LLM cost, with nothing said.
+    MAX_CLAIM_RELEASES = 3
+
+    def release_claim(self, token: ClaimToken, reason: str) -> dict:
+        """Return a claimed step to `pending` WITHOUT spending its retry budget.
+
+        For when the step did not fail — its EXECUTOR went away. A driver whose
+        task is cancelled (a disconnected client, an ended session) has to hand
+        the claim back or the row stays `claimed` forever: the stale-claim reaper
+        refuses to reclaim a claim whose owner PROCESS is alive, and a server's
+        own driver dies without the server dying.
+
+        `fail_step(retryable=True)` is the wrong tool for that. It increments
+        `retry_count`, so three cancellations exhaust a healthy step's budget and
+        kill it with an error that blames the step for something the client did.
+        Retries are for a step that ran and was wrong; this is for a step that
+        never got its answer heard.
+
+        Releases ARE counted, in the `release_count` COLUMN — after
+        `MAX_CLAIM_RELEASES` the step is failed for real, because a driver that
+        cannot survive one step is a fault, not a hiccup, and re-running forever
+        hides it. A column rather than a key in `inputs_json`: a re-claim
+        rebuilds that dict from freshly resolved context and preserves only
+        `_error`/`_validation_error`/`_feedback`, so a counter kept there is
+        erased by the very event it is counting.
+
+        Returns ``{released, releases, failed}``.
+        """
+        self._assert_epoch(token, "release_claim")
+        self._release_step_tools(token.run_id, token.step_id,
+                                 token.step_instance_id, token.claim_epoch)
+        with self._tx() as conn:
+            row = conn.execute(
+                "SELECT status, release_count FROM skillflow_steps WHERE id = ?",
+                (token.step_instance_id,)).fetchone()
+            if not row or row["status"] != "claimed":
+                # Already resolved by someone else — nothing to hand back, and
+                # rewriting it to pending would undo their work.
+                return {"released": False, "releases": 0, "failed": False,
+                        "note": f"step is {row['status'] if row else 'missing'}"}
+            releases = (row["release_count"] or 0) + 1
+            if releases >= self.MAX_CLAIM_RELEASES:
+                conn.execute(
+                    "UPDATE skillflow_steps SET release_count = ? WHERE id = ?",
+                    (releases, token.step_instance_id))
+                self._fail_step_in_tx(
+                    conn, token,
+                    f"executor released this claim {releases} times without "
+                    f"completing it (last: {reason})", retryable=False)
+                return {"released": False, "releases": releases, "failed": True}
+            conn.execute(
+                """
+                UPDATE skillflow_steps
+                SET status = 'pending', version = version + 1,
+                    claimed_at = NULL, claimed_by = NULL,
+                    last_error = ?, release_count = ?,
+                    updated_at = datetime('now')
+                WHERE id = ? AND status = 'claimed'
+                """,
+                (reason, releases, token.step_instance_id))
+        return {"released": True, "releases": releases, "failed": False}
 
     def _fail_step_in_tx(self, conn: sqlite3.Connection, token: ClaimToken,
                          error: str, retryable: bool) -> None:
@@ -5911,7 +6005,7 @@ class SkillFlow:
         Compare-and-delete on the PAIR (instance id, claim epoch), because
         neither half names a claim alone. `(run_id, step_id)` names the step; the
         row id names one INSTANCE of it but is shared by every re-claim of that
-        row (seven sites reset a row to 'pending' — enumerated where
+        row (eight sites reset a row to 'pending' — enumerated where
         `_step_tools` is declared — and `claim_next_step` re-claims the same row,
         bumping only `claim_epoch`; none of the seven writes the epoch at all);
         the epoch distinguishes those re-claims but restarts at 1 on

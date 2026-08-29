@@ -29,6 +29,10 @@ EXPECTED_RESETTERS = {
     "_reopen_tool_step_in_tx",
     "reject_checkpoint",
     "recover_stale_claims",
+    # Hands a claim back when the EXECUTOR went away rather than the step
+    # failing (a cancelled driver). Like the others it leaves claim_epoch
+    # alone — the next claim bumps it, which is what fences the dead executor.
+    "release_claim",
 }
 
 
@@ -64,12 +68,23 @@ def test_exactly_the_enumerated_statements_reset_a_row_to_pending():
         "by (step_instance_id, claim_epoch).")
 
 
+_NUMBER_WORD = {5: "FIVE", 6: "SIX", 7: "SEVEN", 8: "EIGHT", 9: "NINE",
+                10: "TEN"}
+
+
 def test_the_comment_names_the_same_number_it_enumerates():
+    """The word is DERIVED from EXPECTED_RESETTERS, not hardcoded here.
+
+    It used to be spelled out in this assertion too, which made three places to
+    keep in step instead of two — and the failure message then blamed the
+    comment for drifting when the test itself was the stale copy.
+    """
     src = CORE.read_text(encoding="utf-8")
-    assert "SEVEN UPDATEs in this file reset a row to 'pending'" in src, (
-        "the `_step_tools` comment no longer says SEVEN; it and "
-        "EXPECTED_RESETTERS must move together")
-    assert "seven sites reset a row to 'pending'" in src, (
+    word = _NUMBER_WORD[len(EXPECTED_RESETTERS)]
+    assert f"{word} UPDATEs in this file reset a row to 'pending'" in src, (
+        f"the `_step_tools` comment no longer says {word}; it and "
+        f"EXPECTED_RESETTERS must move together")
+    assert f"{word.lower()} sites reset a row to 'pending'" in src, (
         "`_release_step_tools` repeats the count and has drifted from it")
 
 
