@@ -223,6 +223,73 @@ def test_at_the_cap_it_stops_releasing_and_spends_one_retry(sf):
         "the cap ended the whole run — it must not"
 
 
+def test_a_cancellation_never_fails_the_run_even_with_no_retries_left(sf):
+    """`retryable=True` is ANDed with the budget check — at
+    `retry_count == max_retries` `_fail_step_in_tx` fails the RUN whatever the
+    flag says. And that is an ordinary state: it is where every step waits after
+    exhausting retries, and the state operators resume runs from. Three
+    cancellations there would destroy the step's staged output and kill the run,
+    which is the loss this whole mechanism exists to prevent.
+    """
+    sf.register_graph(_graph("g", retries=2))
+    run_id = sf.create_run("g", project_id="p1")
+    sf.start_run(run_id)
+
+    def claim():
+        c = sf.claim_next_step(run_id)
+        if c is None:
+            sf.advance_run(run_id)
+            c = sf.claim_next_step(run_id)
+        return c
+
+    for i in range(2):                      # spend the budget on real failures
+        sf.fail_step(claim().token, f"real failure {i}", retryable=True)
+    spent = sf._conn.execute(
+        "SELECT retry_count, max_retries FROM skillflow_steps WHERE run_id = ? "
+        "AND step_id = 'a' ORDER BY id DESC LIMIT 1", (run_id,)).fetchone()
+    assert spent["retry_count"] == spent["max_retries"], "budget not exhausted"
+
+    for _ in range(4):                      # now the driver keeps dying
+        c = claim()
+        assert c is not None, "the step stopped being claimable"
+        assert sf.release_claim(c.token, "driver cancelled")["released"] is True
+
+    assert sf.get_run(run_id)["status"] == "running", \
+        "a cancellation killed the run"
+
+
+def test_the_release_counter_resets_when_it_is_charged_to_a_retry(sf):
+    """Left high, every LATER cancellation takes the cap branch too — one retry
+    each — so the run died on the sixth instead of surviving. Cancellations are
+    not independent: one apscheduler shutdown cancels every gathered tick, so a
+    server restart is +1 on whichever step was in flight."""
+    sf.register_graph(_graph("g"))
+    run_id = sf.create_run("g", project_id="p1")
+    sf.start_run(run_id)
+
+    def claim():
+        c = sf.claim_next_step(run_id)
+        if c is None:
+            sf.advance_run(run_id)
+            c = sf.claim_next_step(run_id)
+        return c
+
+    for _ in range(3):
+        sf.release_claim(claim().token, "driver cancelled")
+    row = sf._conn.execute(
+        "SELECT retry_count, release_count FROM skillflow_steps WHERE run_id = ? "
+        "AND step_id = 'a' ORDER BY id DESC LIMIT 1", (run_id,)).fetchone()
+    assert row["retry_count"] == 1, "the cap should cost exactly one retry"
+    assert row["release_count"] == 0, "the counter stayed high"
+
+    # The next two are free again, not one-retry-each.
+    for _ in range(2):
+        assert sf.release_claim(claim().token, "again")["released"] is True
+    assert sf._conn.execute(
+        "SELECT retry_count FROM skillflow_steps WHERE run_id = ? AND "
+        "step_id = 'a' ORDER BY id DESC LIMIT 1", (run_id,)).fetchone()[0] == 1
+
+
 def test_repinning_onto_a_version_missing_the_current_node_is_refused(sf):
     """The silent-wedge path. `claim_next_step` resolves an unknown
     `current_node` to None and rolls back; `advance_run` keeps returning the

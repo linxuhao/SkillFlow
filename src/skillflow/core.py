@@ -1307,15 +1307,23 @@ class SkillFlow:
         # which evicts this.
         pin = self._run_pin_cache.get(run_id)
         if pin is None:
+            # Read AND memoize under the same lock. `repin_run` evicts from
+            # inside its transaction, which also holds this lock, so the write
+            # must be in here too — otherwise: this thread reads v1, releases
+            # the lock, `repin_run` UPDATEs to v2 and pops a key that is not
+            # there yet, and then this thread installs the stale v1. Nothing
+            # evicts it again, because the only evictor has already run. The run
+            # executes v1 forever while the DB and the tool's return value both
+            # say v2 — the recovery reports success and does nothing.
             with self._lock:
                 row = self._conn.execute(
                     "SELECT graph_name, graph_version FROM skillflow_runs "
                     "WHERE id = ?", (run_id,)
                 ).fetchone()
-            if not row:
-                raise SkillFlowError(f"Run '{run_id}' not found")
-            pin = (row["graph_name"], row["graph_version"])
-            self._run_pin_cache[run_id] = pin
+                if not row:
+                    raise SkillFlowError(f"Run '{run_id}' not found")
+                pin = (row["graph_name"], row["graph_version"])
+                self._run_pin_cache[run_id] = pin
         return self._get_resolver(pin[0], version=pin[1])
 
     def _graph_for_run(self, run_id: str) -> PipelineGraph | None:
@@ -1616,6 +1624,10 @@ class SkillFlow:
                 ).fetchall()
             ]
             for run_id in run_ids:
+                # A deleted run must stop answering from the memo — otherwise
+                # `_get_resolver_for_run` keeps serving its pin instead of
+                # raising "Run not found", and the dict grows without bound.
+                self._run_pin_cache.pop(run_id, None)
                 conn.execute("DELETE FROM skillflow_steps WHERE run_id = ?", (run_id,))
                 conn.execute("DELETE FROM skillflow_edge_counts WHERE run_id = ?", (run_id,))
                 conn.execute("DELETE FROM skillflow_loop_state WHERE run_id = ?", (run_id,))
@@ -3350,12 +3362,22 @@ class SkillFlow:
         Retries are for a step that ran and was wrong; this is for a step that
         never got its answer heard.
 
-        Releases ARE counted, in the `release_count` COLUMN — on the
-        `MAX_CLAIM_RELEASES`-th one the step stops being released and is failed
-        RETRYABLY instead, because a driver that cannot survive one step is a
-        fault, not a hiccup, and re-running forever at full LLM cost hides it.
-        Retryably, not terminally: ending the run there would destroy the step's
-        staged output, which is the loss this method exists to prevent.
+        Releases ARE counted, in the `release_count` COLUMN — every
+        `MAX_CLAIM_RELEASES`-th one converts into a single retry instead of a
+        release (failed RETRYABLY, then the counter resets), because a driver
+        that cannot survive one step is a fault, not a hiccup, and re-running
+        forever at full LLM cost hides it. So N cancellations cost
+        N // MAX_CLAIM_RELEASES retries, and the step's own `max_retries` — not
+        this counter — decides when it has had enough.
+
+        **A cancellation never fails a run.** When there is no retry budget left
+        to charge the releases to, this warns and releases anyway rather than
+        converting them into the terminal failure `_fail_step_in_tx` would
+        produce. Losing a run because a client disconnected is strictly worse
+        than re-running an expensive step, and the case is not exotic: a step at
+        `retry_count == max_retries` is where every step waits after exhausting
+        retries, which is precisely the state operators resume runs from.
+
         A column rather than a key in `inputs_json`: a re-claim
         rebuilds that dict from freshly resolved context and preserves only
         `_error`/`_validation_error`/`_feedback`, so a counter kept there is
@@ -3376,7 +3398,32 @@ class SkillFlow:
                 return {"released": False, "releases": 0, "failed": False,
                         "note": f"step is {row['status'] if row else 'missing'}"}
             releases = (row["release_count"] or 0) + 1
-            if releases >= self.MAX_CLAIM_RELEASES:
+            # Spending a retry is only safe while there is budget to spend.
+            # `_fail_step_in_tx` reads `if retryable and retry_count <
+            # max_retries` — at the cap the flag is ignored and the RUN is
+            # failed. A step sitting at `retry_count == max_retries` is an
+            # ordinary state (it is where every step waits after exhausting
+            # retries, and `restore_retry_budget` exists because runs are
+            # resumed from exactly there), so without this check three
+            # cancellations of such a step destroy its staged output and kill
+            # the run — the outcome this whole method exists to prevent,
+            # reached by a longer road for the second time.
+            budget = conn.execute(
+                "SELECT retry_count, max_retries FROM skillflow_steps "
+                "WHERE id = ?", (token.step_instance_id,)).fetchone()
+            can_spend = bool(budget) and budget["retry_count"] < budget["max_retries"]
+            if releases >= self.MAX_CLAIM_RELEASES and not can_spend:
+                # Nothing left to convert the releases into. Release anyway and
+                # say so: re-running a step is expensive and worth complaining
+                # about, but a client that disconnected is never a reason to
+                # throw away finished work.
+                logging.getLogger("skillflow").warning(
+                    "step '%s' (instance %s) has been released by its executor "
+                    "%s times and has no retry budget left to charge it to — "
+                    "releasing again. Something is cancelling this step's "
+                    "driver repeatedly; each release re-runs the step in full.",
+                    token.step_id, token.step_instance_id, releases)
+            elif releases >= self.MAX_CLAIM_RELEASES:
                 # `retryable=True` — hand it to the ORDINARY failure path, do not
                 # end it here. `retryable=False` goes straight to the
                 # retries-exhausted branch, which with no `on_error` transition
@@ -3386,13 +3433,22 @@ class SkillFlow:
                 # prevent, arrived at by a longer road. Spending ONE retry is the
                 # right price for "your driver keeps dying"; the step's own
                 # max_retries then decides, with the run's error handling intact.
-                conn.execute(
-                    "UPDATE skillflow_steps SET release_count = ? WHERE id = ?",
-                    (releases, token.step_instance_id))
                 self._fail_step_in_tx(
                     conn, token,
                     f"executor released this claim {releases} times without "
                     f"completing it (last: {reason})", retryable=True)
+                # Reset. Past the cap the retry budget owns the accounting, and
+                # leaving the counter high made every LATER cancellation take
+                # this branch too — one retry each, so the run died on the sixth
+                # cancellation with its staged output destroyed, which is the
+                # outcome this branch was rewritten to avoid. It matters because
+                # cancellations are not rare or independent: one apscheduler
+                # shutdown cancels every gathered tick, so each server restart
+                # adds one to whichever step was in flight — and the long steps
+                # are exactly the ones in flight at restart time.
+                conn.execute(
+                    "UPDATE skillflow_steps SET release_count = 0 WHERE id = ?",
+                    (token.step_instance_id,))
                 return {"released": False, "releases": releases, "failed": True}
             conn.execute(
                 """
