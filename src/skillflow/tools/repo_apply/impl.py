@@ -14,8 +14,17 @@ def repo_apply(source_dir: str, *, workspace_root: str = "",
         # Never fall back to the process CWD. `Path("").resolve()` is that CWD,
         # which for a hosted engine is the server's own checkout — this function
         # then copies step output into it and runs `git add -A` + `git commit`
-        # below. A run that owns no repository is handed no project_root at all
-        # (core.py), and this is what that omission has to hit.
+        # below.
+        #
+        # This guard catches the EMPTY value, not every wrong one. When a
+        # repo-less run reaches a tool step, core.py omits project_root (it
+        # setdefault()s nothing), so a tool that defaults it to "" lands here. A
+        # config that writes `project_root: "$PROJECT_ROOT"` in its tool_params
+        # is NOT covered: WorkspaceManager.resolve_variables expands that token
+        # to `projects_base/<project_id>` without asking the code-path resolver,
+        # and the engine's fill sites only act when the key is absent — so the
+        # tool receives an absolute, fabricated path that passes `is_absolute()`
+        # and commits into a directory the run never claimed to own.
         return {"applied": False, "files": [],
                 "error": f"repo_apply: project_root must be an absolute path "
                          f"(got {project_root!r}) — refusing to resolve against "

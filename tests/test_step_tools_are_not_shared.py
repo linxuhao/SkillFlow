@@ -156,31 +156,81 @@ def test_the_read_trio_is_never_left_in_the_shared_loader(sf, tmp_path):
     assert sf._step_scoped_names >= {"read", "search", "list"}
 
 
-# ── Release is a compare-and-delete, not a blind pop ──────────────────────
+# ── Release is a compare-and-delete on the STEP INSTANCE ──────────────────
 
-def test_a_stale_executor_cannot_release_its_replacements_tools(sf, tmp_path):
-    """`(run_id, step_id)` names the STEP, not the claim.
+def _reenter(sf, run_id: str, step_id: str):
+    """End the current instance of *step_id* the way a confirm does, then claim
+    the next one — the loop-body / Green-Red re-run shape."""
+    with sf._tx() as conn:
+        conn.execute(
+            "UPDATE skillflow_steps SET status = 'completed' "
+            "WHERE run_id = ? AND step_id = ? AND status = 'claimed'",
+            (run_id, step_id))
+    return sf.claim_next_step(run_id)
 
-    `_assert_epoch` narrows the window in which a reclaimed executor can reach
-    the release, but assert and release are separate operations — a stall
-    between them lets the reaper hand the step to a replacement whose entry sits
-    under the same key. A blind pop would delete it, and the replacement would
-    run its whole step with no read surface: a silent degrade, which is the
-    exact failure shape this area exists to stop producing.
+
+def test_a_late_release_cannot_blind_the_next_instance_of_the_same_step(
+        sf, tmp_path):
+    """The collision the release guard exists for, with the real values.
+
+    A step that runs more than once in a run gets a FRESH `skillflow_steps` row
+    per entry, and that INSERT does not list `claim_epoch` — it defaults to 0 and
+    the first claim makes it 1. So instance N and instance N+1 both carry
+    `claim_epoch == 1` and an epoch comparison cannot tell them apart, in exactly
+    the loop-body / Green-Red-rerun case the guard was written for.
+
+    `_assert_epoch` does not cover it either: it re-reads the ZOMBIE's OWN row,
+    which nothing resets, so a token for a finished instance passes forever.
+
+    Sequence: worker A finishes instance 1, the step re-enters as instance 2 and
+    worker B is live; A's watchdog then fires a late `fail_step`. Compared on the
+    epoch, that release deletes B's entry and B reads nothing for the rest of its
+    step while believing it read everything.
     """
     _repo(tmp_path, "proj_a", "ONLY_IN_A.txt")
     sf.register_graph(_graph("ga"))
-    run_a, claimed = _claim(sf, "ga", "proj_a")
-    live_epoch = claimed.token.claim_epoch
+    run_a, first = _claim(sf, "ga", "proj_a")
+    second = _reenter(sf, run_a, "review")
+    assert second is not None, "the step did not re-enter; this proves nothing"
 
-    # A stale claim generation tries to give the tools back.
-    sf._release_step_tools(run_a, "review", live_epoch - 1)
+    a, b = first.token, second.token
+    assert a.step_instance_id != b.step_instance_id, \
+        "not two instances; the test is not exercising the collision"
+    assert a.claim_epoch == b.claim_epoch == 1, \
+        "the epochs no longer collide — re-derive what identifies a claim"
+
+    # Worker A's watchdog, one instance too late. `_assert_epoch` lets it in.
+    sf.fail_step(a, "worker A's watchdog fired after the step moved on")
+
     assert "ONLY_IN_A.txt" in _listing(sf, run_a), \
-        "a stale epoch released the live claim's tools"
+        "a finished instance's release took the live instance's read surface"
 
-    # The owner's own release still works.
-    sf._release_step_tools(run_a, "review", live_epoch)
+
+def test_the_owning_instance_can_still_release_its_own_tools(sf, tmp_path):
+    """The guard must not become a refusal to release at all."""
+    _repo(tmp_path, "proj_a", "ONLY_IN_A.txt")
+    sf.register_graph(_graph("ga"))
+    run_a, claimed = _claim(sf, "ga", "proj_a")
+
+    sf._release_step_tools(run_a, "review", claimed.token.step_instance_id)
     assert "ONLY_IN_A.txt" not in _listing(sf, run_a)
+
+
+def test_a_token_with_no_instance_id_releases_nothing(sf, tmp_path):
+    """A hand-built token — the shape `_epoch_holds` deliberately admits — cannot
+    say which claim it is. The two mistakes are not symmetric: releasing the
+    wrong entry blinds a running step, keeping one costs a dict entry that the
+    next claim of that step overwrites and the cap bounds. So it keeps it.
+    """
+    _repo(tmp_path, "proj_a", "ONLY_IN_A.txt")
+    sf.register_graph(_graph("ga"))
+    run_a, _ = _claim(sf, "ga", "proj_a")
+
+    sf._release_step_tools(run_a, "review", 0)
+    sf._release_step_tools(run_a, "review", None)
+
+    assert "ONLY_IN_A.txt" in _listing(sf, run_a), \
+        "an unidentifiable token released a live claim's tools"
 
 
 # ── The loader keeps only NAMES, and only the right ones ──────────────────
@@ -262,13 +312,104 @@ def test_the_cap_measures_idleness_not_claim_age(sf, monkeypatch):
         "the entry that just called a read tool was evicted first"
 
 
-def test_a_claim_whose_owner_is_gone_gives_its_tools_back(sf, tmp_path):
-    """Where an abandoned claim is KNOWN dead, reclaiming the entry is free.
+def test_a_step_that_writes_instead_of_reading_still_counts_as_alive(
+        sf, monkeypatch):
+    """Read-tool traffic alone is not a liveness signal.
 
-    The claim is re-stamped with an identity `owner_is_dead` reports True for:
-    this process's own boot id and pid, with a `start=` marker that cannot match
-    /proc — the recycled-pid case. Without a dead owner the reaper falls to the
-    lease, which is a different branch (see the test below).
+    `recover_stale_claims` measures `updated_at`, heartbeated by `_heartbeat_step`
+    from `trace()` on EVERY worker action. A write-mode step reads its sources
+    once and then spends fifteen minutes on create/edit turns: alive to the
+    reaper, and — if the eviction stamp only moved on read/search/list — fully
+    idle to the evictor, which would then evict a running step's read surface.
+    Two clocks claiming to be one.
+    """
+    monkeypatch.setattr(type(sf), "_STEP_TOOL_CAP", 2)
+    for i in range(3):
+        sf._set_step_tools(f"run{i}", "s", {"list": lambda: None}, i + 1)
+    for k, (inst, fns, _) in list(sf._step_tools.items()):
+        sf._step_tools[k] = (inst, fns, 0.0)
+
+    # run0 has not read anything since its claim — it has been WRITING, and every
+    # traced action heartbeats it.
+    sf._heartbeat_step("run0", "s")
+
+    sf._set_step_tools("run3", "s", {"list": lambda: None}, 4)
+
+    assert ("run0", "s") in sf._step_tools, \
+        "a step that was writing (not reading) lost its read surface"
+
+
+def test_the_evictor_honours_the_threshold_the_host_actually_reaps_with(sf):
+    """There is no single "the stale threshold": the constructor takes one, and
+    `recover_stale_claims` takes another as an argument. An entry idle for less
+    than the number actually in force is not abandoned, whichever of the two is
+    larger — so the evictor takes the max.
+    """
+    assert sf._stale_threshold == 300          # the fixture's constructor value
+    sf.recover_stale_claims(stale_threshold_seconds=4000)
+
+    sf._set_step_tools("run0", "s", {"list": lambda: None}, 1)
+    k = ("run0", "s")
+    inst, fns, _ = sf._step_tools[k]
+    # Idle for an hour: past the constructor's 300s, well inside the host's 4000.
+    sf._step_tools[k] = (inst, fns, sf._step_tools[k][2] - 3600)
+
+    object.__setattr__(sf, "_STEP_TOOL_CAP", 0)
+    over = None
+    with sf._step_tools_lock:
+        over = sf._evict_step_tools_locked()
+
+    assert k in sf._step_tools, \
+        "evicted against the constructor's threshold while the host reaps at 4000s"
+    assert over == 1, "an over-cap map must be reported so the caller can log it"
+
+
+def test_the_over_cap_warning_is_not_emitted_under_the_map_lock(sf):
+    """`_step_tools_lock` is documented as held across dict operations only, and
+    it is taken on the hot path of every read-tool call. Logging is I/O behind a
+    handler lock of its own; emitting under this one couples one step's read call
+    to another's log flush — and makes the documented invariant false.
+    """
+    import logging as _logging
+
+    under_lock = []
+
+    class _Probe(_logging.Handler):
+        def emit(self, record):
+            got = sf._step_tools_lock.acquire(blocking=False)
+            under_lock.append(not got)
+            if got:
+                sf._step_tools_lock.release()
+
+    probe = _Probe()
+    logger = _logging.getLogger("skillflow")
+    logger.addHandler(probe)
+    try:
+        object.__setattr__(sf, "_STEP_TOOL_CAP", 0)
+        sf._set_step_tools("run0", "s", {"list": lambda: None}, 1)
+    finally:
+        logger.removeHandler(probe)
+
+    assert under_lock, "no warning was emitted; this test would prove nothing"
+    assert not any(under_lock), "the over-cap warning was logged under the lock"
+
+
+def test_the_reaper_never_takes_a_step_its_read_surface(sf, tmp_path):
+    """The reaper must not touch `_step_tools`, on EITHER branch.
+
+    It used to drop the entry when `owner_is_dead` said True, justified by "the
+    owner process is dead, so nothing is left to call these closures". That
+    reason does not hold. `_step_tools` is in-memory and per SkillFlow instance,
+    so an entry exists only for a claim THIS process made — while the reaper
+    scans every claimed row in a shared DB, including rows other processes own.
+    A claim whose owner the OS reports GONE was therefore made by some other
+    process; ours is demonstrably alive, since it is running the reaper. The
+    only entry a keyless pop could reach is one belonging to a claim of ours,
+    and taking that is precisely the silent degrade this area exists to prevent.
+
+    The identity below re-stamps OUR OWN live claim as dead (this process's boot
+    id and pid, with a `start=` that cannot match /proc — the recycled-pid case),
+    which is the one construction that puts a live entry under a dead-owner row.
     """
     import os
     from skillflow.identity import _self_identity, owner_is_dead
@@ -292,7 +433,8 @@ def test_a_claim_whose_owner_is_gone_gives_its_tools_back(sf, tmp_path):
     reaped = sf.recover_stale_claims(stale_threshold_seconds=1)
 
     assert reaped, "the reaper did not reclaim; this test would prove nothing"
-    assert (run_a, "review") not in sf._step_tools
+    assert "ONLY_IN_A.txt" in _listing(sf, run_a), \
+        "the reaper stripped a step-owned read surface out of this process's map"
 
 
 def test_a_lease_reaped_claim_keeps_its_read_surface(sf, tmp_path):

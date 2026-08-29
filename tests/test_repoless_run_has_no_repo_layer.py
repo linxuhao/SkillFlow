@@ -296,3 +296,96 @@ def test_the_context_control_proves_a_real_repo_is_still_served(tmp_path):
     claimed = sf.claim_next_step(run_id)
 
     assert "IN THE REAL REPO" in str(claimed.inputs.get("_resolved_context", {}))
+
+
+def test_a_tool_that_requires_project_root_fails_routably_not_by_crashing(tmp_path):
+    """Omitting `project_root` must not turn into an unhandled TypeError.
+
+    `git_sync_pre(project_root: str)` declares it as a REQUIRED positional. On a
+    repo-less run the engine deliberately supplies nothing for it, and
+    `result = fn(**kwargs)` in the tool-step path is unguarded — the surrounding
+    `try` covers only the signature inspection. The TypeError escapes
+    `claim_next_step`, whose handler reopens the step to `pending`, so the next
+    tick raises the identical TypeError: the run neither advances nor fails. With
+    a poller that advances one project per tick, that stalls every other project
+    too.
+
+    (The engine's pop is CONDITIONAL — `if not kwargs.get("project_root")` — so a
+    config whose tool_params name `$PROJECT_ROOT` is unaffected either way; this
+    is about the step that supplies nothing.)
+    """
+    sf = _engine(tmp_path, resolver=lambda pid: False)
+    sf.register_graph(PipelineGraph(
+        name="syncing", begin="sync",
+        steps=[
+            StepNode(id="sync", step_type="tool", tool_name="git_sync_pre",
+                     transitions=[Transition(to="done")]),
+            StepNode(id="done", step_type="gate", transitions=[]),
+        ],
+        end_conditions=EndConditions(combinator="or", conditions=[
+            EndCondition(type="node_reached", node="done", result="completed")])))
+
+    run_id = sf.create_run("syncing", project_id="p1")
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+    sf.claim_next_step(run_id)          # must not raise
+
+    with sf._tx() as conn:
+        row = conn.execute(
+            "SELECT status, outputs_json FROM skillflow_steps "
+            "WHERE run_id = ? AND step_id = 'sync' ORDER BY id DESC LIMIT 1",
+            (run_id,)).fetchone()
+
+    assert row is not None, "the tool step never ran; this test proves nothing"
+    assert row["status"] != "pending", \
+        "the step was reopened — the next tick will raise the same TypeError"
+    out = sf._deserialize(row["outputs_json"])
+    assert "project_root" in (out.get("error") or ""), out
+
+
+def test_the_project_root_token_still_fabricates_a_path_on_a_repoless_run(tmp_path):
+    """A characterization test for the hole the repo-tool guards do NOT close.
+
+    `repo_apply`'s guard rejects an empty/relative `project_root`, and its
+    comment used to justify that with "a run that owns no repository is handed
+    no project_root at all". That is only true of the values the ENGINE fills in.
+    `WorkspaceManager.resolve_variables` substitutes `$PROJECT_ROOT` →
+    `projects_base/<project_id>` without consulting the code-path resolver, and
+    both engine fill sites act only when the key is ABSENT — so a config that
+    writes the token into its tool_params hands the tool an absolute, fabricated
+    path that sails through `is_absolute()`.
+
+    Pinned rather than fixed: changing that substitution is a separate decision
+    with its own blast radius. This test exists so the next reader learns the
+    hole from the suite instead of from a commit into the wrong repository.
+    """
+    seen = {}
+
+    def probe(**kw):
+        seen.update(kw)
+        return {"passed": True}
+
+    sf = _engine(tmp_path, resolver=lambda pid: False)
+    sf._tool_loader.register_dynamic_tool(
+        "probe", {"name": "probe", "description": "records its kwargs"}, probe)
+    sf.register_graph(PipelineGraph(
+        name="tokened", begin="t",
+        steps=[
+            StepNode(id="t", step_type="tool", tool_name="probe",
+                     tool_params={"project_root": "$PROJECT_ROOT"},
+                     transitions=[Transition(to="done")]),
+            StepNode(id="done", step_type="gate", transitions=[]),
+        ],
+        end_conditions=EndConditions(combinator="or", conditions=[
+            EndCondition(type="node_reached", node="done", result="completed")])))
+
+    run_id = sf.create_run("tokened", project_id="p1")
+    sf.start_run(run_id)
+    sf.advance_run(run_id)
+
+    from pathlib import Path as _P
+    got = seen.get("project_root")
+    assert got and _P(got).is_absolute(), \
+        f"the token no longer fabricates a path (got {got!r}) — the repo tools' " \
+        f"comments say it does; update them together"
+    assert _P(got) == (tmp_path / "projects" / "p1")
