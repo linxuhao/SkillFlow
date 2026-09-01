@@ -535,9 +535,10 @@ class TestDirectoryBundleOrder:
         names = self._names(self._bundle(
             workspace, design,
             ["99_never_written.md", "90_decisions.md", "gone/away.md"]))
-        assert names[0] == "90_decisions.md"          # the real one still leads
-        assert "99_never_written.md" not in names     # and nothing invented
-        assert len(names) == 4                        # no file lost either
+        assert names[0] == "90_decisions.md"   # the real one still leads
+        # and the ghosts do not displace anything: the rest keeps sorted order
+        assert names[1:] == ["00_roadmap.md", "20_content.md", "sub/notes.md"]
+        assert len(names) == 4                 # no file lost either
 
     def test_every_name_missing_falls_back_to_sorted_order(self, workspace, design):
         assert self._names(self._bundle(workspace, design, ["nope.md"])) == [
@@ -562,3 +563,69 @@ class TestDirectoryBundleOrder:
         with pytest.raises(ValueError, match="invalid order"):
             _normalize_context_spec(
                 {"from": "repository", "path": "design/", "order": 7})
+
+    def test_a_missing_name_is_logged_not_swallowed(self, workspace, design, caplog):
+        # Load-bearing: the whole justification for not raising is that the
+        # miss is still VISIBLE. An ordering feature that quietly does nothing
+        # is the shape it exists to fix.
+        import logging
+        with caplog.at_level(logging.WARNING, logger="skillflow.context"):
+            self._bundle(workspace, design, ["99_never_written.md"])
+        assert any("99_never_written.md" in r.getMessage()
+                   for r in caplog.records), "the missing name was never logged"
+
+    def test_a_dotfile_can_be_ordered(self, workspace, tmp_path):
+        # `.lstrip("./")` takes a CHARACTER SET, so it ate the leading dot and
+        # ".env.md" silently matched nothing.
+        d = tmp_path / "repo2" / "design"
+        d.mkdir(parents=True)
+        for n in (".env.md", "aaa.md"):
+            (d / n).write_text("x", encoding="utf-8")
+        from skillflow.graph import _normalize_context_spec
+        resolver = ContextResolver(workspace, code_root=tmp_path / "repo2")
+        content = list(resolver.resolve(
+            [_normalize_context_spec({"from": "repository", "path": "design/",
+                                      "order": [".env.md"]})],
+            current_config="dpe_default").values())[0]
+        assert self._names(content)[0] == ".env.md"
+
+    def test_a_leading_dot_slash_is_still_stripped(self, workspace, design):
+        assert self._names(self._bundle(
+            workspace, design, ["./90_decisions.md"]))[0] == "90_decisions.md"
+
+    @pytest.mark.parametrize("bad", [0, False, 0.0, {}, 7, 3.5, {"a": 1}])
+    def test_every_non_list_order_fails_at_registration(self, bad):
+        # `... or []` ran before the isinstance check, so every FALSY non-list
+        # registered clean as "no order" while `7` raised.
+        from skillflow.graph import _normalize_context_spec
+        with pytest.raises(ValueError, match="invalid order"):
+            _normalize_context_spec(
+                {"from": "repository", "path": "design/", "order": bad})
+
+    def test_a_structured_entry_fails_rather_than_stringifying(self):
+        from skillflow.graph import _normalize_context_spec
+        with pytest.raises(ValueError, match="order entries must be file names"):
+            _normalize_context_spec({"from": "repository", "path": "d/",
+                                     "order": [{"a": 1}]})
+
+    @pytest.mark.parametrize("spec", [
+        {"step": "1"}, {"config": "other", "output": "x.md"},
+        {"tool": "dir_tree"}, {"feedback_of": "3"}])
+    def test_order_on_a_source_that_cannot_use_it_fails_loudly(self, spec):
+        # It used to be normalized onto every source type and honoured in one
+        # place — accepted at registration, inert at resolve, no warning.
+        from skillflow.graph import _normalize_context_spec
+        with pytest.raises(ValueError, match="only supported on"):
+            _normalize_context_spec({**spec, "order": ["a.md"]})
+
+    def test_a_workspace_directory_can_be_ordered_too(self, workspace):
+        d = workspace / "notes"
+        d.mkdir(parents=True, exist_ok=True)
+        for n in ("a.md", "z.md"):
+            (d / n).write_text("x", encoding="utf-8")
+        from skillflow.graph import _normalize_context_spec
+        content = list(ContextResolver(workspace).resolve(
+            [_normalize_context_spec({"from": "workspace", "path": "notes/",
+                                      "order": ["z.md"]})],
+            current_config="dpe_default").values())[0]
+        assert self._names(content) == ["z.md", "a.md"]

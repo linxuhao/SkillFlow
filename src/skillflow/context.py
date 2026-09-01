@@ -155,7 +155,13 @@ def _apply_order(files: list, root, order: list) -> list:
     by_rel = {f.relative_to(root).as_posix(): f for f in files}
     first, seen, missing = [], set(), []
     for name in order:
-        key = str(name).strip().lstrip("./")
+        key = str(name).strip().replace("\\", "/")
+        # NOT lstrip("./") — lstrip takes a CHARACTER SET, so it ate the
+        # leading dot of any dotfile: ".env.md" became "env.md", matched
+        # nothing, and warned as missing. A silent no-op inside the one
+        # feature whose whole point is never to silently do nothing.
+        while key.startswith("./"):
+            key = key[2:]
         f = by_rel.get(key)
         if f is None:
             missing.append(name)
@@ -494,15 +500,17 @@ class ContextResolver:
                 return "", ""
         elif abs_path.is_dir():
             # Directory: concatenate all files (like step dir)
+            files = [f for f in sorted(abs_path.rglob("*"))
+                     if f.is_file() and f.name != ".gitkeep"]
+            files = _apply_order(files, abs_path, source.get("order") or [])
             parts: list[str] = []
-            for f in sorted(abs_path.rglob("*")):
-                if f.is_file() and f.name != ".gitkeep":
-                    try:
-                        content = f.read_text(encoding="utf-8", errors="replace")
-                    except Exception:
-                        continue
-                    rel = f.relative_to(abs_path)
-                    parts.append(f"{_FILE_MARKER}{rel}\n{content}")
+            for f in files:
+                try:
+                    content = f.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+                rel = f.relative_to(abs_path)
+                parts.append(f"{_FILE_MARKER}{rel}\n{content}")
             if not parts:
                 return "", ""
             return f"Workspace — {rel_path}", "\n\n".join(parts)

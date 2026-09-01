@@ -1023,14 +1023,37 @@ def _normalize_context_spec(spec: dict) -> dict:
     # because a doc was renamed would make the feature too sharp to use. It is
     # logged, though — silently ignoring it would be the same "passes over an
     # absence" shape this ordering exists to fix.
-    raw_order = s.get("order", spec.get("order", [])) or []
+    raw_order = s.get("order", spec.get("order", []))
+    if raw_order is None:
+        raw_order = []
     if isinstance(raw_order, str):
         raw_order = [raw_order]
+    # The type check comes BEFORE any `or []` fallback on purpose: writing
+    # `raw_order = ... or []` first let every FALSY non-list through — `order: 0`,
+    # `order: false`, `order: {}` all normalized to "no order" and registered
+    # clean, while `order: 7` raised. `order: false` is a plausible way to try to
+    # switch the feature off, and it must not look like it worked.
     if not isinstance(raw_order, (list, tuple)):
         raise ValueError(
             f"context source {s.get('path') or s}: invalid order "
             f"{raw_order!r} — must be a list of relative file names")
-    s["order"] = [str(x) for x in raw_order]
+    bad = [x for x in raw_order if not isinstance(x, (str, int, float))]
+    if bad:
+        raise ValueError(
+            f"context source {s.get('path') or s}: order entries must be file "
+            f"names, got {bad!r} — a dict or list there stringifies into a name "
+            f"that can never match, i.e. a silent no-op")
+    s["order"] = [str(x).strip() for x in raw_order if str(x).strip()]
+    # `order` is only consumed by the DIRECTORY branch of a `from:` source.
+    # Normalizing it onto every source type and honouring it in one place makes
+    # the schema advertise a foot-gun: `order` on a `{step: ...}` bundle — the
+    # other multi-file bundle a host truncates — was accepted and did nothing.
+    # Fail at registration instead, where a typo is cheap to find.
+    if s["order"] and s["source_type"] not in ("repository", "workspace"):
+        raise ValueError(
+            f"context source {s.get('step_id') or s.get('config_name') or s}: "
+            f"order is only supported on a `from: repository` / `from: workspace` "
+            f"directory source, not on a '{s['source_type']}' source")
     s.setdefault("step_id", "")
     s.setdefault("config_name", "")
     # `required: true` — the step must fail (RequiredContextMissing) rather than
