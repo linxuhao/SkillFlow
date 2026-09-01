@@ -482,3 +482,83 @@ class TestADirectorySourceIsBounded:
             current_config="dpe_default").values())[0]
         assert '{"id": "b"}' in content
         assert "�" not in content
+
+class TestDirectoryBundleOrder:
+    """`order:` decides who survives the host's prompt cut.
+
+    An inline directory bundle is cut from the END by the reading host's budget,
+    so file order IS priority order. Before this, priority was the alphabet:
+    AItelier's design/ (4805 lines against a 1484-line budget, measured
+    2026-09-01) handed its planners 20_content.md whole because it sorts early
+    and dropped 90_decisions.md — every binding ruling — because it sorts late.
+    """
+
+    def _bundle(self, workspace, code, order=None):
+        from skillflow.graph import _normalize_context_spec
+        spec = {"from": "repository", "path": "design/"}
+        if order is not None:
+            spec["order"] = order
+        resolver = ContextResolver(workspace, code_root=code)
+        result = resolver.resolve([_normalize_context_spec(spec)],
+                                  current_config="dpe_default")
+        return list(result.values())[0]
+
+    def _names(self, bundle):
+        return [ln[len("### FILE: "):].strip()
+                for ln in bundle.splitlines() if ln.startswith("### FILE: ")]
+
+    @pytest.fixture
+    def design(self, tmp_path):
+        d = tmp_path / "repo" / "design"
+        d.mkdir(parents=True)
+        for n in ("00_roadmap.md", "20_content.md", "90_decisions.md"):
+            (d / n).write_text(f"body of {n}", encoding="utf-8")
+        (d / "sub").mkdir()
+        (d / "sub" / "notes.md").write_text("nested", encoding="utf-8")
+        return tmp_path / "repo"
+
+    def test_without_order_the_alphabet_still_decides(self, workspace, design):
+        # regression guard: the default must not move
+        assert self._names(self._bundle(workspace, design)) == [
+            "00_roadmap.md", "20_content.md", "90_decisions.md", "sub/notes.md"]
+
+    def test_listed_names_come_first_in_the_given_order(self, workspace, design):
+        names = self._names(self._bundle(
+            workspace, design, ["90_decisions.md", "00_roadmap.md"]))
+        assert names[:2] == ["90_decisions.md", "00_roadmap.md"]
+        # everything unlisted keeps sorted order behind them
+        assert names[2:] == ["20_content.md", "sub/notes.md"]
+
+    def test_a_name_that_does_not_exist_is_ignored_not_raised(self, workspace, design):
+        # The list lives in a config while the directory keeps changing; a doc
+        # renamed or not yet written must never fail the run.
+        names = self._names(self._bundle(
+            workspace, design,
+            ["99_never_written.md", "90_decisions.md", "gone/away.md"]))
+        assert names[0] == "90_decisions.md"          # the real one still leads
+        assert "99_never_written.md" not in names     # and nothing invented
+        assert len(names) == 4                        # no file lost either
+
+    def test_every_name_missing_falls_back_to_sorted_order(self, workspace, design):
+        assert self._names(self._bundle(workspace, design, ["nope.md"])) == [
+            "00_roadmap.md", "20_content.md", "90_decisions.md", "sub/notes.md"]
+
+    def test_a_nested_path_can_be_ordered(self, workspace, design):
+        assert self._names(self._bundle(
+            workspace, design, ["sub/notes.md"]))[0] == "sub/notes.md"
+
+    def test_a_repeated_name_is_not_duplicated(self, workspace, design):
+        names = self._names(self._bundle(
+            workspace, design, ["90_decisions.md", "90_decisions.md"]))
+        assert names.count("90_decisions.md") == 1
+        assert len(names) == 4
+
+    def test_a_bare_string_is_accepted_as_one_name(self, workspace, design):
+        assert self._names(self._bundle(
+            workspace, design, "90_decisions.md"))[0] == "90_decisions.md"
+
+    def test_a_non_list_order_fails_at_registration(self):
+        from skillflow.graph import _normalize_context_spec
+        with pytest.raises(ValueError, match="invalid order"):
+            _normalize_context_spec(
+                {"from": "repository", "path": "design/", "order": 7})

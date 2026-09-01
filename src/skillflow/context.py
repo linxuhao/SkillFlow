@@ -132,6 +132,45 @@ def _is_binary(path) -> bool:
     return nontext / len(sample) > 0.30
 
 
+
+def _apply_order(files: list, root, order: list) -> list:
+    """Put the names in ``order`` first, in that order; the rest keep sorted order.
+
+    An inline directory bundle is cut from the END by the host's prompt budget,
+    so the file order IS the priority order. Without this the priority is the
+    alphabet, which encodes nothing: AItelier's design/ handed its planners the
+    907-line content catalogue whole (sorts early) and dropped the 919-line
+    decisions record entirely (sorts late), measured 2026-09-01.
+
+    Names are matched against each file's path relative to ``root``, in posix
+    form, so both "90_decisions.md" and "sub/dir/notes.md" work.
+
+    A listed name that matches nothing is skipped, never raised: the list lives
+    in a config while the directory keeps changing, and a renamed doc must not
+    fail the run. It IS logged — an ordering feature that quietly does nothing
+    is the same shape as the truncation it exists to steer.
+    """
+    if not order:
+        return files
+    by_rel = {f.relative_to(root).as_posix(): f for f in files}
+    first, seen, missing = [], set(), []
+    for name in order:
+        key = str(name).strip().lstrip("./")
+        f = by_rel.get(key)
+        if f is None:
+            missing.append(name)
+            continue
+        if key not in seen:
+            seen.add(key)
+            first.append(f)
+    if missing:
+        logging.getLogger("skillflow.context").warning(
+            "context source order lists %d name(s) not present under %s: %s "
+            "— ignored, the remaining order still applies",
+            len(missing), root, ", ".join(str(m) for m in missing))
+    return first + [f for f in files
+                    if f.relative_to(root).as_posix() not in seen]
+
 class ContextResolver:
     """Resolves context sources into assembled content."""
 
@@ -519,18 +558,18 @@ class ContextResolver:
             except Exception:
                 return "", ""
         elif abs_path.is_dir():
+            files = [f for f in sorted(abs_path.rglob("*"))
+                     if f.is_file() and f.name != ".gitkeep"
+                     and f.suffix not in (".pyc", ".pyo", ".so", ".o", ".bin")]
+            files = _apply_order(files, abs_path, source.get("order") or [])
             parts: list[str] = []
-            for f in sorted(abs_path.rglob("*")):
-                if f.is_file() and f.name != ".gitkeep":
-                    # Skip binary-looking files
-                    if f.suffix in (".pyc", ".pyo", ".so", ".o", ".bin"):
-                        continue
-                    try:
-                        content = f.read_text(encoding="utf-8", errors="replace")
-                    except Exception:
-                        continue
-                    rel = f.relative_to(abs_path)
-                    parts.append(f"{_FILE_MARKER}{rel}\n{content}")
+            for f in files:
+                try:
+                    content = f.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+                rel = f.relative_to(abs_path)
+                parts.append(f"{_FILE_MARKER}{rel}\n{content}")
             if not parts:
                 return "", ""
             return f"Repository — {rel_path}", "\n\n".join(parts)

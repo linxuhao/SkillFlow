@@ -950,6 +950,8 @@ def _normalize_context_spec(spec: dict) -> dict:
         {config: "other", step: "s", output: "x.md"}  → specific step
         {from: "workspace", path: "project/brief.md"}
         {from: "repository", path: "src/", mode: "tool"}
+        {from: "repository", path: "design/",
+         order: ["00_roadmap.md", "90_decisions.md"]}
         {tool: "dir_tree"}                 → dynamic tool call (inline only)
 
     ``scope`` (loop fan-out reads): a loop-body AGENT step's output is stored
@@ -1006,6 +1008,29 @@ def _normalize_context_spec(spec: dict) -> dict:
 
     s.setdefault("files", [])
     s.setdefault("path", "")
+    # `order` — for a DIRECTORY source, the relative names that should come
+    # first, in this order; everything unlisted follows in the usual sorted
+    # order. Only meaningful for an inline directory bundle, where a host's
+    # prompt budget cuts the bundle from the end: without it the survivors are
+    # decided by FILENAME, which is not a priority. Measured on AItelier's
+    # design/ 2026-09-01 — 4805 lines against a 1484-line budget, so
+    # 20_content.md (907 lines) was whole because it sorts early while
+    # 90_decisions.md (919 lines, every binding ruling) was dropped whole
+    # because it sorts late.
+    #
+    # A name that does not exist is NOT an error: the order list is written
+    # once in a config while the directory keeps changing, and failing a run
+    # because a doc was renamed would make the feature too sharp to use. It is
+    # logged, though — silently ignoring it would be the same "passes over an
+    # absence" shape this ordering exists to fix.
+    raw_order = s.get("order", spec.get("order", [])) or []
+    if isinstance(raw_order, str):
+        raw_order = [raw_order]
+    if not isinstance(raw_order, (list, tuple)):
+        raise ValueError(
+            f"context source {s.get('path') or s}: invalid order "
+            f"{raw_order!r} — must be a list of relative file names")
+    s["order"] = [str(x) for x in raw_order]
     s.setdefault("step_id", "")
     s.setdefault("config_name", "")
     # `required: true` — the step must fail (RequiredContextMissing) rather than
