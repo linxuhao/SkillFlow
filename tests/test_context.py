@@ -629,3 +629,48 @@ class TestDirectoryBundleOrder:
                                       "order": ["z.md"]})],
             current_config="dpe_default").values())[0]
         assert self._names(content) == ["z.md", "a.md"]
+
+
+class TestDirectoryIndexMode:
+    """`mode: index` — names, sizes and headings; never the bodies."""
+
+    @pytest.fixture
+    def design(self, tmp_path):
+        d = tmp_path / "repo" / "design"
+        d.mkdir(parents=True)
+        (d / "00_roadmap.md").write_text("# Roadmap\n\nbody A\n\n## R4\n\n## R5\n\n## R6\n", encoding="utf-8")
+        (d / "90_decisions.md").write_text("# Decisions\n" + "x" * 5000, encoding="utf-8")
+        (d / "data.json").write_text("{}", encoding="utf-8")
+        return tmp_path / "repo"
+
+    def _index(self, workspace, code, order=None):
+        from skillflow.graph import _normalize_context_spec
+        spec = {"from": "repository", "path": "design/", "mode": "index"}
+        if order is not None:
+            spec["order"] = order
+        resolver = ContextResolver(workspace, code_root=code)
+        result = resolver.resolve([_normalize_context_spec(spec)],
+                                  current_config="dpe_default")
+        return result
+
+    def test_index_lists_name_size_and_headings_but_no_body(self, workspace, design):
+        result = self._index(workspace, design)
+        label = list(result.keys())[0]
+        body = result[label]
+        assert "(index)" in label
+        assert "3 file(s)" in body
+        assert "- 00_roadmap.md  (" in body and "# Roadmap | ## R4 | ## R5" in body
+        assert "## R6" not in body                      # capped at 3 headings
+        assert "- 90_decisions.md  (5012 bytes)" in body
+        assert "- data.json  (2 bytes)" in body        # non-markdown: name + size
+        assert "body A" not in body and "xxxx" not in body   # never the content
+        assert "### FILE:" not in body                 # not the inline bundle shape
+
+    def test_index_respects_order(self, workspace, design):
+        body = list(self._index(workspace, design, order=["90_decisions.md"]).values())[0]
+        lines = [ln for ln in body.splitlines() if ln.startswith("- ")]
+        assert lines[0].startswith("- 90_decisions.md")
+
+    def test_index_of_an_empty_dir_injects_nothing(self, workspace, tmp_path):
+        (tmp_path / "repo" / "design").mkdir(parents=True)
+        assert self._index(workspace, tmp_path / "repo") == {}

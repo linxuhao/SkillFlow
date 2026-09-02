@@ -6,6 +6,10 @@ content for prompt injection. Supports six source types:
 - ``{config: "name", output: "file"}`` — cross-config read
 - ``{config: "name", step: "id", output: "file"}`` — cross-config from specific step
 - ``{step: "id", file: "name", mode: "full"|"summary"|"interfaces"}`` — same-config read
+- ``{from: "repository", path: "dir/", mode: "index"}`` — directory INDEX only:
+  one line per file (name, bytes, first headings), no content; the agent reads
+  what it needs with its read tool. For big append-only ledgers that a step
+  must know EXIST but rarely needs whole.
 - ``{step: "id"}`` — all files from that step's directory
 - ``{feedback_of: "id"}`` — accumulated checkpoint-feedback log of another step
 - ``{tool: "name"}`` — dynamic tool call (e.g. dir_tree)
@@ -131,6 +135,48 @@ def _is_binary(path) -> bool:
     nontext = sum(1 for b in sample if b not in text_bytes and b < 0x80)
     return nontext / len(sample) > 0.30
 
+
+
+_INDEX_MAX_HEADINGS = 3
+
+
+def _dir_index(files: list, root) -> str:
+    """One line per file — relative name, size in bytes, first Markdown headings.
+
+    Order is the caller's (``_apply_order`` already ran), so the index reads in
+    priority order like the inline bundle would. Headings are the cheapest
+    honest summary of a Markdown file: they tell the reader what it would find
+    without the host paying for the body. Non-Markdown files get name + size.
+    """
+    lines = []
+    total = 0
+    for f in files:
+        try:
+            nbytes = f.stat().st_size
+        except OSError:
+            continue
+        total += nbytes
+        rel = f.relative_to(root).as_posix()
+        heads: list[str] = []
+        if f.suffix.lower() in (".md", ".markdown"):
+            try:
+                with f.open(encoding="utf-8", errors="replace") as fh:
+                    for ln in fh:
+                        if ln.startswith("#"):
+                            heads.append(ln.strip()[:80])
+                            if len(heads) >= _INDEX_MAX_HEADINGS:
+                                break
+            except OSError:
+                pass
+        line = f"- {rel}  ({nbytes} bytes)"
+        if heads:
+            line += "  —  " + " | ".join(heads)
+        lines.append(line)
+    if not lines:
+        return ""
+    head = (f"[index: {len(lines)} file(s), {total} bytes total — contents NOT "
+            f"inlined; read a file with your read tool when you need it]")
+    return head + "\n" + "\n".join(lines)
 
 
 def _apply_order(files: list, root, order: list) -> list:
@@ -570,6 +616,15 @@ class ContextResolver:
                      if f.is_file() and f.name != ".gitkeep"
                      and f.suffix not in (".pyc", ".pyo", ".so", ".o", ".bin")]
             files = _apply_order(files, abs_path, source.get("order") or [])
+            if source.get("mode") == "index":
+                # Index, not content: the reader learns what exists and how big
+                # it is, and reads the files it needs. AItelier's design/ was
+                # 368 KB inlined whole into every planner turn (2026-09-02) —
+                # two of its files were append-only ledgers nobody reads whole.
+                body = _dir_index(files, abs_path)
+                if not body:
+                    return "", ""
+                return f"Repository — {rel_path} (index)", body
             parts: list[str] = []
             for f in files:
                 try:
