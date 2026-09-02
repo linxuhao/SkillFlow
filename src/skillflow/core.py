@@ -5669,12 +5669,27 @@ class SkillFlow:
 
     # Truncate oversized payload strings so a giant prompt/response doesn't
     # bloat the DB. Full content over this is clipped with a marker.
+    #
+    # HEAD AND TAIL, not head only. A prompt's tail is its recency slot — the
+    # host puts the reviewer/user feedback, the previous attempt's validation
+    # error and the turn budget there precisely so the model reads them last.
+    # A head-only clip made all of that invisible in the trace: on
+    # jinyong-numbers 2026-09-01 a 225K-char PM prompt was traced as its first
+    # 20K, and "the validation error is not in the traced prompt" was read as
+    # "the agent never received it" — it was at line 1517 of 1519. Keep the
+    # tail so the question "what did the agent read LAST" is answerable.
     _TRACE_MAX_FIELD = 20000
+    _TRACE_TAIL_FIELD = 4000
 
     def _clip(self, value):
-        if isinstance(value, str) and len(value) > self._TRACE_MAX_FIELD:
-            return value[: self._TRACE_MAX_FIELD] + f"\n…[clipped {len(value) - self._TRACE_MAX_FIELD} chars]"
-        return value
+        if not (isinstance(value, str) and len(value) > self._TRACE_MAX_FIELD):
+            return value
+        head_n = self._TRACE_MAX_FIELD - self._TRACE_TAIL_FIELD
+        dropped = len(value) - head_n - self._TRACE_TAIL_FIELD
+        return (value[:head_n]
+                + f"\n…[clipped {dropped} chars — head {head_n} + tail "
+                  f"{self._TRACE_TAIL_FIELD} of {len(value)} kept]\n"
+                + value[-self._TRACE_TAIL_FIELD:])
 
     def trace(self, run_id: str, category: str, event: str,
               payload: dict | None = None, *, step_id: str = "",
