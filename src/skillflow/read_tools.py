@@ -28,6 +28,12 @@ from skillflow.workspace import route_step_read_dir
 # old whole-file dump so agents are never silently blind to a large file's tail;
 # the ``truncated`` flag signals when there is more to page through.
 _MAX_READ_LINES = 2000
+# Character cap on the same window. Lines alone do not bound cost: a 1977-line
+# GDScript file (75 KB, ~25K tokens) came back whole under the line cap and
+# rode every later turn of the step — three such reads per turn put a planner
+# at 126K prompt tokens by turn 3 (jinyong-nicknames, 2026-09-03). The window
+# stops at the last whole line under the cap; ``truncated`` says so.
+_MAX_READ_CHARS = 24_000
 
 # Directories never worth enumerating/searching as "source" — VCS internals and
 # build/dependency caches. Mirrors dir_tree/list_tree's BLOCKED set: without it
@@ -62,12 +68,23 @@ def _page_lines(text: str, start_line: int = 0, end_line: int | None = None) -> 
     else:
         end = min(start + _MAX_READ_LINES, total)
     selected = lines[start:end]
+    numbered = [f"{start + i + 1}\t{ln}" for i, ln in enumerate(selected)]
+    # Cut to whole lines under the character cap (always keep at least one).
+    budget = _MAX_READ_CHARS
+    kept = 0
+    for ln in numbered:
+        cost = len(ln) + 1
+        if kept and budget - cost < 0:
+            break
+        budget -= cost
+        kept += 1
+    if kept < len(numbered):
+        numbered = numbered[:kept]
+        end = start + kept
     return {
-        "content": "\n".join(
-            f"{start + i + 1}\t{ln}" for i, ln in enumerate(selected)
-        ),
+        "content": "\n".join(numbered),
         "start_line": start,
-        "returned_lines": len(selected),
+        "returned_lines": len(numbered),
         "total_lines": total,
         "truncated": end < total,
     }
@@ -255,9 +272,12 @@ def generate_read_tool_schemas(
             "description": (
                 "Read a file by repo-relative path. Omit `source` to read your "
                 "working tree (your pending edits are visible). The result's "
-                "`source` field names the layer that served the file. Large "
-                "files page: pass start_line/end_line (0-based) and check "
-                "`truncated`/`total_lines`."),
+                "`source` field names the layer that served the file. A window "
+                "is capped at 2000 lines or ~24K characters, whichever comes "
+                "first; when `truncated` is true the file continues past "
+                "`start_line + returned_lines` — page with start_line/end_line "
+                "(0-based), or `search` first and read only the region you "
+                "need. `total_lines` is the whole file's length."),
             "parameters": {
                 "path": {"type": "string", "required": True,
                          "description": "Repo-relative file path (e.g. 'core/db.py')."},

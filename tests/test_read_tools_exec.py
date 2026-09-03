@@ -345,3 +345,32 @@ class TestForgivingResolution:
         assert "error" in r
         avail = {f for entry in r["available"] for f in entry["files"]}
         assert {"a.txt", "b.txt"} <= avail
+
+
+class TestReadCharCap:
+    """A read window is bounded by characters as well as lines."""
+
+    def _big(self, tmp_path):
+        f = tmp_path / "big.gd"
+        f.write_text("\n".join("x" * 100 + f" {i}" for i in range(500)), encoding="utf-8")
+        return f
+
+    def test_a_wide_file_under_the_line_cap_is_still_truncated(self, tmp_path):
+        from skillflow.read_tools import _page_lines, _MAX_READ_CHARS
+        r = _page_lines(self._big(tmp_path).read_text())
+        assert r["truncated"] is True
+        assert len(r["content"]) <= _MAX_READ_CHARS
+        assert 0 < r["returned_lines"] < 500 and r["total_lines"] == 500
+        assert r["content"].splitlines()[-1].split("\t")[1].endswith(str(r["returned_lines"] - 1))
+
+    def test_paging_resumes_where_the_window_stopped(self, tmp_path):
+        from skillflow.read_tools import _page_lines
+        text = self._big(tmp_path).read_text()
+        first = _page_lines(text)
+        nxt = _page_lines(text, start_line=first["returned_lines"])
+        assert nxt["content"].splitlines()[0].startswith(f"{first['returned_lines'] + 1}\t")
+
+    def test_the_tool_description_states_the_cap(self):
+        import inspect, skillflow.read_tools as rt
+        src = inspect.getsource(rt)
+        assert "24K characters" in src and "2000 lines" in src

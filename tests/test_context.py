@@ -674,3 +674,18 @@ class TestDirectoryIndexMode:
     def test_index_of_an_empty_dir_injects_nothing(self, workspace, tmp_path):
         (tmp_path / "repo" / "design").mkdir(parents=True)
         assert self._index(workspace, tmp_path / "repo") == {}
+
+
+class TestSummaryCharCap:
+    def _proj(self, workspace, text):
+        from skillflow.context import ContextResolver
+        return ContextResolver(workspace)._project(text, "summary", "x.md")
+
+    def test_dense_short_document_is_cut_by_characters(self, workspace):
+        text = "\n".join("# H" + "y" * 400 for _ in range(50))      # 50 lines, 20 KB
+        out = self._proj(workspace, text)
+        assert out.endswith("... [summary truncated]") and len(out) <= 6_000 + 40
+
+    def test_small_document_passes_untouched(self, workspace):
+        text = "\n".join(f"line {i}" for i in range(50))
+        assert self._proj(workspace, text) == text

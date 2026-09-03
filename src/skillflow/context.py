@@ -137,6 +137,7 @@ def _is_binary(path) -> bool:
 
 
 
+_SUMMARY_MAX_CHARS = 6_000
 _INDEX_MAX_HEADINGS = 3
 
 
@@ -698,9 +699,18 @@ class ContextResolver:
         promised a slice.
         """
         if mode == "summary":
+            # First 100 lines AND at most _SUMMARY_MAX_CHARS: a dense Markdown
+            # report (16 KB in 90 lines, jinyong-nicknames 2026-09-03) passed
+            # the line rule untouched, so "summary" injected the whole document.
             lines = content.splitlines()
+            head = lines[:100]
+            text = "\n".join(head)
+            if len(text) > _SUMMARY_MAX_CHARS:
+                cut = text.rfind("\n", 0, _SUMMARY_MAX_CHARS)
+                text = text[:cut if cut > 0 else _SUMMARY_MAX_CHARS]
+                return text + "\n... [summary truncated]"
             if len(lines) > 100:
-                return "\n".join(lines[:100]) + "\n... [summary truncated]"
+                return text + "\n... [summary truncated]"
             return content
         if mode == "interfaces":
             return self._extract_interfaces(content, name)
