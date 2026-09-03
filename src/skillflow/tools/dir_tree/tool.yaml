@@ -3,8 +3,11 @@ description: >
   Generate a directory tree summary for context injection.
   Used as a context tool (source: {tool: "dir_tree"}) to give agents
   awareness of workspace layout without consuming tool-call turns.
+  The tree is the first 100 rglob entries (sorted) of the workspace, THEN
+  filtered to depth <= 3 and non-blocked dirs — a large hidden tree
+  (.git, node_modules) can crowd real files out of the 100.
 parameters:
   config_name:
     type: string
-    description: "SkillFlow config name to scope the tree (optional)"
+    description: "Ignored — accepted for compatibility only; the tree is not scoped."
     required: false

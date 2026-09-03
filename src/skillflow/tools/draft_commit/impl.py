@@ -8,10 +8,12 @@ from pathlib import Path
 def draft_commit(source_dir: str = "", *, workspace_root: str = "",
                  step_id: str = "", run_id: str = "",
                  project_id: str = "", task_name: str = "") -> dict:
-    """Move Draw→Final and git commit in the workspace.
+    """Move staging ({step}.tmp) → step dir and git commit in the workspace.
 
-    If source_dir is empty/unset, expects $STEP_TMP_DIR to have been
-    resolved by skillflow's _execute_tool_inline before calling.
+    Callers pass source_dir="$STEP_TMP_DIR" (alias $STEP_DRAFT_DIR), which
+    skillflow resolves before calling. Nothing injects a default: an empty
+    source_dir resolves to workspace_root itself (dst == src), so every
+    workspace file is moved onto itself and the workspace root is git-added.
     """
     src = Path(source_dir)
     if not src.is_absolute():

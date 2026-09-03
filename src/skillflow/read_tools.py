@@ -277,7 +277,11 @@ def generate_read_tool_schemas(
                 "first; when `truncated` is true the file continues past "
                 "`start_line + returned_lines` — page with start_line/end_line "
                 "(0-based), or `search` first and read only the region you "
-                "need. `total_lines` is the whole file's length."),
+                "need. `total_lines` is the whole file's length. Args are "
+                "0-based; returned lines are 1-based, `N\\t`-prefixed. If "
+                "`path` does not exist at that location but its basename is "
+                "unique across layers, that file is served instead and "
+                "`resolved_from` names it."),
             "parameters": {
                 "path": {"type": "string", "required": True,
                          "description": "Repo-relative file path (e.g. 'core/db.py')."},
@@ -293,7 +297,11 @@ def generate_read_tool_schemas(
             "description": (
                 "Grep file contents. Omit `source` to search your working tree; "
                 "or pass a declared source. Returns {file, line, text, source}; "
-                "pass files_with_matches=true for just the file list."),
+                "pass files_with_matches=true for just the file list. Each "
+                "`text` is clipped to 200 chars; `truncated` is true when "
+                "max_results was hit (max_results<=0 means 50). Skips .git/"
+                "node_modules/__pycache__ and binary files (.pyc/.so/.bin). An "
+                "invalid regex falls back to a literal substring match."),
             "parameters": {
                 "pattern": {"type": "string", "required": True,
                             "description": "Regex (case-insensitive) or literal substring."},
@@ -312,7 +320,10 @@ def generate_read_tool_schemas(
             "name": "list",
             "description": (
                 "List files. Omit `source` for your working tree; or pass a "
-                "declared source. Returns {name, size, source}."),
+                "declared source. Returns a JSON string "
+                "{\"files\": [{name, size, source}, ...], \"truncated\": bool}, "
+                "capped at 1000 entries; blocked dirs (.git, node_modules, "
+                "__pycache__, ...) are omitted without note."),
             "parameters": {
                 "source": src_param,
                 "glob": {"type": "string",

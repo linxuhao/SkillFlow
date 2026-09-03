@@ -1,7 +1,10 @@
 name: pytest
 description: >
-  Run pytest on test files.
-  Returns {verdict: "passed"|"failed", feedback: "test output..."}
+  Run pytest on one test file.
+  Returns {verdict: "passed"|"failed", feedback: "test output..."}.
+  A pass does not prove tests ran: pytest exit 5 (no tests collected) counts
+  as passed, and a non-.py `file` passes without running anything. feedback
+  is the LAST 500 chars of output only. 60 s timeout.
 parameters:
   file:
     type: string

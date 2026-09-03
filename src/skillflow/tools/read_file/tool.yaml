@@ -5,7 +5,8 @@ description: >
   2) step staging dir (files the agent just wrote via write_* tools),
   3) step output dir (files from previous retries of this step).
   Returns the file content with line numbers, and indicates which
-  directory the file was found in ("found_in").
+  directory the file was found in ("found_in"). Returns the WHOLE file
+  unless start_line/end_line are given; no size cap, no truncation flag.
 parameters:
   path:
     type: string
@@ -19,6 +20,3 @@ parameters:
     type: integer
     description: "Exclusive end line (optional, default end of file)"
     required: false
-limits:
-  max_lines: 300
-  max_size_kb: 50

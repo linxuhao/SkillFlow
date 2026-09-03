@@ -206,8 +206,11 @@ def generate_write_tool_schemas(output_mode: str,
             "name": "create",
             "description": (
                 "Create a NEW file with the given content. The 'file' param is a "
-                "repo-relative path (e.g. 'core/db_manager.py'). Fails if the file "
-                "already exists — use 'edit' to change an existing file."
+                "repo-relative path (e.g. 'core/db_manager.py'; 'filename'/'path' "
+                "are accepted aliases; a leading 'project/' and any '.'/'..' "
+                "components are stripped). Fails if the file already exists — "
+                "use 'edit' to change an existing file — except that an existing "
+                "0-byte file is overwritten. Empty 'content' is refused."
             ),
             "parameters": {
                 "file": {"type": "string", "required": True},
@@ -221,7 +224,10 @@ def generate_write_tool_schemas(output_mode: str,
                 "rewriting the whole thing (the rest is preserved verbatim). "
                 "'old_str' must appear exactly once; include surrounding context "
                 "to make it unique. Fails if the file is absent or 'old_str' isn't "
-                "found exactly once. For multiple changes, call edit repeatedly."
+                "found exactly once. For multiple changes, call edit repeatedly. "
+                "A leading 'project/' in 'file' is stripped. Baseline is your "
+                "staging, then the repo; on a revision loop it may be this "
+                "step's own promoted output."
             ),
             "parameters": {
                 "file": {"type": "string", "required": True},
@@ -235,7 +241,8 @@ def generate_write_tool_schemas(output_mode: str,
             tools.append({
                 "name": "write",
                 "description": ("Write a whole file, replacing it entirely if it "
-                                "exists. Prefer 'edit' for existing files."),
+                                "exists. Prefer 'edit' for existing files. A leading "
+                                "'project/' in 'file' is stripped."),
                 "parameters": {
                     "file": {"type": "string", "required": True},
                     "content": {"type": "string", "required": True},
@@ -326,10 +333,22 @@ def generate_write_tool_schemas(output_mode: str,
                 create_params["initialContent"] = create_params.pop("content")
                 write_hint = fmt_hint
 
-            # write_{slot} — full replace
+            # write_{slot} — full replace (or append / archive per on_exists)
+            on_exists = normalized.get("on_exists", "replace")
+            if on_exists == "append":
+                write_desc = (f"APPEND to {pattern} (on_exists: append): 'content' "
+                              f"is appended verbatim to the existing file; any "
+                              f"per-field arguments are ignored, only 'content' "
+                              f"is written.{write_hint}")
+            elif on_exists == "new":
+                write_desc = (f"Replace {pattern} with new content (on_exists: new): "
+                              f"an existing file is first archived under a numeric "
+                              f"suffix, reported as 'archived'.{write_hint}")
+            else:
+                write_desc = f"Replace {pattern} with new content.{write_hint}"
             tools.append({
                 "name": f"write_{slot}",
-                "description": f"Replace {pattern} with new content.{write_hint}",
+                "description": write_desc,
                 "parameters": params,
             })
 
@@ -362,7 +381,9 @@ def generate_write_tool_schemas(output_mode: str,
                         f"file you simply do not rewrite SURVIVES unchanged — "
                         f"this is the only way to remove one. Use it when a task "
                         f"is genuinely dropped from the plan; if you also keep it "
-                        f"out of the manifest, the two stay consistent."
+                        f"out of the manifest, the two stay consistent. Also deletes "
+                        f"a file written THIS run. 'id' may not contain '/' or "
+                        f"'\\' or start with '.'."
                     ),
                     "parameters": {
                         "id": {"type": "string", "required": True,
@@ -388,9 +409,9 @@ def generate_write_tool_schemas(output_mode: str,
             "name": "finish_step",
             "description": (
                 "Signal that all required output files have been written and "
-                "the step is complete. Call this ONLY after all write/create/append"
-                " tool calls in the current turn have been made — it must be the "
-                "last tool call in your response."
+                "the step is complete. Call this ONLY after all write_*/create_*/"
+                "edit_* tool calls in the current turn have been made — it must "
+                "be the last tool call in your response."
             ),
             "parameters": {
                 "summary": {"type": "string", "required": False,

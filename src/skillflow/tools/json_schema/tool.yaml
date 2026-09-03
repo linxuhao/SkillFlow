@@ -2,6 +2,8 @@ name: json_schema
 description: >
   Validate a JSON file against an inline JSON Schema.
   Returns verdict: passed/failed with error details.
+  Without the `jsonschema` package only the top-level `required` fields are
+  checked — a pass then does not prove types or nested constraints.
 parameters:
   files:
     type: array

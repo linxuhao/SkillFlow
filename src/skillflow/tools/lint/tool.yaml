@@ -3,6 +3,10 @@ description: >
   Run linters on code files based on an extension→linter manifest.
   Auto-installs missing linters via pip. Hosts can register extra backends
   via skillflow.lint_backends.register_backend. Returns {all_passed, results}.
+  NOT read-only: the ruff backend runs `ruff check --fix` (rewrites files in
+  place), then checks only E9/F63/F7/F82 (syntax + undefined names). A pass
+  does not prove style-clean code. An unknown backend name passes; if djlint
+  is missing the `basic` backend is used instead.
 parameters:
   files:
     type: array

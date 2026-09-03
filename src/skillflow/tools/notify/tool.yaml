@@ -10,6 +10,6 @@ parameters:
     required: true
   level:
     type: string
-    description: "info, warning, or milestone"
+    description: "info, warning, or milestone (not validated — any string is passed through)"
     required: false
     default: "info"

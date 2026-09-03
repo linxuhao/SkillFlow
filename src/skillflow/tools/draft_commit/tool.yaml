@@ -1,7 +1,12 @@
 name: draft_commit
-description: Move all files from step draft directory to final directory and commit with git.
+description: >
+  Move all files from the step staging dir ({step}.tmp) to the step dir and
+  commit with git. Pass source_dir: "$STEP_TMP_DIR" explicitly (alias
+  $STEP_DRAFT_DIR) — no default is injected: an empty source_dir resolves to
+  the workspace root itself, so every workspace file is moved onto itself and
+  the whole workspace is git-added.
 parameters:
   source_dir:
     type: string
     required: false
-    description: Draft directory to move files from (defaults to $STEP_DRAFT_DIR).
+    description: "Staging directory to move files from — use \"$STEP_TMP_DIR\". Empty resolves to the workspace root (see above)."
