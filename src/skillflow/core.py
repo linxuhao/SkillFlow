@@ -5680,11 +5680,22 @@ class SkillFlow:
     # tail so the question "what did the agent read LAST" is answerable.
     _TRACE_MAX_FIELD = 20000
     _TRACE_TAIL_FIELD = 4000
+    # Events that carry the FULL text so a step can be replayed. A host that
+    # traces the conversation as deltas (turn-1 system+user, then every
+    # message appended per turn: assistant, tool results, injected nudges)
+    # stores each message ONCE, not once per turn; so the per-event cap is
+    # what one message can be (a 24K-char read result, a 100K system
+    # prompt), and the head/tail clip still applies above it. The default
+    # 20K stays for everything else: a per-turn `user_prompt` is the whole
+    # history and is redundant with the deltas.
+    _TRACE_FULL_EVENTS = frozenset({"prompt_delta"})
+    _TRACE_FULL_MAX_FIELD = 262144
 
-    def _clip(self, value):
-        if not (isinstance(value, str) and len(value) > self._TRACE_MAX_FIELD):
+    def _clip(self, value, limit: int | None = None):
+        limit = self._TRACE_MAX_FIELD if limit is None else limit
+        if not (isinstance(value, str) and len(value) > limit):
             return value
-        head_n = self._TRACE_MAX_FIELD - self._TRACE_TAIL_FIELD
+        head_n = limit - self._TRACE_TAIL_FIELD
         dropped = len(value) - head_n - self._TRACE_TAIL_FIELD
         return (value[:head_n]
                 + f"\n…[clipped {dropped} chars — head {head_n} + tail "
@@ -5716,7 +5727,9 @@ class SkillFlow:
         self._heartbeat_step(run_id, step_id)
         if not self._trace_enabled:
             return
-        clean = {k: self._clip(v) for k, v in (payload or {}).items()}
+        _limit = (self._TRACE_FULL_MAX_FIELD if event in self._TRACE_FULL_EVENTS
+                  else None)
+        clean = {k: self._clip(v, _limit) for k, v in (payload or {}).items()}
         try:
             # Resolve target connection: per-project DB when configured,
             # otherwise the shared DB (backward-compat).
