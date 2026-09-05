@@ -33,6 +33,7 @@ separately because they are genuinely different promises:
 `admitted` is not `running`, and no test here asserts that it is.
 """
 
+import json
 import subprocess
 import threading
 from pathlib import Path
@@ -573,7 +574,7 @@ def test_a_stop_reports_that_it_will_not_complete_on_its_own(tmp_path):
     assert report["outcome"] == "draining"
     assert report["admitted_owner_state"] == {"delivery:work": "dead"}
     assert report["recovery_required"] is True
-    assert "EFFECTS have stopped" in report["recovery_hint"]
+    assert "EFFECTS have ended or cannot resume" in report["recovery_hint"]
 
 
 def test_ordinary_completion_still_drains_and_terminalises(tmp_path):
@@ -1123,3 +1124,62 @@ def test_the_internal_failure_paths_still_fail_immediately(tmp_path):
         sf._fail_run_in_tx(conn, run_id, "routing dead end")
     assert _run(sf, run_id)["status"] == "failed"
     assert _run(sf, run_id)["cancel_requested_at"] is None
+
+
+# ── what the release event does and does not establish ───────────────
+
+def test_the_release_event_retains_the_first_2000_characters_of_the_evidence(
+        tmp_path):
+    """The docstring said "verbatim"; the source stores `evidence[:2000]`. The
+    reference that identifies the check therefore has to be at the START of the
+    string, and the hint now says so."""
+    _repo(tmp_path)
+    sf = _engine(tmp_path)
+    run_id, token = _claim(sf)
+    op = sf._admit_op("delivery", run_id,
+                      step_instance_id=token.step_instance_id,
+                      claim_epoch=token.claim_epoch, detail="work")
+    sf.stop_run(run_id, "stopped")
+
+    head = "REF ops-2026-09-05-11:30Z checked by the on-call driver; "
+    sf.release_operation(op, evidence=head + ("x" * 4000))
+
+    row = sf.trace_query(
+        run_id,
+        "SELECT payload_json FROM skillflow_trace WHERE event = "
+        "'op_released_by_operator'", ())
+    payload = json.loads(row[0][0])
+    assert len(payload["evidence"]) == 2000, "the retention bound moved"
+    assert payload["evidence"].startswith(head), \
+        "the identifying reference did not survive the truncation"
+    assert "only the first 2000 characters are retained" in \
+        sf.RELEASE_EVIDENCE_HINT.lower()
+
+
+def test_the_release_event_records_the_operations_owner_not_a_releaser(tmp_path):
+    """It stores the identity captured when the operation was ADMITTED, plus the
+    evidence text. There is no authenticated identity for the caller making the
+    release, and none is invented here — so "who released it" is established only
+    in so far as the evidence text says so."""
+    _repo(tmp_path)
+    sf = _engine(tmp_path)
+    run_id, token = _claim(sf)
+    op = sf._admit_op("delivery", run_id,
+                      step_instance_id=token.step_instance_id,
+                      claim_epoch=token.claim_epoch, detail="work")
+    admitted_owner = _ops(sf, run_id)[0].get("owner") if _ops(sf, run_id) else None
+    admitted_owner = sf._conn.execute(
+        "SELECT owner FROM skillflow_active_ops WHERE id = ?", (op,)
+    ).fetchone()["owner"]
+    sf.stop_run(run_id, "stopped")
+
+    sf.release_operation(op, evidence="released by the on-call driver")
+
+    payload = json.loads(sf.trace_query(
+        run_id,
+        "SELECT payload_json FROM skillflow_trace WHERE event = "
+        "'op_released_by_operator'", ())[0][0])
+    assert payload["owner"] == admitted_owner
+    assert "releaser" not in payload and "released_by" not in payload
+    assert set(payload) >= {"kind", "detail", "owner", "owner_lost_at",
+                            "evidence"}

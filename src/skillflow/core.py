@@ -1994,11 +1994,17 @@ class SkillFlow:
     # a successful stop.
     RELEASE_EVIDENCE_HINT = (
         "release_operation requires evidence that the operation's EFFECTS have "
-        "stopped, not that its owner has: no process is writing the run's "
-        "workspace or repository (e.g. no .git/index.lock, `git status` settles, "
-        "no writer holds the step's staging directory). The owner's death does "
-        "not establish this — repo_apply spawns `git add`/`git commit`, and a "
-        "child can outlive the parent that started it.")
+        "ended or cannot resume — not that its owner has died, not that time has "
+        "passed. Starting points for that investigation, NOT a sufficient "
+        "checklist: whether any process is writing the run's workspace or "
+        "repository, whether `git status` settles, whether a lock file is "
+        "present. None of them is proof on its own: an absent .git/index.lock is "
+        "a snapshot, and a `git commit` that has not reached its index yet leaves "
+        "no trace in one. The owner's death establishes nothing either — "
+        "repo_apply spawns `git add`/`git commit`, and a child can outlive the "
+        "parent that started it. Put the reference that identifies the check, "
+        "and who made it, at the START of the evidence string: only the first "
+        "2000 characters are retained.")
 
     def audit_operation_owners(self, run_id: str | None = None) -> dict:
         """OBSERVE which admitted operations have lost their owner. Retire none.
@@ -2081,15 +2087,24 @@ class SkillFlow:
         """Retire ONE admitted operation on an operator's explicit attestation.
 
         The only path other than the operation's own `finally`, and it is
-        deliberately manual. `evidence` is required, non-empty, and recorded
-        verbatim in the trace as `op_released_by_operator`.
+        deliberately manual. `evidence` is required and non-empty, and its FIRST
+        2000 CHARACTERS are recorded in the trace as `op_released_by_operator`.
+        Not verbatim: a longer attestation is truncated, so the reference that
+        identifies the check belongs at the start of the string.
 
-        It is NOT validated, and pretending otherwise would be the same mistake
-        as before: skillflow cannot see a git child it never spawned. What this
-        buys is that the decision is attributable — a run that ended this way
-        names who released it and on what basis, instead of a supervisor quietly
-        deciding a dead pid meant a finished commit. See
-        `RELEASE_EVIDENCE_HINT` for what the attestation should rest on.
+        WHAT THE EVENT ESTABLISHES, precisely. It stores the OPERATION's owner
+        (the identity recorded when the operation was admitted), its
+        `owner_lost_at`, and the evidence text. It does NOT record an
+        authenticated identity for the caller making the release — skillflow has
+        no such notion and this deliberately does not invent one. So the event
+        answers "on what basis was this released", and answers "by whom" only in
+        so far as the evidence text says so.
+
+        The attestation is NOT validated, and pretending otherwise would be the
+        same mistake as before: skillflow cannot see a git child it never
+        spawned. What this buys is a recorded, inspectable basis for the
+        decision, instead of a supervisor quietly deciding a dead pid meant a
+        finished commit. See `RELEASE_EVIDENCE_HINT`.
 
         Retiring the last operation of a pending cancellation completes it,
         through the same `_retire_op` path an operation uses itself.
