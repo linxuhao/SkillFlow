@@ -501,34 +501,155 @@ def _make_owner_dead(sf, run_id):
         sf._conn.commit()
 
 
-def test_a_dead_owners_operation_is_recovered_and_the_drain_completes(tmp_path):
-    """Liveness, not time. A cancellation closes `claim_next_step`, so the
-    re-claim that used to clean up after a crash can no longer happen; without
-    this the run drains forever."""
+def test_a_dead_owner_alone_cannot_mark_the_run_terminal(tmp_path):
+    """The one that was wrong before: owner death is not effect quiescence.
+
+    `owner_is_dead` proves the owner PROCESS ended. The contract is about
+    EFFECTS, and `repo_apply` runs `git add` / `git commit` through
+    `subprocess.run` — a child can outlive the parent that spawned it. Retiring
+    the record on owner death therefore let the last one disappear and the
+    cancellation terminalise, reporting `stopped` (which means *no remaining
+    effects*) while a commit could still be landing.
+
+    So the record SURVIVES, the cancellation stays pending, and the state is
+    reported. No child process is spawned or observed here; the assertion is
+    that the engine does not treat a dead owner as proof.
+    """
     _repo(tmp_path)
     sf = _engine(tmp_path)
     run_id, token = _claim(sf)
     sf._admit_op("delivery", run_id, step_instance_id=token.step_instance_id,
                  claim_epoch=token.claim_epoch, detail="work")
-    report = sf.stop_run(run_id, "stopped")
-    assert report["outcome"] == "draining"
-    assert report["admitted_owner_state"] == {"delivery:work": "alive"}
-    assert report["recovery_required"] is False
+    assert sf.stop_run(run_id, "stopped")["outcome"] == "draining"
 
     _make_owner_dead(sf, run_id)
-    out = sf.recover_orphan_ops(run_id)
+    out = sf.audit_operation_owners(run_id)
 
-    assert out["recovered"] == ["delivery:work"] and out["unknown"] == []
+    assert out["lost"] == ["delivery:work"] and out["unknown"] == []
+    assert out["recovery_required"] is True and out["hint"]
+    assert len(_ops(sf, run_id)) == 1, \
+        "the audit retired a record on owner death alone"
+    assert _run(sf, run_id)["status"] == "running", \
+        "a dead owner completed a cancellation without proving its effects ended"
+    assert [r["status"] for r in _step_rows(sf, run_id)] == ["claimed"]
+
+
+def test_the_lost_owner_is_recorded_and_the_audit_is_idempotent(tmp_path):
+    """A lost owner may need attention, and that is the truthful answer — so it
+    is durable, not a log line that scrolls away."""
+    _repo(tmp_path)
+    sf = _engine(tmp_path)
+    run_id, token = _claim(sf)
+    sf._admit_op("delivery", run_id, step_instance_id=token.step_instance_id,
+                 claim_epoch=token.claim_epoch, detail="work")
+    _make_owner_dead(sf, run_id)
+
+    first = sf.audit_operation_owners(run_id)
+    stamped = sf._conn.execute(
+        "SELECT owner_lost_at FROM skillflow_active_ops WHERE run_id = ?",
+        (run_id,)).fetchone()["owner_lost_at"]
+    assert stamped, "the observation was not recorded"
+    second = sf.audit_operation_owners(run_id)
+
+    assert first["lost"] == second["lost"] == ["delivery:work"]
+    assert sf._conn.execute(
+        "SELECT owner_lost_at FROM skillflow_active_ops WHERE run_id = ?",
+        (run_id,)).fetchone()["owner_lost_at"] == stamped
+    assert len(_ops(sf, run_id)) == 1
+
+
+def test_a_stop_reports_that_it_will_not_complete_on_its_own(tmp_path):
+    """`recovery_required` is the field that stops "draining" from reading as
+    "wait and it will finish"."""
+    _repo(tmp_path)
+    sf = _engine(tmp_path)
+    run_id, token = _claim(sf)
+    sf._admit_op("delivery", run_id, step_instance_id=token.step_instance_id,
+                 claim_epoch=token.claim_epoch, detail="work")
+    _make_owner_dead(sf, run_id)
+
+    report = sf.stop_run(run_id, "stopped")
+
+    assert report["outcome"] == "draining"
+    assert report["admitted_owner_state"] == {"delivery:work": "dead"}
+    assert report["recovery_required"] is True
+    assert "EFFECTS have stopped" in report["recovery_hint"]
+
+
+def test_ordinary_completion_still_drains_and_terminalises(tmp_path):
+    """The normal path is unchanged and is the real completion: an operation
+    that finishes retires itself in `finally`, and the last one ends the run."""
+    repo = _repo(tmp_path)
+    n_before = _count(repo)
+    sf = _engine(tmp_path)
+    run_id, token = _claim(sf)
+    _stage(sf)
+
+    seen: dict = {}
+    real_admit = sf._admit_op
+
+    def admit_then_cancel(*a, **kw):
+        op = real_admit(*a, **kw)
+        seen["report"] = sf.stop_run(run_id, "cancel after admission")
+        return op
+    sf._admit_op = admit_then_cancel
+
+    sf.confirm_step(token, StepResult(outputs={}))     # runs to completion
+
+    assert seen["report"]["outcome"] == "draining"
+    assert seen["report"]["recovery_required"] is False
+    assert _count(repo) == n_before + 1
     assert _ops(sf, run_id) == []
     assert _run(sf, run_id)["status"] == "failed", \
-        "recovery retired the orphan but never completed the cancellation"
+        "an operation that really finished did not complete the cancellation"
+
+
+def test_only_an_explicit_release_with_evidence_retires_a_lost_operation(tmp_path):
+    """The one path other than the operation's own `finally`, and it is manual.
+
+    The evidence is recorded, not validated — skillflow cannot see a git child it
+    never spawned, and pretending to check would be the same mistake again. What
+    it buys is attribution: a run that ended this way names the attestation it
+    ended on, instead of a supervisor quietly deciding a dead pid meant a
+    finished commit.
+    """
+    _repo(tmp_path)
+    sf = _engine(tmp_path)
+    run_id, token = _claim(sf)
+    op = sf._admit_op("delivery", run_id,
+                      step_instance_id=token.step_instance_id,
+                      claim_epoch=token.claim_epoch, detail="work")
+    sf.stop_run(run_id, "stopped")
+    _make_owner_dead(sf, run_id)
+    sf.audit_operation_owners(run_id)
+    assert _run(sf, run_id)["status"] == "running"
+
+    with pytest.raises(ValueError):
+        sf.release_operation(op, evidence="")          # no silent force-complete
+    assert len(_ops(sf, run_id)) == 1
+    assert _run(sf, run_id)["status"] == "running"
+
+    out = sf.release_operation(
+        op, evidence="git status settles, no .git/index.lock, no writer on the "
+                     "staging dir — checked by hand at 11:20Z")
+
+    assert out["released"] is True and out["run_status"] == "failed"
+    assert _ops(sf, run_id) == []
     assert [r["status"] for r in _step_rows(sf, run_id)] == ["failed"]
 
 
-def test_a_live_owner_is_never_recovered(tmp_path):
+def test_releasing_an_unknown_operation_is_a_no_op(tmp_path):
+    _repo(tmp_path)
+    sf = _engine(tmp_path)
+    run_id, _ = _claim(sf)
+    out = sf.release_operation(9999, evidence="nothing is running")
+    assert out["released"] is False
+    assert _run(sf, run_id)["status"] == "running"
+
+
+def test_a_live_owner_is_never_marked_lost(tmp_path):
     """Negative control. Age, a changed epoch and a released claim are all
-    compatible with the operation still running, and none of them may retire it.
-    """
+    compatible with the operation still running, and none of them may mark it."""
     _repo(tmp_path)
     sf = _engine(tmp_path)
     run_id, token = _claim(sf)
@@ -543,9 +664,10 @@ def test_a_live_owner_is_never_recovered(tmp_path):
     sf.claim_next_step(run_id)
     sf.stop_run(run_id, "stopped")
 
-    out = sf.recover_orphan_ops(run_id)
+    out = sf.audit_operation_owners(run_id)
 
-    assert out == {"recovered": [], "unknown": [], "alive": 1}
+    assert out["lost"] == [] and out["unknown"] == [] and out["alive"] == 1
+    assert out["recovery_required"] is False
     assert len(_ops(sf, run_id)) == 1
     assert _run(sf, run_id)["status"] == "running", \
         "a live operation was declared gone and the stop reported completion"
@@ -553,7 +675,7 @@ def test_a_live_owner_is_never_recovered(tmp_path):
     assert _run(sf, run_id)["status"] == "failed"
 
 
-def test_an_unobservable_owner_is_reported_not_recovered(tmp_path):
+def test_an_unobservable_owner_is_reported_not_assumed_gone(tmp_path):
     """`owner_is_dead` is three-valued and `None` means *cannot observe*. That is
     a state an operator must be shown, never a licence to declare success."""
     _repo(tmp_path)
@@ -569,13 +691,13 @@ def test_an_unobservable_owner_is_reported_not_recovered(tmp_path):
     assert report["admitted_owner_state"] == {"delivery:work": "unknown"}
     assert report["recovery_required"] is True
 
-    out = sf.recover_orphan_ops(run_id)
-    assert out["unknown"] == ["delivery:work"] and out["recovered"] == []
+    out = sf.audit_operation_owners(run_id)
+    assert out["unknown"] == ["delivery:work"] and out["lost"] == []
     assert len(_ops(sf, run_id)) == 1
     assert _run(sf, run_id)["status"] == "running"
 
 
-def test_recovery_sweeps_every_run_when_given_none(tmp_path):
+def test_the_audit_sweeps_every_run_when_given_none(tmp_path):
     _repo(tmp_path)
     sf = _engine(tmp_path)
     run_id, token = _claim(sf)
@@ -583,8 +705,9 @@ def test_recovery_sweeps_every_run_when_given_none(tmp_path):
                  claim_epoch=token.claim_epoch, detail="work")
     sf.stop_run(run_id, "stopped")
     _make_owner_dead(sf, run_id)
-    assert sf.recover_orphan_ops()["recovered"] == ["delivery:work"]
-    assert _run(sf, run_id)["status"] == "failed"
+    out = sf.audit_operation_owners()
+    assert out["lost"] == ["delivery:work"]
+    assert _run(sf, run_id)["status"] == "running"
 
 
 # ── the inline tool-step path ────────────────────────────────────────

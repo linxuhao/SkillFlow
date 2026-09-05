@@ -1603,13 +1603,19 @@ class SkillFlow:
             dead = owner_is_dead(r["owner"])
             owners[f"{r['kind']}:{r['detail']}"] = (
                 "dead" if dead is True else "unknown" if dead is None else "alive")
+        _needs_attention = any(v != "alive" for v in owners.values())
         return {"run_id": run_id, "outcome": outcome,
                 "status": (self._run_status(run_id) or ""),
                 "steps_closed": [r["step_id"] for r in closed],
                 "admitted_operations": [f"{r['kind']}:{r['detail']}"
                                         for r in admitted],
                 "admitted_owner_state": owners,
-                "recovery_required": any(v != "alive" for v in owners.values())}
+                # An operation whose owner is gone or unobservable does NOT
+                # complete the cancellation — the owner's death says nothing
+                # about a subprocess it spawned. It needs an operator, and this
+                # is where that is said.
+                "recovery_required": _needs_attention,
+                "recovery_hint": self.RELEASE_EVIDENCE_HINT if _needs_attention else ""}
 
     def fail_run(self, run_id: str, reason: str) -> dict:
         """Cancellation entry point kept for existing callers — see `stop_run`.
@@ -1983,36 +1989,53 @@ class SkillFlow:
                        {"reason": reason[:500], "when": "drain_complete"},
                        step_id=r["step_id"], step_instance_id=r["id"])
 
-    def recover_orphan_ops(self, run_id: str | None = None) -> dict:
-        """Retire admitted operations whose OWNER IS OBSERVABLY DEAD, and only
-        those. Returns {"recovered": [...], "unknown": [...], "alive": n}.
+    # What an operator needs to release an operation whose owner is gone. Named
+    # here, once, because "recovery" without a standard is how a timeout becomes
+    # a successful stop.
+    RELEASE_EVIDENCE_HINT = (
+        "release_operation requires evidence that the operation's EFFECTS have "
+        "stopped, not that its owner has: no process is writing the run's "
+        "workspace or repository (e.g. no .git/index.lock, `git status` settles, "
+        "no writer holds the step's staging directory). The owner's death does "
+        "not establish this — repo_apply spawns `git add`/`git commit`, and a "
+        "child can outlive the parent that started it.")
 
-        Liveness is the whole basis, because nothing else is sound. A
-        cancellation closes `claim_next_step`, so the re-claim that would once
-        have cleaned up after a crash can no longer happen; without an
-        independent recovery path a run whose executor died mid-operation drains
-        forever. But a timeout, a stale heartbeat or a changed claim epoch can
-        never justify retiring a record — each of those is compatible with the
-        operation still running, and retiring it would turn a truthful `draining`
-        into a false `stopped`.
+    def audit_operation_owners(self, run_id: str | None = None) -> dict:
+        """OBSERVE which admitted operations have lost their owner. Retire none.
 
-        `owner_is_dead` is three-valued and its `None` (cannot observe: no
-        /proc, another kernel boot, a pre-identity row) is reported as `unknown`
-        and NOT recovered. An operator seeing `unknown` has a precise state to
-        act on rather than a silent drain.
+        Returns ``{"lost": [...], "unknown": [...], "alive": n,
+        "recovery_required": bool, "hint": str}``.
 
-        LIMIT, stated because it bounds the guarantee: this proves the OWNER
-        PROCESS is gone. A subprocess that operation spawned (`repo_apply` shells
-        out to git) could in principle outlive it, and this cannot see that. The
-        recovery is traced as `op_recovered_orphan` so a run that terminalised
-        this way is distinguishable from one that quiesced on its own.
+        This used to retire a record when `owner_is_dead` returned True, and
+        that was wrong in a way worth stating plainly: the check proves the OWNER
+        PROCESS is gone, and the contract is about EFFECTS. `repo_apply` runs
+        `git add` and `git commit` through `subprocess.run`; a child can outlive
+        the parent that spawned it. Retiring on owner death therefore let the
+        last record disappear and the cancellation terminalise — reporting
+        `stopped`, which means *no remaining effects* — while a commit could
+        still be landing. A trace written afterwards distinguishes such a run
+        in hindsight; it cannot establish quiescence beforehand.
 
-        Deliberately NOT called from `claim_next_step` or any claiming path: the
-        cancel it exists to unblock is precisely the state in which claiming is
-        forbidden. Hosts call it from their supervisor loop and at startup.
+        So a lost owner is recorded (`owner_lost_at`) and REPORTED. The record
+        stays, the cancellation stays pending, and `stop_run` keeps answering
+        `draining` with `recovery_required`. A lost owner may need attention, and
+        saying so is the truthful answer.
+
+        `owner_is_dead` is three-valued; `None` (no /proc, another kernel boot, a
+        pre-identity row) is `unknown` and equally not a licence to complete.
+
+        Neither death nor age nor a changed claim epoch retires anything. The
+        only two ways a record goes away are the operation's own `finally` — the
+        real completion — and `release_operation`, which an operator calls with
+        explicit evidence.
+
+        Deliberately independent of claiming: a requested cancellation forbids
+        claiming, so a path that depended on it could never run when it matters.
+        Independence is not evidence, and this function supplies none — it only
+        makes the state visible.
         """
         from skillflow.identity import owner_is_dead
-        recovered: list[dict] = []
+        lost: list[dict] = []
         unknown: list[dict] = []
         alive = 0
         with self._ro() as conn:
@@ -2026,22 +2049,70 @@ class SkillFlow:
         for r in rows:
             dead = owner_is_dead(r["owner"])
             if dead is True:
-                recovered.append(r)
+                lost.append(r)
             elif dead is None:
                 unknown.append(r)
             else:
                 alive += 1
-        for r in recovered:
-            self.trace(r["run_id"], "step", "op_recovered_orphan",
+        # Stamp the observation so it survives a restart and so the supervisor
+        # can report it without re-deciding. Idempotent; never deletes.
+        fresh = [r for r in lost if not r["owner_lost_at"]]
+        if fresh:
+            with self._tx() as conn:
+                for r in fresh:
+                    conn.execute(
+                        "UPDATE skillflow_active_ops SET owner_lost_at = "
+                        "datetime('now') WHERE id = ? AND owner_lost_at IS NULL",
+                        (r["id"],))
+        for r in fresh:
+            self.trace(r["run_id"], "step", "op_owner_lost",
                        {"kind": r["kind"], "detail": r["detail"],
-                        "owner": r["owner"], "admitted_at": r["admitted_at"]},
+                        "owner": r["owner"], "admitted_at": r["admitted_at"],
+                        "note": "operation still recorded; effects not proven "
+                                "quiescent"},
                        step_instance_id=r["step_instance_id"])
-            # Retire through the same path an operation uses itself, so the
-            # terminal transition stays in one place.
-            self._retire_op(r["id"])
-        return {"recovered": [f"{r['kind']}:{r['detail']}" for r in recovered],
+        return {"lost": [f"{r['kind']}:{r['detail']}" for r in lost],
                 "unknown": [f"{r['kind']}:{r['detail']}" for r in unknown],
-                "alive": alive}
+                "alive": alive,
+                "recovery_required": bool(lost or unknown),
+                "hint": self.RELEASE_EVIDENCE_HINT if (lost or unknown) else ""}
+
+    def release_operation(self, op_id: int, *, evidence: str) -> dict:
+        """Retire ONE admitted operation on an operator's explicit attestation.
+
+        The only path other than the operation's own `finally`, and it is
+        deliberately manual. `evidence` is required, non-empty, and recorded
+        verbatim in the trace as `op_released_by_operator`.
+
+        It is NOT validated, and pretending otherwise would be the same mistake
+        as before: skillflow cannot see a git child it never spawned. What this
+        buys is that the decision is attributable — a run that ended this way
+        names who released it and on what basis, instead of a supervisor quietly
+        deciding a dead pid meant a finished commit. See
+        `RELEASE_EVIDENCE_HINT` for what the attestation should rest on.
+
+        Retiring the last operation of a pending cancellation completes it,
+        through the same `_retire_op` path an operation uses itself.
+        """
+        if not (evidence or "").strip():
+            raise ValueError(
+                "release_operation requires evidence. " + self.RELEASE_EVIDENCE_HINT)
+        with self._ro() as conn:
+            row = conn.execute(
+                "SELECT * FROM skillflow_active_ops WHERE id = ?",
+                (op_id,)).fetchone()
+            row = dict(row) if row else None
+        if row is None:
+            return {"released": False, "reason": f"no active operation {op_id}"}
+        self.trace(row["run_id"], "step", "op_released_by_operator",
+                   {"kind": row["kind"], "detail": row["detail"],
+                    "owner": row["owner"], "owner_lost_at": row["owner_lost_at"],
+                    "evidence": evidence[:2000]},
+                   step_instance_id=row["step_instance_id"])
+        self._retire_op(op_id)
+        return {"released": True, "operation": f"{row['kind']}:{row['detail']}",
+                "run_id": row["run_id"],
+                "run_status": self._run_status(row["run_id"])}
 
     def _terminalise_cancel_in_tx(self, conn, run_id: str, reason: str) -> list[dict]:
         """Fail the run and close every claim it still holds. Caller holds the tx.
@@ -2235,7 +2306,8 @@ class SkillFlow:
             # is the original false-stop defect with its tracking erased.
             #
             # A record is retired by its own operation in `finally`, or by
-            # `recover_orphan_ops` on OBSERVED owner death. Nothing else.
+            # `release_operation`, which an operator calls with explicit
+            # evidence. Observed owner death is reported, never acted on.
             step_row = conn.execute(
                 "SELECT id, claim_epoch FROM skillflow_steps "
                 "WHERE run_id = ? AND step_id = ? AND status = 'claimed'",

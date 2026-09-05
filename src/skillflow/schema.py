@@ -98,11 +98,22 @@ CREATE TABLE IF NOT EXISTS skillflow_active_ops (
     -- WHO is running it, as skillflow.identity records a claim owner (host, pid,
     -- boot id, pid namespace, process start time — so a recycled pid is not
     -- mistaken for the original). This is the ONLY basis on which an operation
-    -- may be retired by anyone other than itself: `recover_orphan_ops` retires a
-    -- record whose owner is OBSERVABLY dead and nothing else. Age cannot justify
-    -- it, and neither can a changed claim epoch — an epoch change revokes future
-    -- admission, it does not stop an operation that is already running.
+    -- may be retired by anyone other than itself: `release_operation`, which an
+    -- operator calls with explicit evidence that the EFFECTS have stopped.
+    -- `audit_operation_owners` only OBSERVES - owner death is not effect
+    -- quiescence (repo_apply spawns git), so it records and reports, it never
+    -- retires. Age cannot justify retirement either, and neither can a changed
+    -- claim epoch: an epoch change revokes future admission, it does not stop an
+    -- operation that is already running.
     owner            TEXT NOT NULL DEFAULT '',
+    -- WHEN the owner was first observed to be gone. An OBSERVATION, never a
+    -- decision: it does not retire the record and does not let a cancellation
+    -- complete. The owner process being gone says nothing about a subprocess it
+    -- spawned — `repo_apply` shells out to `git add` and `git commit` — so the
+    -- effect may still be in flight, and a stop that reported success on this
+    -- basis would be the false stop this whole mechanism exists to prevent.
+    -- It marks a record as NEEDING ATTENTION and nothing more.
+    owner_lost_at    TEXT,
     -- 'delivery' (a step's lifecycle hooks), 'tool' (one agent tool call) or
     -- 'tool_step' (an inline tool node executed by advance_run).
     kind             TEXT NOT NULL,
@@ -324,4 +335,6 @@ SKILLFLOW_MIGRATIONS: list[str] = [
     # operator needs is in `stop_run`'s return value and in this column, which
     # `get_run()` already exposes.
     "ALTER TABLE skillflow_runs ADD COLUMN cancel_requested_at TEXT",
+    # Owner-loss OBSERVATION (see skillflow_active_ops.owner_lost_at).
+    "ALTER TABLE skillflow_active_ops ADD COLUMN owner_lost_at TEXT",
 ]
