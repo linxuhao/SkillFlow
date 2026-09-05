@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
@@ -130,10 +131,10 @@ class NotificationBus:
                     event_type=event_type, payload=payload,
                     step_id=step_id, run_id=run_id, target=target,
                 )
-                # Acquire lock to avoid conflicting with SkillFlow._tx()
-                # which also uses self._conn.
-                with self._conn_lock:
-                    self._write_outbox(notification)
+                # `_write_outbox` takes the lock itself now, for every caller
+                # rather than only this one — the loop-thread path through
+                # `publish()` was the one that had none.
+                self._write_outbox(notification)
 
     def _schedule_publish(self, event_type: str, payload: dict,
                           step_id: str | None, run_id: str | None,
@@ -146,33 +147,74 @@ class NotificationBus:
 
     # ── Outbox ──────────────────────────────────────────────────────
 
-    def set_connection(self, conn):
-        """Share SkillFlow's SQLite connection for outbox writes."""
+    def set_connection(self, conn, lock=None):
+        """Share SkillFlow's SQLite connection — and the lock that guards it.
+
+        Sharing the connection without the lock is what made the outbox write
+        unsafe: `SkillFlow._tx()` serialises transactions on `SkillFlow._lock`,
+        this bus serialised (some of) its writes on its own `_conn_lock`, and
+        two locks over one connection serialise nothing. Callers that pass only
+        a connection keep the old private lock, so an embedder that never shared
+        one is unaffected.
+        """
         self._conn = conn
+        if lock is not None:
+            self._conn_lock = lock
 
     def _write_outbox(self, notification: Notification) -> None:
+        """Persist one event. Serialised against SkillFlow's transactions.
+
+        THE LOCK IS THE FIX. `publish()` runs on the event loop, and the host
+        runs `advance_run` in a worker thread (AItelier bridges the publish back
+        with `call_soon_threadsafe`), so this INSERT executed on the loop thread
+        while a worker thread sat inside `SkillFlow._tx()` with `BEGIN IMMEDIATE`
+        open — same connection, no shared lock. Two things went wrong and both
+        were silent:
+
+        * the INSERT joined the worker's open transaction and `commit()` ended
+          it early, from the wrong thread;
+        * sqlite then raised `cannot start a transaction within a transaction`
+          on the next `BEGIN IMMEDIATE`, the bare `except` below swallowed it,
+          and the event vanished.
+
+        Live, 2026-09-05: two `coding_impl` runs reached `completed` with no
+        `run_completed` anywhere, so `debugctl await --follow` — the documented
+        way to wait for a run — waited out its full timeout on a finished run.
+
+        Holding this lock can block the event loop for the length of a
+        transaction. That is bounded and it is the point: `_tx` blocks are SQL
+        only (tools and hooks run outside them), and a short wait is the correct
+        price for not corrupting the connection everything else reads.
+        """
         if self._conn is None:
             return
         try:
-            self._conn.execute(
-                """
-                INSERT INTO skillflow_outbox (event_type, payload_json, stream_target, created_at)
-                VALUES (?, ?, ?, datetime('now'))
-                """,
-                (
-                    notification.event_type,
-                    json.dumps({
-                        **notification.payload,
-                        "_step_id": notification.step_id,
-                        "_run_id": notification.run_id,
-                        "_timestamp": notification.timestamp,
-                    }),
-                    notification.target,
-                ),
-            )
-            self._conn.commit()
-        except Exception:
-            pass  # outbox write must not fail the pipeline
+            with self._conn_lock:
+                self._conn.execute(
+                    """
+                    INSERT INTO skillflow_outbox (event_type, payload_json, stream_target, created_at)
+                    VALUES (?, ?, ?, datetime('now'))
+                    """,
+                    (
+                        notification.event_type,
+                        json.dumps({
+                            **notification.payload,
+                            "_step_id": notification.step_id,
+                            "_run_id": notification.run_id,
+                            "_timestamp": notification.timestamp,
+                        }),
+                        notification.target,
+                    ),
+                )
+                self._conn.commit()
+        except Exception as e:                                   # noqa: BLE001
+            # Still must not fail the pipeline — but never silently again. A
+            # dropped terminal event is indistinguishable from a run that has
+            # not finished, and that is exactly how this hid.
+            logging.getLogger("skillflow.notifications").warning(
+                "outbox write dropped for %r (run=%s step=%s): %s: %s",
+                notification.event_type, notification.run_id,
+                notification.step_id, type(e).__name__, e)
 
 
 # ── Filter helper ──────────────────────────────────────────────────────

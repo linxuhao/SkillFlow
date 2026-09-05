@@ -477,7 +477,10 @@ class SkillFlow:
         else:
             from skillflow.notifications import NotificationBus
             self.notifications = NotificationBus(db_path=db_path)
-        self.notifications.set_connection(self._conn)
+        # Share the LOCK as well as the connection: the outbox write and
+        # `_tx` must serialise against each other or they corrupt one
+        # another's transaction state. See NotificationBus._write_outbox.
+        self.notifications.set_connection(self._conn, self._lock)
 
     def _load_native_tools(self):
         """Ensure the built-in tools directory is loaded as the native source."""
