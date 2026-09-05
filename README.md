@@ -464,6 +464,65 @@ and rows written before the column existed behave exactly as they did. Adding
 the column is the whole migration (`SKILLFLOW_MIGRATIONS`, applied on every
 open); old rows backfill to 0.
 
+## Cancelling a run: admission and drain
+
+The epoch fence answers *"am I still the executor?"*. Cancellation asks a
+different question — *"has the run ended?"* — and a claim can be perfectly valid
+while the answer is yes. So an operation that can produce a side effect (a
+step's lifecycle hooks; one tool call; one inline tool node) is **admitted**
+before it starts and **retired** when it ends. Admission, retirement and
+`stop_run` are each one `BEGIN IMMEDIATE` transaction, so there is no
+check-then-act between any pair of them.
+
+```python
+report = sf.stop_run(run_id, "operator stop")
+report["outcome"]   # "stopped" | "draining" | "already_terminal"
+```
+
+| outcome | what it guarantees |
+|---|---|
+| `stopped` | the run is terminal, nothing is admitted, and **nothing further can be admitted**. No new effect starts. |
+| `draining` | the operations in `admitted_operations` were admitted *before* the stop committed and cannot be called off. They run to completion; the run terminalises when the last one retires. **The stop is not complete.** |
+| `already_terminal` | the run had already ended. |
+
+**Admitted is not running.** A row in `skillflow_active_ops` means *allowed to
+proceed, no longer callable off* — not that a git commit is under way. Nothing
+is preempted: `repo_apply` shells out to git, and there is no honest way to
+un-start that.
+
+`fail_run` is kept and delegates to `stop_run`. `claim_next_step` and
+`advance_run` refuse while `skillflow_runs.cancel_requested_at` is set, so a
+draining run starts no new step. `confirm_step` and `_admit_op` raise
+`TerminalRunFenced` — deliberately **not** a `StepVersionConflict`, because a
+host that reacts to a lost claim by re-claiming must not re-enter a run the
+operator just stopped; `execute_tool` returns `{"error": …}` in the same case.
+
+### When the owner is gone
+
+```python
+sf.audit_operation_owners()          # observe only: {"lost", "unknown", "alive", ...}
+sf.release_operation(op_id, evidence="…")   # explicit operator retirement
+```
+
+`audit_operation_owners` records that an operation's owner process has
+disappeared (`owner_lost_at`) and reports it. It **retires nothing and completes
+no cancellation**, because owner death proves the owner *process* ended and the
+contract is about *effects* — a `git commit` child can outlive the parent that
+spawned it. `stop_run` therefore keeps answering `draining` with
+`recovery_required` set, and a lost owner needs attention rather than a guess.
+
+There is no timeout, no TTL and no automatic recovery. A record leaves in
+exactly two ways: the operation's own `finally`, or `release_operation`, which
+requires a non-empty `evidence` string and stores its **first 2000 characters**
+in an `op_released_by_operator` trace event. The evidence is recorded, not
+validated, and the event carries the *operation's* owner — there is no
+authenticated identity for the caller making the release.
+
+Migration is additive: one table (`skillflow_active_ops`) and two columns
+(`skillflow_runs.cancel_requested_at`, `skillflow_active_ops.owner_lost_at`),
+applied on every open. An older library ignores all three — so a run left
+mid-drain becomes claimable again if you roll back under it.
+
 ## Event Streaming
 
 All state transitions are written to `skillflow_outbox`. Poll for real-time notifications:
