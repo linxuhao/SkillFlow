@@ -433,23 +433,211 @@ def test_an_empty_confirm_that_retries_leaves_no_authorisation_behind(tmp_path):
         "a fresh retry claim was left stranded by the stop"
 
 
-def test_a_reclaim_clears_an_authorisation_left_by_a_dead_executor(tmp_path):
-    """Belt for the same defect: even an admission that was never retired (its
-    executor vanished) must not authorise the NEXT claim of the row."""
+def test_a_reclaim_does_not_erase_a_still_running_operation(tmp_path):
+    """The trap the first draft fell into, and the reason it is a trap.
+
+    Deleting an older claim's admission when the row is re-claimed looks like
+    tidy-up. It is not: bumping the epoch revokes FUTURE admission, it cannot
+    stop an operation that is already running. A disconnected executor can still
+    be alive and a hook can hold a subprocess. So the record must survive the
+    re-claim, and the stop must keep saying `draining` until the operation
+    actually retires — otherwise it is the original false stop with the evidence
+    deleted.
+    """
+    _repo(tmp_path)
+    sf = _engine(tmp_path)
+    run_id, token = _claim(sf)
+    op = sf._admit_op("delivery", run_id,
+                      step_instance_id=token.step_instance_id,
+                      claim_epoch=token.claim_epoch, detail="work")
+
+    sf.release_claim(token, "executor disconnected — but is still running")
+    fresh = sf.claim_next_step(run_id)
+    assert fresh is not None and fresh.token.claim_epoch > token.claim_epoch
+    assert len(_ops(sf, run_id)) == 1, \
+        "the re-claim erased a record for work that never stopped"
+
+    report = sf.stop_run(run_id, "stopped")
+    assert report["outcome"] == "draining", report
+    assert report["admitted_operations"] == ["delivery:work"]
+    assert _run(sf, run_id)["status"] == "running"
+
+    sf._retire_op(op)                       # the old operation really ends
+    assert _run(sf, run_id)["status"] == "failed"
+    assert [r["status"] for r in _step_rows(sf, run_id)] == ["failed"]
+
+
+def test_a_late_retirement_cannot_delete_another_operations_record(tmp_path):
+    """Retirement is by the operation's own id, never by step or epoch."""
+    _repo(tmp_path)
+    sf = _engine(tmp_path)
+    run_id, token = _claim(sf)
+    a = sf._admit_op("tool", run_id, step_instance_id=token.step_instance_id,
+                     claim_epoch=token.claim_epoch, detail="first")
+    b = sf._admit_op("tool", run_id, step_instance_id=token.step_instance_id,
+                     claim_epoch=token.claim_epoch, detail="second")
+
+    sf._retire_op(a)
+    assert [r["detail"] for r in _ops(sf, run_id)] == ["second"]
+    sf._retire_op(a)                        # late duplicate retirement
+    assert [r["detail"] for r in _ops(sf, run_id)] == ["second"]
+
+    assert sf.stop_run(run_id, "stopped")["outcome"] == "draining"
+    sf._retire_op(b)
+    assert _run(sf, run_id)["status"] == "failed"
+
+
+# ── liveness: the only thing that may retire someone else's operation ─
+
+def _make_owner_dead(sf, run_id):
+    """Rewrite the op's owner to a provably-absent process — our own pid with a
+    process-start marker that is not ours, exactly as the crash fixture does."""
+    from skillflow.identity import worker_identity
+    gone = f"{worker_identity('delivery')} start=gone"
+    with sf._lock:
+        sf._conn.execute(
+            "UPDATE skillflow_active_ops SET owner = ? WHERE run_id = ?",
+            (gone, run_id))
+        sf._conn.commit()
+
+
+def test_a_dead_owners_operation_is_recovered_and_the_drain_completes(tmp_path):
+    """Liveness, not time. A cancellation closes `claim_next_step`, so the
+    re-claim that used to clean up after a crash can no longer happen; without
+    this the run drains forever."""
     _repo(tmp_path)
     sf = _engine(tmp_path)
     run_id, token = _claim(sf)
     sf._admit_op("delivery", run_id, step_instance_id=token.step_instance_id,
                  claim_epoch=token.claim_epoch, detail="work")
-    # the executor dies without retiring; the row goes back to pending
-    sf.release_claim(token, "executor vanished")
+    report = sf.stop_run(run_id, "stopped")
+    assert report["outcome"] == "draining"
+    assert report["admitted_owner_state"] == {"delivery:work": "alive"}
+    assert report["recovery_required"] is False
 
+    _make_owner_dead(sf, run_id)
+    out = sf.recover_orphan_ops(run_id)
+
+    assert out["recovered"] == ["delivery:work"] and out["unknown"] == []
+    assert _ops(sf, run_id) == []
+    assert _run(sf, run_id)["status"] == "failed", \
+        "recovery retired the orphan but never completed the cancellation"
+    assert [r["status"] for r in _step_rows(sf, run_id)] == ["failed"]
+
+
+def test_a_live_owner_is_never_recovered(tmp_path):
+    """Negative control. Age, a changed epoch and a released claim are all
+    compatible with the operation still running, and none of them may retire it.
+    """
+    _repo(tmp_path)
+    sf = _engine(tmp_path)
+    run_id, token = _claim(sf)
+    op = sf._admit_op("delivery", run_id,
+                      step_instance_id=token.step_instance_id,
+                      claim_epoch=token.claim_epoch, detail="work")
+    with sf._lock:                      # make it look old
+        sf._conn.execute(
+            "UPDATE skillflow_active_ops SET admitted_at = '2000-01-01 00:00:00'")
+        sf._conn.commit()
+    sf.release_claim(token, "epoch churn")
     sf.claim_next_step(run_id)
-    assert _ops(sf, run_id) == [], "a stale-epoch admission survived a re-claim"
+    sf.stop_run(run_id, "stopped")
+
+    out = sf.recover_orphan_ops(run_id)
+
+    assert out == {"recovered": [], "unknown": [], "alive": 1}
+    assert len(_ops(sf, run_id)) == 1
+    assert _run(sf, run_id)["status"] == "running", \
+        "a live operation was declared gone and the stop reported completion"
+    sf._retire_op(op)
+    assert _run(sf, run_id)["status"] == "failed"
+
+
+def test_an_unobservable_owner_is_reported_not_recovered(tmp_path):
+    """`owner_is_dead` is three-valued and `None` means *cannot observe*. That is
+    a state an operator must be shown, never a licence to declare success."""
+    _repo(tmp_path)
+    sf = _engine(tmp_path)
+    run_id, token = _claim(sf)
+    sf._admit_op("delivery", run_id, step_instance_id=token.step_instance_id,
+                 claim_epoch=token.claim_epoch, detail="work")
+    with sf._lock:
+        sf._conn.execute("UPDATE skillflow_active_ops SET owner = 'worker'")
+        sf._conn.commit()
 
     report = sf.stop_run(run_id, "stopped")
-    assert report["outcome"] == "stopped"
-    assert report["steps_closed"] == ["work"]
+    assert report["admitted_owner_state"] == {"delivery:work": "unknown"}
+    assert report["recovery_required"] is True
+
+    out = sf.recover_orphan_ops(run_id)
+    assert out["unknown"] == ["delivery:work"] and out["recovered"] == []
+    assert len(_ops(sf, run_id)) == 1
+    assert _run(sf, run_id)["status"] == "running"
+
+
+def test_recovery_sweeps_every_run_when_given_none(tmp_path):
+    _repo(tmp_path)
+    sf = _engine(tmp_path)
+    run_id, token = _claim(sf)
+    sf._admit_op("delivery", run_id, step_instance_id=token.step_instance_id,
+                 claim_epoch=token.claim_epoch, detail="work")
+    sf.stop_run(run_id, "stopped")
+    _make_owner_dead(sf, run_id)
+    assert sf.recover_orphan_ops()["recovered"] == ["delivery:work"]
+    assert _run(sf, run_id)["status"] == "failed"
+
+
+# ── the inline tool-step path ────────────────────────────────────────
+
+def _tool_step_engine(tmp_path):
+    """A graph whose FIRST node is an inline tool step — the advance_run fast
+    path, which never goes through `execute_tool`."""
+    node = StepNode(id="apply", step_type="tool", tool_name="repo_apply",
+                    tool_params={"source_dir": "$STEP_DIR"},
+                    transitions=[Transition(to=None)])
+    sf = SkillFlow(":memory:", tool_loader=ToolLoader(TOOLS),
+                   workspace_base=str(tmp_path / "ws"),
+                   projects_base=str(tmp_path / "projects"))
+    sf.register_graph(PipelineGraph(name="tg", begin="apply", steps=[node]))
+    run_id = sf.create_run("tg", {"project_id": "p1"}, project_id="p1")
+    sf.start_run(run_id)
+    return sf, run_id
+
+
+def test_an_inline_tool_step_is_refused_after_a_stop(tmp_path):
+    """A tool NODE is a real side effect (git_sync_pre, repo_apply, run_tests)
+    and it never passes through `execute_tool`. Guarding it with a status read
+    would be the same check-then-act; it is admitted like everything else."""
+    repo = _repo(tmp_path)
+    sf, run_id = _tool_step_engine(tmp_path)
+    n_before = _count(repo)
+
+    assert sf.stop_run(run_id, "stopped")["outcome"] == "stopped"
+    sf.advance_run(run_id)
+
+    assert _count(repo) == n_before, "an inline tool step ran after the stop"
+    assert _ops(sf, run_id) == []
+
+
+def test_an_inline_tool_step_admits_and_retires(tmp_path):
+    """And on a healthy run it takes and releases its admission, so a stop
+    arriving mid-execution is told `draining` rather than `stopped`."""
+    _repo(tmp_path)
+    sf, run_id = _tool_step_engine(tmp_path)
+    seen: dict = {}
+    real = sf._execute_tool_inline
+
+    def cancel_then_run(*a, **kw):
+        seen["report"] = sf.stop_run(run_id, "cancel mid tool step")
+        return real(*a, **kw)
+    sf._execute_tool_inline = cancel_then_run
+
+    sf.advance_run(run_id)
+
+    assert seen["report"]["outcome"] == "draining"
+    assert seen["report"]["admitted_operations"] == ["tool_step:repo_apply"]
+    assert _ops(sf, run_id) == [], "the tool step never retired its admission"
+    assert _run(sf, run_id)["status"] == "failed"
 
 
 # ── no stranded rows, and no revival of a closed one ─────────────────

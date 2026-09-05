@@ -95,7 +95,16 @@ CREATE TABLE IF NOT EXISTS skillflow_active_ops (
     -- one and is cleared at claim time — which is what stops a fresh retry from
     -- inheriting the previous attempt's authorisation.
     claim_epoch      INTEGER NOT NULL DEFAULT 0,
-    -- 'delivery' (a step's lifecycle hooks) or 'tool' (one agent tool call).
+    -- WHO is running it, as skillflow.identity records a claim owner (host, pid,
+    -- boot id, pid namespace, process start time — so a recycled pid is not
+    -- mistaken for the original). This is the ONLY basis on which an operation
+    -- may be retired by anyone other than itself: `recover_orphan_ops` retires a
+    -- record whose owner is OBSERVABLY dead and nothing else. Age cannot justify
+    -- it, and neither can a changed claim epoch — an epoch change revokes future
+    -- admission, it does not stop an operation that is already running.
+    owner            TEXT NOT NULL DEFAULT '',
+    -- 'delivery' (a step's lifecycle hooks), 'tool' (one agent tool call) or
+    -- 'tool_step' (an inline tool node executed by advance_run).
     kind             TEXT NOT NULL,
     detail           TEXT NOT NULL DEFAULT '',
     admitted_at      TEXT NOT NULL DEFAULT (datetime('now'))

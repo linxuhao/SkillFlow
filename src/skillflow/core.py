@@ -1577,7 +1577,7 @@ class SkillFlow:
                     "  error_reason = ?, updated_at = datetime('now') WHERE id = ?",
                     (reason, run_id))
                 admitted = [dict(r) for r in conn.execute(
-                    "SELECT id, kind, detail, step_instance_id FROM "
+                    "SELECT id, kind, detail, step_instance_id, owner FROM "
                     "skillflow_active_ops WHERE run_id = ?", (run_id,)).fetchall()]
                 if admitted:
                     outcome = "draining"
@@ -1594,11 +1594,22 @@ class SkillFlow:
                        {"reason": reason[:500], "kind": r["kind"],
                         "detail": r["detail"]},
                        step_instance_id=r["step_instance_id"])
+        # Whether each un-preventable operation's owner is still alive is the
+        # difference between "wait, it is finishing" and "this needs recovery",
+        # and an operator with only a name can tell neither.
+        from skillflow.identity import owner_is_dead
+        owners = {}
+        for r in admitted:
+            dead = owner_is_dead(r["owner"])
+            owners[f"{r['kind']}:{r['detail']}"] = (
+                "dead" if dead is True else "unknown" if dead is None else "alive")
         return {"run_id": run_id, "outcome": outcome,
                 "status": (self._run_status(run_id) or ""),
                 "steps_closed": [r["step_id"] for r in closed],
                 "admitted_operations": [f"{r['kind']}:{r['detail']}"
-                                        for r in admitted]}
+                                        for r in admitted],
+                "admitted_owner_state": owners,
+                "recovery_required": any(v != "alive" for v in owners.values())}
 
     def fail_run(self, run_id: str, reason: str) -> dict:
         """Cancellation entry point kept for existing callers — see `stop_run`.
@@ -1923,9 +1934,10 @@ class SkillFlow:
                         f"refused for claim_epoch {claim_epoch}.")
             cur = conn.execute(
                 "INSERT INTO skillflow_active_ops "
-                "(run_id, step_instance_id, claim_epoch, kind, detail) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (run_id, step_instance_id, claim_epoch or 0, kind, detail))
+                "(run_id, step_instance_id, claim_epoch, owner, kind, detail) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (run_id, step_instance_id, claim_epoch or 0,
+                 worker_identity(kind), kind, detail))
             return cur.lastrowid
 
     def _retire_op(self, op_id: int | None) -> None:
@@ -1970,6 +1982,66 @@ class SkillFlow:
             self.trace(r["run_id"], "step", "claim_closed_by_cancel",
                        {"reason": reason[:500], "when": "drain_complete"},
                        step_id=r["step_id"], step_instance_id=r["id"])
+
+    def recover_orphan_ops(self, run_id: str | None = None) -> dict:
+        """Retire admitted operations whose OWNER IS OBSERVABLY DEAD, and only
+        those. Returns {"recovered": [...], "unknown": [...], "alive": n}.
+
+        Liveness is the whole basis, because nothing else is sound. A
+        cancellation closes `claim_next_step`, so the re-claim that would once
+        have cleaned up after a crash can no longer happen; without an
+        independent recovery path a run whose executor died mid-operation drains
+        forever. But a timeout, a stale heartbeat or a changed claim epoch can
+        never justify retiring a record — each of those is compatible with the
+        operation still running, and retiring it would turn a truthful `draining`
+        into a false `stopped`.
+
+        `owner_is_dead` is three-valued and its `None` (cannot observe: no
+        /proc, another kernel boot, a pre-identity row) is reported as `unknown`
+        and NOT recovered. An operator seeing `unknown` has a precise state to
+        act on rather than a silent drain.
+
+        LIMIT, stated because it bounds the guarantee: this proves the OWNER
+        PROCESS is gone. A subprocess that operation spawned (`repo_apply` shells
+        out to git) could in principle outlive it, and this cannot see that. The
+        recovery is traced as `op_recovered_orphan` so a run that terminalised
+        this way is distinguishable from one that quiesced on its own.
+
+        Deliberately NOT called from `claim_next_step` or any claiming path: the
+        cancel it exists to unblock is precisely the state in which claiming is
+        forbidden. Hosts call it from their supervisor loop and at startup.
+        """
+        from skillflow.identity import owner_is_dead
+        recovered: list[dict] = []
+        unknown: list[dict] = []
+        alive = 0
+        with self._ro() as conn:
+            if run_id:
+                rows = conn.execute(
+                    "SELECT * FROM skillflow_active_ops WHERE run_id = ?",
+                    (run_id,)).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM skillflow_active_ops").fetchall()
+            rows = [dict(r) for r in rows]
+        for r in rows:
+            dead = owner_is_dead(r["owner"])
+            if dead is True:
+                recovered.append(r)
+            elif dead is None:
+                unknown.append(r)
+            else:
+                alive += 1
+        for r in recovered:
+            self.trace(r["run_id"], "step", "op_recovered_orphan",
+                       {"kind": r["kind"], "detail": r["detail"],
+                        "owner": r["owner"], "admitted_at": r["admitted_at"]},
+                       step_instance_id=r["step_instance_id"])
+            # Retire through the same path an operation uses itself, so the
+            # terminal transition stays in one place.
+            self._retire_op(r["id"])
+        return {"recovered": [f"{r['kind']}:{r['detail']}" for r in recovered],
+                "unknown": [f"{r['kind']}:{r['detail']}" for r in unknown],
+                "alive": alive}
 
     def _terminalise_cancel_in_tx(self, conn, run_id: str, reason: str) -> list[dict]:
         """Fail the run and close every claim it still holds. Caller holds the tx.
@@ -2152,19 +2224,18 @@ class SkillFlow:
             if cursor.rowcount == 0:
                 raise _TxRollback()
 
-            # A fresh claim invalidates any admission recorded against an EARLIER
-            # claim of this same row. Without this, an operation admitted by an
-            # attempt that has since been reset to pending (a validation retry, a
-            # reclaim, an empty-output re-ask) keeps authorising the row forever:
-            # a cancellation then reports the fresh attempt as admitted work and
-            # leaves its claim open, which is a stranded row and a false report.
-            conn.execute(
-                "DELETE FROM skillflow_active_ops WHERE step_instance_id = "
-                "  (SELECT id FROM skillflow_steps WHERE run_id = ? AND step_id = ?)"
-                "  AND claim_epoch < (SELECT COALESCE(claim_epoch, 0) FROM "
-                "                     skillflow_steps WHERE run_id = ? AND step_id = ?)",
-                (run_id, run["current_node"], run_id, run["current_node"]))
-
+            # NOTE: a re-claim does NOT delete an older claim's admission, and
+            # the temptation to do so is a trap an independent reviewer caught in
+            # the first draft of this change. Bumping the epoch revokes FUTURE
+            # admission; it cannot revoke an operation that is already running.
+            # A disconnected executor can still be alive, and a hook can hold a
+            # subprocess that outlives its claim — so deleting the record on an
+            # epoch mismatch would remove the evidence while the effect kept
+            # going, and the next `stop_run` would answer `stopped` over it. That
+            # is the original false-stop defect with its tracking erased.
+            #
+            # A record is retired by its own operation in `finally`, or by
+            # `recover_orphan_ops` on OBSERVED owner death. Nothing else.
             step_row = conn.execute(
                 "SELECT id, claim_epoch FROM skillflow_steps "
                 "WHERE run_id = ? AND step_id = ? AND status = 'claimed'",
@@ -5069,32 +5140,52 @@ class SkillFlow:
                 tool_node = resolver.get_node(current)
                 if tool_node and not self._should_delegate_tool(
                         tool_node.tool_name):
-                    inst_id = self._claim_tool_step_in_tx(
-                        run_id, current, tool_node, resolver)
-                    if inst_id is None:
-                        return None  # another driver owns this tool step
-                    self.trace(run_id, "step", "claimed",
-                               {"tool": tool_node.tool_name, "inline": True},
-                               step_id=current, step_instance_id=inst_id)
+                    # ADMIT FIRST, before the claim and before any effect. The
+                    # `status == 'running' and not cancel_requested_at` test above
+                    # is a read, and a read followed by an effect is the
+                    # check-then-act this whole change exists to remove: an inline
+                    # tool node (git_sync_pre, repo_apply, run_tests) is a real
+                    # side effect that could otherwise start after a `stopped`
+                    # reply. Refused here means the run is terminal or draining,
+                    # and nothing has been claimed to unwind.
                     try:
-                        # Execute tool WITHOUT holding any lock/transaction
-                        tool_result = self._execute_tool_inline(
-                            tool_node, run_id=run_id,
-                            graph_name=run_row["graph_name"])
-                    except ToolArgumentsUnavailable as exc:
-                        # The tool could not be CALLED. Deterministic — the next
-                        # tick binds the same arguments against the same
-                        # signature — so reopening it only reproduces the
-                        # failure, and confirming it would record a step that
-                        # never ran as completed. Fail the step and the run.
-                        self._fail_tool_step_in_tx(run_id, current, str(exc))
+                        _op = self._admit_op("tool_step", run_id,
+                                             detail=tool_node.tool_name)
+                    except TerminalRunFenced:
                         return None
-                    except Exception:
-                        # Don't leave a crashed tool wedged in 'claimed'.
-                        self._reopen_tool_step_in_tx(run_id, current)
-                        raise
-                    return self._complete_tool_step(
-                        run_id, current, tool_result, run_row, resolver)
+                    try:
+                        inst_id = self._claim_tool_step_in_tx(
+                            run_id, current, tool_node, resolver)
+                        if inst_id is None:
+                            return None  # another driver owns this tool step
+                        self.trace(run_id, "step", "claimed",
+                                   {"tool": tool_node.tool_name, "inline": True},
+                                   step_id=current, step_instance_id=inst_id)
+                        try:
+                            # Execute tool WITHOUT holding any lock/transaction
+                            tool_result = self._execute_tool_inline(
+                                tool_node, run_id=run_id,
+                                graph_name=run_row["graph_name"])
+                        except ToolArgumentsUnavailable as exc:
+                            # The tool could not be CALLED. Deterministic — the next
+                            # tick binds the same arguments against the same
+                            # signature — so reopening it only reproduces the
+                            # failure, and confirming it would record a step that
+                            # never ran as completed. Fail the step and the run.
+                            self._fail_tool_step_in_tx(run_id, current, str(exc))
+                            return None
+                        except Exception:
+                            # Don't leave a crashed tool wedged in 'claimed'.
+                            self._reopen_tool_step_in_tx(run_id, current)
+                            raise
+                        return self._complete_tool_step(
+                            run_id, current, tool_result, run_row, resolver)
+                    finally:
+                        # After `_complete_tool_step`, not before: the state
+                        # mutation that publishes the tool's result is part of
+                        # the operation, and retiring first would let a stop
+                        # report `stopped` while it was still being written.
+                        self._retire_op(_op)
 
         # ── Full resolution (gate, loop, agent, or current_node=None) ──
         with self._tx() as conn:
