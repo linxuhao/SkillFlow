@@ -312,3 +312,57 @@ def test_read_and_context_roots_follow_the_run(tmp_path):
     assert resolved == wt.resolve()
     assert (resolved / "only_here.txt").exists()
     assert not (src / "only_here.txt").exists()
+
+
+def test_a_literal_project_root_survives_a_layout_default(tmp_path):
+    """The other half of the rule, and the one that bites when it is missing.
+
+    With no host resolver, the code path is not a decision — it is the default
+    layout — and a tool node that names a repository on purpose must keep it.
+    Assigning unconditionally silently redirected such a node at
+    ``projects_base/<project_id>``, and the step it belonged to reported
+    success over a repository it never looked at
+    (`test_git_sync_pre_diverged_pipeline_fails_with_message`, host side).
+    """
+    src = tmp_path / "src"
+    _init_repo(src)
+    seen = {}
+
+    def probe(project_root: str = "", **_):
+        seen["project_root"] = project_root
+        return {"passed": True}
+
+    sf = SkillFlow(":memory:")
+    sf._tool_loader = ToolLoader(_REAL_TOOLS)
+    sf._tool_loader.register_dynamic_tool("probe", {}, probe)
+    sf._workspace = WorkspaceManager(
+        str(tmp_path / "ws"), projects_base=str(tmp_path / "projects"))
+    node = StepNode(id="t1", step_type="tool", tool_name="probe",
+                    tool_params={"project_root": str(src)},
+                    transitions=[Transition(to=None)])
+    sf.register_graph(PipelineGraph(name="lit2", begin="t1", steps=[node]))
+    rid = sf.create_run("lit2", {"project_id": "p"}, project_id="p")
+    sf.start_run(rid)
+    sf.advance_run(rid)
+    assert seen["project_root"] == str(src)
+
+
+def test_the_origin_says_who_decided(tmp_path):
+    ws_default = WorkspaceManager(str(tmp_path / "ws"),
+                                  projects_base=str(tmp_path / "projects"))
+    path, origin = ws_default.get_project_code_path("p", with_origin=True)
+    assert origin == "default" and path == (tmp_path / "projects" / "p").resolve()
+
+    ws_host = WorkspaceManager(str(tmp_path / "ws2"),
+                               projects_base=str(tmp_path / "projects2"),
+                               code_path_resolver=lambda pid, run_id=None:
+                               str(tmp_path))
+    path, origin = ws_host.get_project_code_path("p", run_id="R", with_origin=True)
+    assert origin == "resolver" and path == tmp_path.resolve()
+
+    ws_none = WorkspaceManager(str(tmp_path / "ws3"),
+                               projects_base=str(tmp_path / "projects3"),
+                               code_path_resolver=lambda pid, run_id=None: False)
+    path, origin = ws_none.get_project_code_path("p", run_id="R", with_origin=True)
+    assert path is None and origin == "resolver", (
+        "a run that owns nothing was DECIDED to own nothing")

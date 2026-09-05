@@ -3357,8 +3357,8 @@ class SkillFlow:
                 )
                 params.setdefault("workspace_root",
                                   str(self._workspace.get_project_path(row["project_id"])))
-                _cp = self._workspace.get_project_code_path(
-                    row["project_id"], run_id=token.run_id)
+                _cp, _origin = self._workspace.get_project_code_path(
+                    row["project_id"], run_id=token.run_id, with_origin=True)
                 # A repo-less run gets NO project_root, not an empty one.
                 # `Path("").resolve()` is the process CWD, and the repo tools
                 # resolve straight from this value: `repo_apply` does
@@ -3375,13 +3375,15 @@ class SkillFlow:
                 # omitting and passing "" are byte-identical inside the function,
                 # and the refusal comes entirely from the tool's own guard. Those
                 # guards are the safety; this line only avoids stepping on them.
-                if _cp:
-                    # ASSIGN, not setdefault: the resolved root is the run's
-                    # declared isolation and a hook whose params name a
-                    # different one must not outrank it. `$PROJECT_ROOT` now
-                    # expands to this same value, so for every config in tree
-                    # the two agree; a literal path would not have.
+                if _cp and _origin == "resolver":
+                    # ASSIGN: the host DECIDED this root (an isolated run's
+                    # worktree), and a hook whose params name a different one
+                    # must not outrank a decision.
                     params["project_root"] = str(_cp)
+                elif _cp:
+                    # Nobody decided — this is the default layout, and a config
+                    # that names a path on purpose keeps it.
+                    params.setdefault("project_root", str(_cp))
 
         # Built-in step_commit: move tmp→step_dir atomically
         if tool_name == "step_commit":
@@ -4157,13 +4159,17 @@ class SkillFlow:
                     if not kwargs.get("workspace_root"):
                         kwargs["workspace_root"] = str(
                             self._workspace.get_project_path(pid))
-                    _cp = self._workspace.get_project_code_path(
-                        pid, run_id=run_id)
-                    if _cp:
+                    _cp, _origin = self._workspace.get_project_code_path(
+                        pid, run_id=run_id, with_origin=True)
+                    if _cp and _origin == "resolver":
                         # ASSIGN over any literal in tool_params: a tool node
                         # that hardcodes `project_root: /some/path` would
-                        # otherwise be the one route out of the run's tree, and
-                        # it passes `is_absolute()` so no tool guard catches it.
+                        # otherwise be the one route out of a run's declared
+                        # tree, and it passes `is_absolute()` so no tool guard
+                        # catches it. Only a DECIDED root does this; the default
+                        # layout still yields to an explicit param.
+                        kwargs["project_root"] = str(_cp)
+                    elif _cp and not kwargs.get("project_root"):
                         kwargs["project_root"] = str(_cp)
                     elif not kwargs.get("project_root"):
                         # Repo-less: drop the "" placeholder seeded above rather
@@ -6991,15 +6997,16 @@ class SkillFlow:
         if run_id and self._workspace is not None:
             try:
                 _pid = self._get_project_id(run_id)
-                _cp = (self._workspace.get_project_code_path(_pid, run_id=run_id)
-                       if _pid else None)
-                # Asked even when the caller supplied a root, and the resolved
-                # answer WINS. The caller here is the host, which resolves the
-                # same question for its own prompt/baseline use; when the two
-                # disagree about an isolated run the engine's answer is the
-                # declared one. A resolver with no answer leaves the caller's
-                # value alone (repo-less runs pass "" and keep it).
-                if _cp:
+                _cp, _origin = (
+                    self._workspace.get_project_code_path(
+                        _pid, run_id=run_id, with_origin=True)
+                    if _pid else (None, "default"))
+                # Asked even when the caller supplied a root, because a DECIDED
+                # root wins: the caller here is the host, which resolves the
+                # same question for its own prompt/baseline use, and when the
+                # two disagree about an isolated run the decision is the answer.
+                # A layout default only fills an empty value, as before.
+                if _cp and (_origin == "resolver" or not project_root):
                     project_root = str(_cp)
             except IsolationUnavailable:
                 raise

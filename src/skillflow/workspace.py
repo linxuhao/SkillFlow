@@ -152,10 +152,10 @@ class WorkspaceManager:
         return p
 
     def get_project_code_path(self, project_id: str,
-                              run_id: str | None = None) -> Path | None:
+                              run_id: str | None = None,
+                              with_origin: bool = False):
         """The project's code repository root, or None if it HAS no code repo.
 
-        Resolution order:
         ``run_id`` is the isolation argument: a host that puts each run in
         its own worktree answers per RUN, not per project, and every caller in
         the engine passes it. It is optional because the existing suite (and any
@@ -169,6 +169,15 @@ class WorkspaceManager:
            * ``None`` / ``""`` → no opinion; fall through.
         2. ``_code_dir / project_id`` if ``code_dir`` was set.
         3. ``projects_base / project_id`` (default).
+
+        ``with_origin`` returns ``(path, origin)`` where origin is ``"resolver"``
+        (the HOST decided this — e.g. an isolated run worktree), ``"code_dir"``
+        or ``"default"`` (nobody decided; this is the layout). The distinction
+        matters exactly once, and it is not cosmetic: a DECIDED root overrides a
+        ``project_root`` a config wrote into its own tool params, and a layout
+        default must not — or every tool node that deliberately names a path
+        would be silently redirected at the project directory, which is the same
+        class of defect as silently sharing a checkout.
 
         ``False`` is a distinct answer because ``None`` already means "no
         opinion, use your default". Without the distinction a run that declares
@@ -188,12 +197,15 @@ class WorkspaceManager:
         if self._code_path_resolver is not None:
             resolved = self._call_resolver(project_id, run_id)
             if resolved is False:
-                return None
+                return (None, "resolver") if with_origin else None
             if resolved:
-                return Path(resolved).expanduser().resolve()
+                p = Path(resolved).expanduser().resolve()
+                return (p, "resolver") if with_origin else p
         if self._code_dir:
-            return (self._code_dir / project_id).resolve()
-        return (self.projects_base / project_id).resolve()
+            p = (self._code_dir / project_id).resolve()
+            return (p, "code_dir") if with_origin else p
+        p = (self.projects_base / project_id).resolve()
+        return (p, "default") if with_origin else p
 
     def _call_resolver(self, project_id: str, run_id: str | None):
         """Call the host resolver with the run when it accepts one.
