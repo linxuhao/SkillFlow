@@ -29,6 +29,26 @@ class StaleClaimFenced(StepVersionConflict):
     """
 
 
+class TerminalRunFenced(SkillFlowError):
+    """The run is terminal — this write was refused before it could take effect.
+
+    Distinct from :class:`StaleClaimFenced`, and the distinction is the whole
+    point: a stale claim means *someone else is executing this step*, so the
+    caller lost a race with a peer. This means *the run is over* — cancelled
+    (``fail_run``) or finished — so there is no peer and nothing to re-decide.
+
+    Raised by ``confirm_step`` BEFORE the lifecycle hooks, which is the last
+    instant at which promotion and ``on_deliver`` (``repo_apply`` — real git
+    commits in the user's repository) can still be prevented. It is deliberately
+    NOT a ``StepVersionConflict``: a host that reacts to a lost claim by
+    re-claiming would, on a cancelled run, be re-entering something the operator
+    just stopped.
+
+    ``deliveries_in_flight`` on the cancelling side names what could not be
+    prevented, because a hook already executing is never preempted.
+    """
+
+
 class RequiredContextMissing(SkillFlowError):
     """A context source marked ``required: true`` resolved to no content.
 

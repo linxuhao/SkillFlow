@@ -43,6 +43,7 @@ from skillflow.exceptions import (
     StepVersionConflict,
     StaleClaimFenced,
     SkillFlowError,
+    TerminalRunFenced,
     ToolArgumentsUnavailable,
 )
 from skillflow.identity import owner_is_dead, worker_identity
@@ -1534,9 +1535,64 @@ class SkillFlow:
         self.start_run(new_id)
         return new_id
 
-    def fail_run(self, run_id: str, reason: str) -> None:
+    def fail_run(self, run_id: str, reason: str) -> dict:
+        """Cancel (or fail) a run, and close what it leaves behind.
+
+        Returns a report — new; it used to return None and callers ignore the
+        value, so this is additive:
+
+            {"run_id", "status", "steps_closed": [...],
+             "deliveries_in_flight": [...]}
+
+        `steps_closed` are claims that had NOT been authorised to deliver: no
+        lifecycle hook has started for them, so cancelling really did stop them
+        and they are marked failed here rather than left `claimed` forever. That
+        matters because nothing else would ever reclaim them — the stale-claim
+        reaper deliberately refuses a claim whose owner PROCESS is alive, and on
+        a single-process host the owner is the server itself.
+
+        `deliveries_in_flight` are claims already past `_begin_delivery`. Their
+        hooks are running now; promotion and `repo_apply` may already have
+        happened or may happen a moment from now, and this call did not and
+        could not prevent it. They are named rather than silently included in
+        the closed set, because "stopped" and "stopped except for this commit"
+        are different facts and the operator has to be told which one they got.
+
+        The two lists are computed in the SAME transaction that fails the run,
+        so they are a consistent snapshot of the linearization: every claim is
+        in exactly one of them, decided by whether its `_begin_delivery`
+        committed before this transaction did.
+        """
         with self._tx() as conn:
             self._fail_run_in_tx(conn, run_id, reason)
+            _rows = conn.execute(
+                "SELECT id, step_id, claim_epoch, delivery_started_at "
+                "FROM skillflow_steps WHERE run_id = ? AND status = 'claimed'",
+                (run_id,)).fetchall()
+            closed = [dict(r) for r in _rows if not r["delivery_started_at"]]
+            in_flight = [dict(r) for r in _rows if r["delivery_started_at"]]
+            if closed:
+                conn.execute(
+                    "UPDATE skillflow_steps SET status = 'failed', "
+                    "  last_error = ?, completed_at = datetime('now'), "
+                    "  updated_at = datetime('now') "
+                    "WHERE run_id = ? AND status = 'claimed' "
+                    "  AND delivery_started_at IS NULL",
+                    (f"run cancelled before delivery: {reason}"[:2000], run_id))
+        # Outside the transaction: `_release_step_tools` takes its own lock and
+        # must not be reached with a write transaction open on this connection.
+        for r in closed:
+            self._release_step_tools(run_id, r["step_id"], r["id"],
+                                     r["claim_epoch"] or 0)
+        for r in closed + in_flight:
+            self.trace(run_id, "step",
+                       "claim_closed_by_cancel" if not r["delivery_started_at"]
+                       else "delivery_in_flight_at_cancel",
+                       {"reason": reason[:500]},
+                       step_id=r["step_id"], step_instance_id=r["id"])
+        return {"run_id": run_id, "status": "failed",
+                "steps_closed": [r["step_id"] for r in closed],
+                "deliveries_in_flight": [r["step_id"] for r in in_flight]}
 
     def complete_run(self, run_id: str) -> None:
         with self._tx() as conn:
@@ -1739,10 +1795,21 @@ class SkillFlow:
         # Scope the reuse lookup to this graph so a project that runs more than
         # one config (e.g. a meta_conversation run and its DPE run) gets a
         # distinct run per config instead of accidentally reusing another.
-        existing = self.get_run_by_project(project_id, graph_name=graph_name)
-        if existing:
-            return existing["id"]
-        return self.create_run(graph_name, context, project_id=project_id)
+        # ONE critical section, because this is a check-then-act on a table
+        # two threads reach at once. A host that registers a project and then
+        # launches it has a poller looking at the same (project, graph) pair on
+        # its own thread; both can find no run and both can create one, and the
+        # loser is a second, silently competing run against the same repository.
+        #
+        # `self._lock` is the existing serialisation for this connection and it
+        # is re-entrant, so the `_tx` inside `create_run` re-acquires it on this
+        # thread without nesting a transaction. No new lock, and no lock is held
+        # across any I/O.
+        with self._lock:
+            existing = self.get_run_by_project(project_id, graph_name=graph_name)
+            if existing:
+                return existing["id"]
+            return self.create_run(graph_name, context, project_id=project_id)
 
     def start_project(self, project_id: str, graph_name: str,
                       context: dict | None = None) -> str:
@@ -1752,6 +1819,70 @@ class SkillFlow:
         return run_id
 
     # ── Fencing ────────────────────────────────────────────────────
+
+    # A run in one of these has ended. Nothing may promote a staged output or
+    # run an on_deliver hook for it. `paused` is NOT here and must never be: a
+    # checkpoint pauses the run and the step that reaches the checkpoint
+    # confirms normally afterwards, so fencing `paused` would break every
+    # checkpoint flow in the system.
+    TERMINAL_RUN_STATUSES = ("failed", "completed")
+
+    def _run_status(self, run_id: str,
+                    conn: "sqlite3.Connection | None" = None) -> str | None:
+        sql = "SELECT status FROM skillflow_runs WHERE id = ?"
+        if conn is not None:
+            row = conn.execute(sql, (run_id,)).fetchone()
+        else:
+            with self._ro() as c:
+                row = c.execute(sql, (run_id,)).fetchone()
+        return row["status"] if row else None
+
+    def _begin_delivery(self, token: "ClaimToken") -> None:
+        """Authorise this claim to run its lifecycle hooks — or refuse.
+
+        THE cancellation linearization point. The run-status check and the
+        `delivery_started_at` stamp are ONE transaction, so this is not a
+        check-then-act: `fail_run` cannot slip between them. Both sides take
+        `BEGIN IMMEDIATE` on the shared connection under `self._lock`, so for
+        any (cancel, delivery) pair exactly one commits first:
+
+          cancel first   -> we read a terminal status and raise
+                            TerminalRunFenced. No hook runs. Nothing is
+                            promoted, nothing is committed to the repository.
+          delivery first -> the stamp is durable before the cancel's
+                            transaction can start, so `fail_run` SEES it,
+                            leaves the claim alone and reports the step in
+                            `deliveries_in_flight`.
+
+        What this does NOT do is preempt. Once the stamp is written the hooks
+        run to completion even if a cancellation commits one microsecond later;
+        `repo_apply` is a git commit and there is no honest way to un-start one.
+        The guarantee is therefore exactly: *no lifecycle hook STARTS after a
+        cancellation has committed*, and the cancelling caller is told which
+        hooks it did not manage to prevent.
+
+        Held for the duration of two SQL statements and no I/O, so a `fail_run`
+        arriving concurrently waits microseconds. The hooks themselves run with
+        NO transaction and NO lock held (see confirm_step), which is what keeps
+        a `fail_run` issued *during* a hook from deadlocking — and what keeps a
+        hook that re-enters skillflow (every tool traces) from opening a
+        transaction inside one.
+        """
+        with self._tx() as conn:
+            status = self._run_status(token.run_id, conn)
+            if status in self.TERMINAL_RUN_STATUSES:
+                reason = conn.execute(
+                    "SELECT error_reason FROM skillflow_runs WHERE id = ?",
+                    (token.run_id,)).fetchone()
+                raise TerminalRunFenced(
+                    f"Run '{token.run_id}' is {status}; delivery of step "
+                    f"'{token.step_id}' (instance {token.step_instance_id}) "
+                    f"refused before its lifecycle hooks. "
+                    f"Run reason: {(reason['error_reason'] if reason else '') or '-'}")
+            conn.execute(
+                "UPDATE skillflow_steps SET delivery_started_at = datetime('now') "
+                "WHERE id = ? AND delivery_started_at IS NULL",
+                (token.step_instance_id,))
 
     def _epoch_holds(self, step_instance_id: int, claim_epoch: int,
                      conn: "sqlite3.Connection | None" = None) -> bool:
@@ -2416,6 +2547,19 @@ class SkillFlow:
         # {step}/. A reclaimed executor reaching here would do both alongside
         # its replacement and only then be told it had lost the step.
         self._assert_epoch(token, "confirm_step")
+        # …and then the RUN fence. Order matters and is not arbitrary: the epoch
+        # question ("am I still the executor?") is asked first so a zombie still
+        # gets the accurate StaleClaimFenced it always got, and only a caller
+        # that genuinely holds the claim is told the run ended under it.
+        #
+        # This is the last instruction before `_release_step_tools`, the output
+        # promotion in `after_validate` and `on_deliver` -> `repo_apply`. Live,
+        # 2026-09-05: a run was stopped at 09:09:00 and its already-claimed step
+        # confirmed at 09:09:40, promoting a staged file and committing ac5237b
+        # into a repository no maker was allowed to write to. The epoch fence
+        # above was open, correctly — nobody had reclaimed the step. Only the
+        # run had ended, and nothing asked.
+        self._begin_delivery(token)
         # The claim is over — drop the read tools it owned. Identity-guarded on
         # (instance id, claim epoch), so neither a zombie executor of an earlier
         # instance nor a superseded re-claim of the same row can release the
@@ -3321,6 +3465,26 @@ class SkillFlow:
         # `version` from the row it is about to write, so it never detects a
         # reclaim on its own.)
         self._assert_epoch(token, "fail_step")
+        # A terminal run needs no failure recorded, and recording one is not
+        # harmless: `_fail_step_in_tx` puts a retryable step back to 'pending',
+        # which would undo the claim `fail_run` just closed and leave a
+        # cancelled run holding a claimable step row. Unlike confirm_step this
+        # does NOT raise — the caller was already reporting a failure, so there
+        # is nothing it could usefully do differently, and raising here would
+        # explode inside the `except` block of every host that calls fail_step
+        # from one. Recorded in the trace so the drop is never silent.
+        _status = self._run_status(token.run_id)
+        if _status in self.TERMINAL_RUN_STATUSES:
+            self._release_step_tools(token.run_id, token.step_id,
+                                     token.step_instance_id, token.claim_epoch)
+            self.trace(token.run_id, "step", "fail_step_fenced",
+                       {"run_status": _status, "error": error[:500]},
+                       step_id=token.step_id,
+                       step_instance_id=token.step_instance_id)
+            logging.getLogger("skillflow").info(
+                "fail_step for step %r ignored: run %s is %s",
+                token.step_id, token.run_id, _status)
+            return
         self._release_step_tools(token.run_id, token.step_id,
                                  token.step_instance_id, token.claim_epoch)
         with self._tx() as conn:
@@ -6220,6 +6384,26 @@ class SkillFlow:
                        {"source": "agent", "fenced": msg},
                        step_id=step_id, step_instance_id=step_instance_id)
             return {"error": msg}
+        # The CHEAP half of the cancellation boundary. `confirm_step` is the
+        # hard one — it is what stops a commit — but it is only reached when the
+        # step ends, which on a real agent step is minutes away: the run stopped
+        # at 09:09:00 on 2026-09-05 went on to spend two more LLM turns, a whole
+        # fresh retry attempt and an `edit` call before it got there. Every
+        # agent tool call in the host funnels through here, so this ends the
+        # writing within one turn instead.
+        #
+        # An error dict, not a raise: the epoch fence beside it already answers
+        # this way, so the agent turn loop needs no new handling, and the model
+        # is told why in the one place it is guaranteed to read.
+        if run_id:
+            _rs = self._run_status(run_id)
+            if _rs in self.TERMINAL_RUN_STATUSES:
+                msg = (f"Run '{run_id}' is {_rs}; tool '{name}' refused. The "
+                       f"run was stopped — do not continue this step.")
+                self.trace(run_id, "tool_call", name,
+                           {"source": "agent", "fenced": msg},
+                           step_id=step_id, step_instance_id=step_instance_id)
+                return {"error": msg}
         # Trace the call (params summarized — content fields can be huge).
         param_summary = {k: (f"<{len(v)} chars>" if isinstance(v, str) and len(v) > 200 else v)
                          for k, v in (params or {}).items()}

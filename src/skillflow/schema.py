@@ -122,6 +122,23 @@ CREATE TABLE IF NOT EXISTS skillflow_steps (
     -- workspace), but that is project-scoped and replaced in place, so it
     -- cannot answer "what happened during THIS run".
     loop_item               TEXT,
+    -- WHEN this instance was authorised to deliver: set by the single
+    -- transaction in `_begin_delivery` that also checks the run is not
+    -- terminal. It is the cancellation LINEARIZATION POINT, not a timestamp
+    -- anyone reads for time.
+    --
+    -- `fail_run` and `_begin_delivery` both take BEGIN IMMEDIATE on the same
+    -- connection, so exactly one of them commits first and the other sees the
+    -- result. Non-NULL means the lifecycle hooks were already authorised —
+    -- promotion and on_deliver (repo_apply, real git commits) may already be
+    -- running, and a cancellation arriving now CANNOT take them back. NULL
+    -- means no hook has started and cancellation closes the claim instead.
+    --
+    -- A COLUMN rather than a new `status` value, deliberately: eight queries
+    -- across the reaper, the claimer and the hosts filter on
+    -- `status IN ('pending','claimed',…)`, and a ninth state would have to be
+    -- taught to every one of them. Nothing filters on this.
+    delivery_started_at     TEXT,
     created_at              TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (run_id) REFERENCES skillflow_runs(id)
@@ -271,4 +288,9 @@ SKILLFLOW_MIGRATIONS: list[str] = [
     # either, and why a counter whose whole job is to survive one must not live
     # in that dict.
     "ALTER TABLE skillflow_steps ADD COLUMN release_count INTEGER NOT NULL DEFAULT 0",
+    # Cancellation linearization point (see SKILLFLOW_STEPS.delivery_started_at).
+    # Existing rows backfill to NULL = "no hook authorised", which is the safe
+    # reading: a cancellation arriving for one of them closes the claim, exactly
+    # as it would for a fresh row.
+    "ALTER TABLE skillflow_steps ADD COLUMN delivery_started_at TEXT",
 ]
