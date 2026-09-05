@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from skillflow.core import SkillFlow, StepResult, ClaimedStep
+from skillflow.exceptions import IsolationUnavailable
 
 
 @dataclass
@@ -295,7 +296,12 @@ class SkillTool:
                     pid = self.sf._get_project_id(self.run_id)
                     gname = self.sf._get_graph_name(self.run_id) or self.graph_name
                     tool_params = self.sf._workspace.resolve_variables(
-                        pid, gname, claimed.step_id, tool_params)
+                        pid, gname, claimed.step_id, tool_params,
+                        run_id=self.run_id)
+        except IsolationUnavailable:
+            # A run whose declared root cannot be resolved must not be handed a
+            # tool call at all; unexpanded placeholders are the lesser bug.
+            raise
         except Exception:
             # A swallow here leaves $CONFIG_DIR/$STEP_DIR/… unexpanded, so the
             # delegated tool runs against literal placeholder paths.

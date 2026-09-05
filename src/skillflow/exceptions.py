@@ -111,6 +111,24 @@ class ToolArgumentsUnavailable(SkillFlowError):
     """
 
 
+class IsolationUnavailable(SkillFlowError):
+    """A run declares an isolated code root and the engine cannot resolve it.
+
+    The point of this class is that it must NOT be caught by the best-effort
+    root filling around it. Two call sites resolve ``project_root`` inside
+    ``except Exception:`` blocks that log and continue, which is right for "the
+    lookup hiccuped, use the default" and catastrophic for "this run's tree is
+    gone": continuing means the step runs against whatever root the fallback
+    invents — for a run that declares isolation, the shared checkout it was
+    isolated FROM. There is no correct silent answer, so this one is raised and
+    re-raised, and the step fails naming the run.
+
+    Never used for a repo-LESS run. "This run owns no repository" is an answer
+    (``False`` from the code-path resolver) and is handled by omitting the
+    argument; this is the absence of an answer that was promised.
+    """
+
+
 class NoMatchingTransition(SkillFlowError):
     """No transition matched the step's result flags.
 

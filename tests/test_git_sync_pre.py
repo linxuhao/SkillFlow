@@ -1,5 +1,11 @@
 """Tests for git_sync_pre tool — unit + integration.
 
+NOTE on `policy="pull"`: fetching and fast-forwarding is now opted into by name
+and the default is no network at all. These tests are about the sync mechanics,
+so they ask for the sync; `test_not_a_git_repo` deliberately does not, because
+its subject is the refusal that comes before any policy. See
+tests/test_git_sync_policy.py for the default and for the worktree refusal.
+
 Covers:
   - Non-git dir → skip
   - Git repo, no remote → skip
@@ -57,7 +63,7 @@ def test_git_repo_no_remote(tmp_path):
     """Git repo without remote → silent skip."""
     _init_git(tmp_path)
     fn = _load_tool()
-    result = fn(project_root=str(tmp_path))
+    result = fn(project_root=str(tmp_path), policy="pull")
     assert result["synced"] is True
     assert result["action"] == "skip"
     assert "no remote" in result["detail"]
@@ -77,7 +83,7 @@ def test_up_to_date(tmp_path):
     _git(tmp_path, "fetch", "origin")
 
     fn = _load_tool()
-    result = fn(project_root=str(tmp_path))
+    result = fn(project_root=str(tmp_path), policy="pull")
     assert result["synced"] is True
     assert result["action"] == "up-to-date"
     assert "error" not in result
@@ -102,7 +108,7 @@ def test_fast_forward_pull(tmp_path):
     _git(remote, "commit", "-qm", "v2")
 
     fn = _load_tool()
-    result = fn(project_root=str(local))
+    result = fn(project_root=str(local), policy="pull")
     assert result["synced"] is True
     assert result["action"] == "pulled"
     assert result["pulled"] == 1
@@ -132,7 +138,7 @@ def test_diverged_conflict_failure(tmp_path):
     _git(remote, "commit", "-qm", "remote v2")
 
     fn = _load_tool()
-    result = fn(project_root=str(local))
+    result = fn(project_root=str(local), policy="pull")
 
     # Must be an explicit failure
     assert result["synced"] is False
@@ -160,7 +166,7 @@ def test_detached_head(tmp_path):
     _git(tmp_path, "checkout", "-q", sha)
 
     fn = _load_tool()
-    result = fn(project_root=str(tmp_path))
+    result = fn(project_root=str(tmp_path), policy="pull")
     assert result["synced"] is True
     assert result["action"] == "skip"
     assert "detached HEAD" in result["detail"]

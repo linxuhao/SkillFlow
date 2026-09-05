@@ -353,21 +353,29 @@ def test_a_tool_that_cannot_be_called_fails_the_step_and_the_run(tmp_path):
         f"leave the run advancing or reporting success")
 
 
-def test_the_project_root_token_still_fabricates_a_path_on_a_repoless_run(tmp_path):
-    """A characterization test for the hole the repo-tool guards do NOT close.
+def test_the_project_root_token_no_longer_fabricates_a_path_on_a_repoless_run(tmp_path):
+    """The hole this file used to PIN is closed; the pin becomes the contract.
 
-    `repo_apply`'s guard rejects an empty/relative `project_root`, and its
-    comment used to justify that with "a run that owns no repository is handed
-    no project_root at all". That is only true of the values the ENGINE fills in.
-    `WorkspaceManager.resolve_variables` substitutes `$PROJECT_ROOT` →
-    `projects_base/<project_id>` without consulting the code-path resolver, and
-    both engine fill sites act only when the key is ABSENT — so a config that
-    writes the token into its tool_params hands the tool an absolute, fabricated
-    path that sails through `is_absolute()`.
+    What it pinned: `repo_apply`'s guard rejects an empty/relative
+    `project_root`, and its comment justified that with "a run that owns no
+    repository is handed no project_root at all" — true only of the values the
+    ENGINE fills in. `resolve_variables` substituted `$PROJECT_ROOT` →
+    `projects_base/<project_id>` without consulting the code-path resolver, so a
+    config that wrote the token into its tool_params handed the tool an
+    absolute, FABRICATED path that sails through `is_absolute()`. The old test
+    said "changing that substitution is a separate decision with its own blast
+    radius" and waited for someone to make it.
 
-    Pinned rather than fixed: changing that substitution is a separate decision
-    with its own blast radius. This test exists so the next reader learns the
-    hole from the suite instead of from a commit into the wrong repository.
+    It is made: the token resolves through the same code-path resolver as every
+    other route to the repository, and a run for which nothing resolves gets an
+    `IsolationUnavailable` instead of a directory that was invented for it. The
+    blast radius the old note worried about is the reason the decision needed
+    making — a fabricated absolute path is exactly what a run isolated into its
+    own worktree must never be handed, because it names the shared checkout the
+    run was isolated from.
+
+    The step must FAIL rather than run: same standard as the sibling test above
+    for a tool that could not be called at all.
     """
     seen = {}
 
@@ -391,14 +399,14 @@ def test_the_project_root_token_still_fabricates_a_path_on_a_repoless_run(tmp_pa
 
     run_id = sf.create_run("tokened", project_id="p1")
     sf.start_run(run_id)
-    sf.advance_run(run_id)
 
-    from pathlib import Path as _P
-    got = seen.get("project_root")
-    assert got and _P(got).is_absolute(), \
-        f"the token no longer fabricates a path (got {got!r}) — the repo tools' " \
-        f"comments say it does; update them together"
-    assert _P(got) == (tmp_path / "projects" / "p1")
+    from skillflow.exceptions import IsolationUnavailable
+    with pytest.raises(IsolationUnavailable):
+        sf.advance_run(run_id)
+
+    assert "project_root" not in seen, (
+        f"the tool RAN with {seen.get('project_root')!r} — a repo-less run must "
+        f"not be handed a fabricated repository path")
 
 
 # ── the AGENT tool path — the fourth invocation path ─────────────────────

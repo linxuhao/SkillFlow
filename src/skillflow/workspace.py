@@ -92,6 +92,8 @@ class WorkspaceManager:
         # paths (e.g. an existing repo) that the default project_id-keyed
         # layout cannot express. Returning None falls back to the default.
         self._code_path_resolver = code_path_resolver
+        # None until first use: whether the resolver accepts a run_id.
+        self._resolver_arity: bool | None = None
 
     # ── Project-level paths ──────────────────────────────────────────
 
@@ -149,11 +151,17 @@ class WorkspaceManager:
         p.mkdir(parents=True, exist_ok=True)
         return p
 
-    def get_project_code_path(self, project_id: str) -> Path | None:
+    def get_project_code_path(self, project_id: str,
+                              run_id: str | None = None) -> Path | None:
         """The project's code repository root, or None if it HAS no code repo.
 
         Resolution order:
-        1. ``code_path_resolver(project_id)``:
+        ``run_id`` is the isolation argument: a host that puts each run in
+        its own worktree answers per RUN, not per project, and every caller in
+        the engine passes it. It is optional because the existing suite (and any
+        deployed host) supplies a one-argument resolver — see ``_call_resolver``.
+
+        1. ``code_path_resolver(project_id[, run_id])``:
            * a non-empty path → that repo (e.g. an 'existing' repo the project
              was created against);
            * ``False`` → the project has NO code repo. Returns None, and callers
@@ -178,7 +186,7 @@ class WorkspaceManager:
         ``tool_loader.declare_dynamic`` for that account.
         """
         if self._code_path_resolver is not None:
-            resolved = self._code_path_resolver(project_id)
+            resolved = self._call_resolver(project_id, run_id)
             if resolved is False:
                 return None
             if resolved:
@@ -186,6 +194,32 @@ class WorkspaceManager:
         if self._code_dir:
             return (self._code_dir / project_id).resolve()
         return (self.projects_base / project_id).resolve()
+
+    def _call_resolver(self, project_id: str, run_id: str | None):
+        """Call the host resolver with the run when it accepts one.
+
+        Arity is inspected, not assumed, and the answer is cached per resolver
+        object. A two-argument resolver is the isolated shape; a one-argument
+        resolver is what every currently deployed host and most of this suite
+        pass, and silently dropping either would be worse than the check:
+        calling a 1-arg resolver with 2 args raises TypeError, and NOT passing
+        the run to a 2-arg resolver would hand an isolated run its project's
+        shared root, which is the exact defect this argument exists to remove.
+        """
+        fn = self._code_path_resolver
+        takes_run = self._resolver_arity
+        if takes_run is None:
+            import inspect
+            try:
+                params = inspect.signature(fn).parameters
+                takes_run = (len(params) >= 2 or any(
+                    p.kind == inspect.Parameter.VAR_POSITIONAL
+                    or p.kind == inspect.Parameter.VAR_KEYWORD
+                    for p in params.values()))
+            except (TypeError, ValueError):
+                takes_run = False
+            self._resolver_arity = takes_run
+        return fn(project_id, run_id) if takes_run else fn(project_id)
 
     # ── Step-level paths ─────────────────────────────────────────────
 
@@ -252,7 +286,8 @@ class WorkspaceManager:
 
     def resolve_variables(self, project_id: str, config_name: str,
                           step_id: str, params: dict,
-                          item: str | None = None) -> dict:
+                          item: str | None = None,
+                          run_id: str | None = None) -> dict:
         """Resolve ``$STEP_TMP_DIR``, ``$STEP_DIR`` etc. in param values.
 
         ``item``: the step's current loop item, when it is a loop-body step —
@@ -260,8 +295,37 @@ class WorkspaceManager:
         (where the files ACTUALLY are). Without it, lifecycle hooks like
         ``repo_apply(source_dir=$STEP_DIR)`` read the flat parent and would
         commit item-named subfolders into the repo.
+
+        ``$PROJECT_ROOT`` goes through the code-path resolver like every other
+        route to the repository. It used to expand to ``projects_base/<id>``
+        directly, which made the token the one way to reach a tree the resolver
+        never saw: for an existing-repo project it named a directory that is not
+        the repository, and for an isolated run it would name the shared
+        checkout the run was isolated from. Configs use it in exactly the places
+        where that matters (``git_sync_pre``, ``git_push_post``), so it is
+        resolved, and when nothing resolves it raises rather than inventing a
+        path — see ``IsolationUnavailable``.
+
+        Resolution is LAZY: params without the token never call the resolver, so
+        a repo-less run's ``$STEP_DIR``-only hook is unaffected.
         """
         resolved = {}
+        _project_root: str | None = None
+
+        def _root() -> str:
+            nonlocal _project_root
+            if _project_root is None:
+                from skillflow.exceptions import IsolationUnavailable
+                cp = self.get_project_code_path(project_id, run_id=run_id)
+                if cp is None:
+                    raise IsolationUnavailable(
+                        f"$PROJECT_ROOT was requested by {config_name}/{step_id} "
+                        f"(project {project_id!r}, run {run_id or '-'}) and no "
+                        f"code repository resolves for it. Refusing to expand "
+                        f"the token to a default path.")
+                _project_root = str(cp)
+            return _project_root
+
         for key, value in params.items():
             if isinstance(value, str):
                 value = (value
@@ -280,8 +344,9 @@ class WorkspaceManager:
                                   str(self.get_tasks_dir(project_id)))
                          .replace("$CONFIG_DIR",
                                   str(self.get_config_path(project_id, config_name)))
-                         .replace("$PROJECT_ROOT",
-                                  str(self.projects_base / project_id)))
+                         )
+                if "$PROJECT_ROOT" in value:
+                    value = value.replace("$PROJECT_ROOT", _root())
             resolved[key] = value
         return resolved
 

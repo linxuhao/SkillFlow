@@ -37,6 +37,7 @@ from skillflow.graph import (
 from skillflow.exceptions import (
     CycleLimitExceeded,
     GraphValidationError,
+    IsolationUnavailable,
     NoMatchingTransition,
     OutputValidationError,
     RequiredContextMissing,
@@ -2504,7 +2505,7 @@ class SkillFlow:
                     # workspace_root/"project", the populated project BRIEF dir,
                     # which it then labels "Repository".
                     _ctx_code = self._workspace.get_project_code_path(
-                        run["project_id"])
+                        run["project_id"], run_id=run_id)
                     resolver = ContextResolver(
                         config_path, self._tool_loader,
                         code_root=_ctx_code if _ctx_code is not None else False,
@@ -2571,7 +2572,8 @@ class SkillFlow:
                     # then attaches no `repo` layer at all, by decision rather
                     # than by whether that directory happens to exist.
                     _code_path = (self._workspace.get_project_code_path(
-                        run["project_id"]) if self._workspace else None)
+                        run["project_id"], run_id=run_id)
+                        if self._workspace else None)
                     code_root = str(_code_path) if _code_path else ""
                     # Staging-first working tree: the current step's .tmp
                     # (create/edit output) shadows the repo baseline so a
@@ -3351,11 +3353,12 @@ class SkillFlow:
                     _item = None
                 params = self._workspace.resolve_variables(
                     row["project_id"], row["graph_name"], token.step_id, params,
-                    item=_item,
+                    item=_item, run_id=token.run_id,
                 )
                 params.setdefault("workspace_root",
                                   str(self._workspace.get_project_path(row["project_id"])))
-                _cp = self._workspace.get_project_code_path(row["project_id"])
+                _cp = self._workspace.get_project_code_path(
+                    row["project_id"], run_id=token.run_id)
                 # A repo-less run gets NO project_root, not an empty one.
                 # `Path("").resolve()` is the process CWD, and the repo tools
                 # resolve straight from this value: `repo_apply` does
@@ -3373,7 +3376,12 @@ class SkillFlow:
                 # and the refusal comes entirely from the tool's own guard. Those
                 # guards are the safety; this line only avoids stepping on them.
                 if _cp:
-                    params.setdefault("project_root", str(_cp))
+                    # ASSIGN, not setdefault: the resolved root is the run's
+                    # declared isolation and a hook whose params name a
+                    # different one must not outrank it. `$PROJECT_ROOT` now
+                    # expands to this same value, so for every config in tree
+                    # the two agree; a literal path would not have.
+                    params["project_root"] = str(_cp)
 
         # Built-in step_commit: move tmp→step_dir atomically
         if tool_name == "step_commit":
@@ -3448,7 +3456,8 @@ class SkillFlow:
 
         # after_deliver checks against the project repo, not step output
         if hook_name == "after_deliver":
-            check_dir = self._workspace.get_project_code_path(pid)
+            check_dir = self._workspace.get_project_code_path(
+                pid, run_id=token.run_id)
         else:
             check_dir = self._workspace.get_step_dir(pid, gname, token.step_id)
 
@@ -4136,7 +4145,7 @@ class SkillFlow:
                     except Exception:
                         pass
                     kwargs = self._workspace.resolve_variables(
-                        pid, graph_name, tool_node.id, kwargs
+                        pid, graph_name, tool_node.id, kwargs, run_id=run_id
                     )
                     # Fill workspace_root / project_root with the project's real
                     # paths. The setdefault("") placeholders above would defeat a
@@ -4148,24 +4157,36 @@ class SkillFlow:
                     if not kwargs.get("workspace_root"):
                         kwargs["workspace_root"] = str(
                             self._workspace.get_project_path(pid))
-                    if not kwargs.get("project_root"):
-                        _cp = self._workspace.get_project_code_path(pid)
-                        if _cp:
-                            kwargs["project_root"] = str(_cp)
-                        else:
-                            # Repo-less: drop the "" placeholder seeded above
-                            # rather than pass it on. `Path("").resolve()` is the
-                            # process CWD and repo_apply/git_sync_pre/
-                            # repo_validate each resolve this value directly.
-                            #
-                            # What the pop actually buys: a tool whose parameter
-                            # is REQUIRED cannot be called, and the caller sees
-                            # that as a TypeError instead of running against the
-                            # CWD. For a tool that defaults it to "" the pop
-                            # changes nothing the function can observe — those
-                            # refuse by their own guard, which is where the
-                            # safety on this path lives.
-                            kwargs.pop("project_root", None)
+                    _cp = self._workspace.get_project_code_path(
+                        pid, run_id=run_id)
+                    if _cp:
+                        # ASSIGN over any literal in tool_params: a tool node
+                        # that hardcodes `project_root: /some/path` would
+                        # otherwise be the one route out of the run's tree, and
+                        # it passes `is_absolute()` so no tool guard catches it.
+                        kwargs["project_root"] = str(_cp)
+                    elif not kwargs.get("project_root"):
+                        # Repo-less: drop the "" placeholder seeded above rather
+                        # than pass it on. `Path("").resolve()` is the process
+                        # CWD and repo_apply/git_sync_pre/repo_validate each
+                        # resolve this value directly.
+                        #
+                        # What the pop actually buys: a tool whose parameter is
+                        # REQUIRED cannot be called, and the caller sees that as
+                        # a TypeError instead of running against the CWD. For a
+                        # tool that defaults it to "" the pop changes nothing the
+                        # function can observe — those refuse by their own guard,
+                        # which is where the safety on this path lives.
+                        #
+                        # A LITERAL project_root in tool_params still stands for
+                        # a repo-less run: nothing resolved, so nothing outranks
+                        # it, and the tool's own guard remains the judge.
+                        kwargs.pop("project_root", None)
+            except IsolationUnavailable:
+                # NOT best-effort. This run declares a code root the engine
+                # could not resolve; continuing would run the tool against
+                # whatever the fallback invents.
+                raise
             except Exception:
                 # Best-effort default-filling, but a failure here leaves a tool
                 # without workspace_root/project_root → it misfires later with a
@@ -6967,12 +6988,21 @@ class SkillFlow:
         # their tree from it. A tool that reads `workspace_root` therefore gets
         # different trees depending on which path invoked it — recorded here
         # because it is a live inconsistency, not a thing this change fixed.
-        if not project_root and run_id and self._workspace is not None:
+        if run_id and self._workspace is not None:
             try:
                 _pid = self._get_project_id(run_id)
-                _cp = (self._workspace.get_project_code_path(_pid)
+                _cp = (self._workspace.get_project_code_path(_pid, run_id=run_id)
                        if _pid else None)
-                project_root = str(_cp) if _cp else ""
+                # Asked even when the caller supplied a root, and the resolved
+                # answer WINS. The caller here is the host, which resolves the
+                # same question for its own prompt/baseline use; when the two
+                # disagree about an isolated run the engine's answer is the
+                # declared one. A resolver with no answer leaves the caller's
+                # value alone (repo-less runs pass "" and keep it).
+                if _cp:
+                    project_root = str(_cp)
+            except IsolationUnavailable:
+                raise
             except Exception:
                 logging.getLogger("skillflow").warning(
                     "could not resolve the code path for run %s; tool %r runs "

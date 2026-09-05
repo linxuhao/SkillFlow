@@ -13,12 +13,29 @@ import subprocess
 from pathlib import Path
 
 
-def git_sync_pre(project_root: str) -> dict:
-    """Fetch origin and fast-forward pull.  Returns sync status dict.
+def git_sync_pre(project_root: str, policy: str = "skip") -> dict:
+    """Fetch origin and fast-forward pull, when a config asks for it.
 
     Returns:
         {"synced": true/false, "action": "skip"|"up-to-date"|"pulled",
          "pulled": N, "error": "..."}
+
+    ``policy`` is explicit and defaults to ``"skip"`` — no network. This tool
+    reaches the network and moves a working tree, and until per-run isolation
+    landed it was reaching neither: the ``$PROJECT_ROOT`` token every config
+    passes it expanded to ``projects_base/<project_id>``, which for an
+    existing-repo project is not the repository, so it took the "not a git
+    repository" branch below and did nothing. Routing it at the real tree is a
+    correctness fix; inheriting a fetch and a pull of somebody's repository as a
+    side effect of that fix is not. So the effect is opted into by name
+    (``policy: "pull"``), and a config that wants the old syncing behaviour still
+    gets it, deliberately.
+
+    A LINKED WORKTREE is refused whatever the policy says. A run worktree is
+    pinned to the base SHA the run was created at; fetching and fast-forwarding
+    it would move the run's own base underneath it mid-run, which is the one
+    thing the pin exists to prevent. Detected structurally (``.git`` is a gitfile
+    pointer, not a directory), not from a path convention.
     """
     if not project_root or not Path(project_root).is_absolute():
         # `Path("").resolve()` is the process CWD — for a hosted engine, the
@@ -34,6 +51,21 @@ def git_sync_pre(project_root: str) -> dict:
     if not (root / ".git").exists():
         return {"synced": True, "action": "skip",
                 "detail": "not a git repository"}
+
+    # ── A pinned run worktree is never synced ─────────────────────────
+    # `.git` is a FILE in a linked worktree (a gitfile pointing into the source
+    # repository's admin dir). Checked before the policy, because this refusal
+    # is not a preference.
+    if (root / ".git").is_file():
+        return {"synced": True, "action": "skip",
+                "detail": "pinned run worktree — refusing to fetch or pull a "
+                          "tree that is deliberately held at its base commit"}
+
+    # ── Policy ────────────────────────────────────────────────────────
+    if policy != "pull":
+        return {"synced": True, "action": "skip",
+                "detail": f"sync policy {policy!r}: no fetch or pull "
+                          f"(set policy: \"pull\" to enable)"}
 
     # ── No remote → silent skip ───────────────────────────────────────
     r = _git(root, "remote")
