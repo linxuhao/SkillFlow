@@ -73,6 +73,35 @@ CREATE TABLE IF NOT EXISTS skillflow_runs (
 );
 """
 
+SKILLFLOW_ACTIVE_OPS = """
+-- Operations that have been ADMITTED to produce side effects and have not yet
+-- retired. One row per admitted operation; inserted by `_admit_op`, deleted by
+-- `_retire_op`, both in a single BEGIN IMMEDIATE transaction that also reads the
+-- run's cancellation state. That shared transaction is the whole mechanism:
+-- `stop_run` either sees a row (and reports `draining`, because the operation
+-- was admitted before the stop and will run to completion) or does not (and
+-- terminalises immediately, after which nothing further can be admitted).
+--
+-- ADMITTED is not RUNNING and the two must not be conflated. A row here means
+-- "this operation was allowed to proceed and cannot now be called off"; it does
+-- NOT mean a git commit is already in progress. The name of the field the hosts
+-- report — `admitted_operations` — says exactly that.
+CREATE TABLE IF NOT EXISTS skillflow_active_ops (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id           TEXT NOT NULL,
+    step_instance_id INTEGER,
+    -- The claim this admission belongs to. A re-claim bumps the epoch, so an
+    -- admission left behind by a dead executor is distinguishable from the live
+    -- one and is cleared at claim time — which is what stops a fresh retry from
+    -- inheriting the previous attempt's authorisation.
+    claim_epoch      INTEGER NOT NULL DEFAULT 0,
+    -- 'delivery' (a step's lifecycle hooks) or 'tool' (one agent tool call).
+    kind             TEXT NOT NULL,
+    detail           TEXT NOT NULL DEFAULT '',
+    admitted_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
 SKILLFLOW_STEPS = """
 CREATE TABLE IF NOT EXISTS skillflow_steps (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,23 +151,6 @@ CREATE TABLE IF NOT EXISTS skillflow_steps (
     -- workspace), but that is project-scoped and replaced in place, so it
     -- cannot answer "what happened during THIS run".
     loop_item               TEXT,
-    -- WHEN this instance was authorised to deliver: set by the single
-    -- transaction in `_begin_delivery` that also checks the run is not
-    -- terminal. It is the cancellation LINEARIZATION POINT, not a timestamp
-    -- anyone reads for time.
-    --
-    -- `fail_run` and `_begin_delivery` both take BEGIN IMMEDIATE on the same
-    -- connection, so exactly one of them commits first and the other sees the
-    -- result. Non-NULL means the lifecycle hooks were already authorised —
-    -- promotion and on_deliver (repo_apply, real git commits) may already be
-    -- running, and a cancellation arriving now CANNOT take them back. NULL
-    -- means no hook has started and cancellation closes the claim instead.
-    --
-    -- A COLUMN rather than a new `status` value, deliberately: eight queries
-    -- across the reaper, the claimer and the hosts filter on
-    -- `status IN ('pending','claimed',…)`, and a ninth state would have to be
-    -- taught to every one of them. Nothing filters on this.
-    delivery_started_at     TEXT,
     created_at              TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (run_id) REFERENCES skillflow_runs(id)
@@ -220,6 +232,8 @@ SKILLFLOW_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_skillflow_loop_state_run ON skillflow_loop_state(run_id);",
     "CREATE INDEX IF NOT EXISTS idx_skillflow_trace_run ON skillflow_trace(run_id, seq);",
     "CREATE INDEX IF NOT EXISTS idx_skillflow_trace_step ON skillflow_trace(step_instance_id);",
+    "CREATE INDEX IF NOT EXISTS idx_skillflow_active_ops_run ON skillflow_active_ops(run_id);",
+    "CREATE INDEX IF NOT EXISTS idx_skillflow_active_ops_step ON skillflow_active_ops(step_instance_id);",
 ]
 
 # ── Ordered DDL list ────────────────────────────────────────────────
@@ -230,6 +244,7 @@ ALL_DDL: list[str] = [
     SKILLFLOW_PROJECTS,
     SKILLFLOW_RUNS,
     SKILLFLOW_STEPS,
+    SKILLFLOW_ACTIVE_OPS,
     SKILLFLOW_EDGE_COUNTS,
     SKILLFLOW_LOOP_STATE,
     SKILLFLOW_OUTBOX,
@@ -288,9 +303,16 @@ SKILLFLOW_MIGRATIONS: list[str] = [
     # either, and why a counter whose whole job is to survive one must not live
     # in that dict.
     "ALTER TABLE skillflow_steps ADD COLUMN release_count INTEGER NOT NULL DEFAULT 0",
-    # Cancellation linearization point (see SKILLFLOW_STEPS.delivery_started_at).
-    # Existing rows backfill to NULL = "no hook authorised", which is the safe
-    # reading: a cancellation arriving for one of them closes the claim, exactly
-    # as it would for a fresh row.
-    "ALTER TABLE skillflow_steps ADD COLUMN delivery_started_at TEXT",
+    # A cancellation that has been REQUESTED but not yet completed. Set by
+    # `stop_run`; cleared by nothing (a run is cancelled once). From the instant
+    # it commits, no operation may be admitted and no step may be claimed — the
+    # run drains, then terminalises.
+    #
+    # A column rather than a `status='cancelling'`: a new status would have to be
+    # taught to claim_next_step, advance_run, get_run_by_project, reactivate_run
+    # and four host readers, and any one that was missed is a new wedge. Two
+    # guards carry it instead, and the requested-vs-terminal distinction the
+    # operator needs is in `stop_run`'s return value and in this column, which
+    # `get_run()` already exposes.
+    "ALTER TABLE skillflow_runs ADD COLUMN cancel_requested_at TEXT",
 ]

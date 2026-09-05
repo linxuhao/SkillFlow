@@ -37,15 +37,21 @@ class TerminalRunFenced(SkillFlowError):
     caller lost a race with a peer. This means *the run is over* — cancelled
     (``fail_run``) or finished — so there is no peer and nothing to re-decide.
 
-    Raised by ``confirm_step`` BEFORE the lifecycle hooks, which is the last
-    instant at which promotion and ``on_deliver`` (``repo_apply`` — real git
-    commits in the user's repository) can still be prevented. It is deliberately
-    NOT a ``StepVersionConflict``: a host that reacts to a lost claim by
-    re-claiming would, on a cancelled run, be re-entering something the operator
-    just stopped.
+    Raised by ``_admit_op`` — from ``confirm_step`` immediately before the
+    lifecycle hooks, and from ``execute_tool`` immediately before the tool — which
+    is the last instant at which promotion, ``on_deliver`` (``repo_apply``: real
+    git commits) or a tool write can still be prevented. Also raised while a run
+    is DRAINING a requested cancellation: admitted work finishes, nothing new
+    starts.
 
-    ``deliveries_in_flight`` on the cancelling side names what could not be
-    prevented, because a hook already executing is never preempted.
+    Deliberately NOT a ``StepVersionConflict``: a host that reacts to a lost
+    claim by re-claiming would, on a cancelled run, be re-entering something the
+    operator just stopped.
+
+    On the cancelling side, ``stop_run`` reports what it could not prevent as
+    ``admitted_operations``. Admitted is not running — an admitted operation has
+    been allowed to proceed and can no longer be called off, which is a weaker
+    and truer statement than saying its effect is already under way.
     """
 
 

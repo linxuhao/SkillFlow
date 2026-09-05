@@ -1535,64 +1535,82 @@ class SkillFlow:
         self.start_run(new_id)
         return new_id
 
-    def fail_run(self, run_id: str, reason: str) -> dict:
-        """Cancel (or fail) a run, and close what it leaves behind.
+    def stop_run(self, run_id: str, reason: str) -> dict:
+        """Cancel a run. Returns what the cancellation actually achieved.
 
-        Returns a report — new; it used to return None and callers ignore the
-        value, so this is additive:
+            {"run_id", "outcome", "status", "steps_closed", "admitted_operations"}
 
-            {"run_id", "status", "steps_closed": [...],
-             "deliveries_in_flight": [...]}
+        `outcome` is the field a caller must read, because a stop has two
+        genuinely different results and reporting them as one is how an operator
+        was told "Pipeline stopped." over a repository commit that had not
+        happened yet:
 
-        `steps_closed` are claims that had NOT been authorised to deliver: no
-        lifecycle hook has started for them, so cancelling really did stop them
-        and they are marked failed here rather than left `claimed` forever. That
-        matters because nothing else would ever reclaim them — the stale-claim
-        reaper deliberately refuses a claim whose owner PROCESS is alive, and on
-        a single-process host the owner is the server itself.
+          "stopped"          the run is terminal NOW. No operation was admitted,
+                             every claim it held is closed, and nothing further
+                             can be admitted. No new effect starts.
+          "draining"         one or more operations were admitted BEFORE this
+                             call committed. They cannot be called off, so they
+                             run to completion and the run terminalises when the
+                             last retires. `admitted_operations` names them.
+          "already_terminal" the run had already ended.
 
-        `deliveries_in_flight` are claims already past `_begin_delivery`. Their
-        hooks are running now; promotion and `repo_apply` may already have
-        happened or may happen a moment from now, and this call did not and
-        could not prevent it. They are named rather than silently included in
-        the closed set, because "stopped" and "stopped except for this commit"
-        are different facts and the operator has to be told which one they got.
-
-        The two lists are computed in the SAME transaction that fails the run,
-        so they are a consistent snapshot of the linearization: every claim is
-        in exactly one of them, decided by whether its `_begin_delivery`
-        committed before this transaction did.
+        Admission is closed first, in the same transaction that decides the
+        outcome, so the answer cannot be stale: nothing can be admitted between
+        the read and the decision.
         """
+        closed: list[dict] = []
+        admitted: list[dict] = []
+        outcome = "stopped"
         with self._tx() as conn:
-            self._fail_run_in_tx(conn, run_id, reason)
-            _rows = conn.execute(
-                "SELECT id, step_id, claim_epoch, delivery_started_at "
-                "FROM skillflow_steps WHERE run_id = ? AND status = 'claimed'",
-                (run_id,)).fetchall()
-            closed = [dict(r) for r in _rows if not r["delivery_started_at"]]
-            in_flight = [dict(r) for r in _rows if r["delivery_started_at"]]
-            if closed:
+            run = conn.execute(
+                "SELECT status, cancel_requested_at FROM skillflow_runs "
+                "WHERE id = ?", (run_id,)).fetchone()
+            if run is None:
+                outcome = "already_terminal"
+            elif run["status"] in self.TERMINAL_RUN_STATUSES:
+                outcome = "already_terminal"
+            else:
+                # Close admission FIRST. From this statement on, `_admit_op`
+                # refuses, so the set read on the next line cannot grow.
                 conn.execute(
-                    "UPDATE skillflow_steps SET status = 'failed', "
-                    "  last_error = ?, completed_at = datetime('now'), "
-                    "  updated_at = datetime('now') "
-                    "WHERE run_id = ? AND status = 'claimed' "
-                    "  AND delivery_started_at IS NULL",
-                    (f"run cancelled before delivery: {reason}"[:2000], run_id))
-        # Outside the transaction: `_release_step_tools` takes its own lock and
-        # must not be reached with a write transaction open on this connection.
+                    "UPDATE skillflow_runs SET cancel_requested_at = datetime('now'), "
+                    "  error_reason = ?, updated_at = datetime('now') WHERE id = ?",
+                    (reason, run_id))
+                admitted = [dict(r) for r in conn.execute(
+                    "SELECT id, kind, detail, step_instance_id FROM "
+                    "skillflow_active_ops WHERE run_id = ?", (run_id,)).fetchall()]
+                if admitted:
+                    outcome = "draining"
+                else:
+                    closed = self._terminalise_cancel_in_tx(conn, run_id, reason)
         for r in closed:
             self._release_step_tools(run_id, r["step_id"], r["id"],
                                      r["claim_epoch"] or 0)
-        for r in closed + in_flight:
-            self.trace(run_id, "step",
-                       "claim_closed_by_cancel" if not r["delivery_started_at"]
-                       else "delivery_in_flight_at_cancel",
-                       {"reason": reason[:500]},
+            self.trace(run_id, "step", "claim_closed_by_cancel",
+                       {"reason": reason[:500], "when": "stop"},
                        step_id=r["step_id"], step_instance_id=r["id"])
-        return {"run_id": run_id, "status": "failed",
+        for r in admitted:
+            self.trace(run_id, "step", "cancel_awaiting_admitted_operation",
+                       {"reason": reason[:500], "kind": r["kind"],
+                        "detail": r["detail"]},
+                       step_instance_id=r["step_instance_id"])
+        return {"run_id": run_id, "outcome": outcome,
+                "status": (self._run_status(run_id) or ""),
                 "steps_closed": [r["step_id"] for r in closed],
-                "deliveries_in_flight": [r["step_id"] for r in in_flight]}
+                "admitted_operations": [f"{r['kind']}:{r['detail']}"
+                                        for r in admitted]}
+
+    def fail_run(self, run_id: str, reason: str) -> dict:
+        """Cancellation entry point kept for existing callers — see `stop_run`.
+
+        Every host already calls this; it now carries the drain semantics rather
+        than flipping a status and hoping. Note the deliberate asymmetry with
+        `_fail_run_in_tx`, which stays the IMMEDIATE writer used by the engine's
+        own failure paths (cycle limit, routing dead end, tool-step failure).
+        Those are not operator stops: there is no external operation to drain,
+        and the caller is usually already inside a transaction.
+        """
+        return self.stop_run(run_id, reason)
 
     def complete_run(self, run_id: str) -> None:
         with self._tx() as conn:
@@ -1837,52 +1855,140 @@ class SkillFlow:
                 row = c.execute(sql, (run_id,)).fetchone()
         return row["status"] if row else None
 
-    def _begin_delivery(self, token: "ClaimToken") -> None:
-        """Authorise this claim to run its lifecycle hooks — or refuse.
+    # ── Admission: the cancellation boundary ─────────────────────
+    #
+    # An operation that can produce a side effect (a step's lifecycle hooks; one
+    # agent tool call) must be ADMITTED before it starts and RETIRED when it
+    # ends. Admission and retirement are each one BEGIN IMMEDIATE transaction on
+    # the shared connection, and `stop_run` is another, so the three serialise
+    # against one another with no check-then-act anywhere between them.
+    #
+    # What that buys, stated precisely because the previous attempt overclaimed:
+    #
+    #   stop returns "stopped"  -> the run is terminal, nothing is admitted, and
+    #                              nothing further CAN be admitted. No new effect
+    #                              starts. This is the guarantee.
+    #   stop returns "draining" -> the named operations were admitted before the
+    #                              stop committed and will run to completion. The
+    #                              run terminalises when the last one retires.
+    #
+    # ADMITTED IS NOT RUNNING. A row in `skillflow_active_ops` means "allowed to
+    # proceed, no longer callable off"; it does not mean a git commit is under
+    # way. The reported key is `admitted_operations` for that reason. The earlier
+    # `deliveries_in_flight` said something the data could not support: it was
+    # stamped at the TOP of confirm_step, so it was set before validation, before
+    # any retry decision and long before any hook — an independent reviewer
+    # cancelled between the stamp and the first hook and got a report of an
+    # in-flight delivery over a hook that had not started.
+    #
+    # No transaction is held across an LLM call, a network wait, a hook or a
+    # tool. Both methods here are two SQL statements and no I/O.
 
-        THE cancellation linearization point. The run-status check and the
-        `delivery_started_at` stamp are ONE transaction, so this is not a
-        check-then-act: `fail_run` cannot slip between them. Both sides take
-        `BEGIN IMMEDIATE` on the shared connection under `self._lock`, so for
-        any (cancel, delivery) pair exactly one commits first:
+    def _admit_op(self, kind: str, run_id: str, *,
+                  step_instance_id: int | None = None,
+                  claim_epoch: int = 0, detail: str = "") -> int:
+        """Admit one side-effecting operation, or refuse it. Returns an op id.
 
-          cancel first   -> we read a terminal status and raise
-                            TerminalRunFenced. No hook runs. Nothing is
-                            promoted, nothing is committed to the repository.
-          delivery first -> the stamp is durable before the cancel's
-                            transaction can start, so `fail_run` SEES it,
-                            leaves the claim alone and reports the step in
-                            `deliveries_in_flight`.
+        Refuses — by raising `TerminalRunFenced` — when the run is terminal, when
+        a cancellation has been requested (draining: existing work finishes, new
+        work does not start), or when the caller no longer holds the claim.
 
-        What this does NOT do is preempt. Once the stamp is written the hooks
-        run to completion even if a cancellation commits one microsecond later;
-        `repo_apply` is a git commit and there is no honest way to un-start one.
-        The guarantee is therefore exactly: *no lifecycle hook STARTS after a
-        cancellation has committed*, and the cancelling caller is told which
-        hooks it did not manage to prevent.
-
-        Held for the duration of two SQL statements and no I/O, so a `fail_run`
-        arriving concurrently waits microseconds. The hooks themselves run with
-        NO transaction and NO lock held (see confirm_step), which is what keeps
-        a `fail_run` issued *during* a hook from deadlocking — and what keeps a
-        hook that re-enters skillflow (every tool traces) from opening a
-        transaction inside one.
+        The epoch check lives HERE, inside the admitting transaction, rather than
+        in a separate earlier read: a claim can be superseded between the two,
+        and an admission granted on a stale read is exactly the authorisation
+        that must never exist.
         """
         with self._tx() as conn:
-            status = self._run_status(token.run_id, conn)
-            if status in self.TERMINAL_RUN_STATUSES:
-                reason = conn.execute(
-                    "SELECT error_reason FROM skillflow_runs WHERE id = ?",
-                    (token.run_id,)).fetchone()
-                raise TerminalRunFenced(
-                    f"Run '{token.run_id}' is {status}; delivery of step "
-                    f"'{token.step_id}' (instance {token.step_instance_id}) "
-                    f"refused before its lifecycle hooks. "
-                    f"Run reason: {(reason['error_reason'] if reason else '') or '-'}")
+            run = conn.execute(
+                "SELECT status, error_reason, cancel_requested_at "
+                "FROM skillflow_runs WHERE id = ?", (run_id,)).fetchone()
+            if run is not None:
+                if run["status"] in self.TERMINAL_RUN_STATUSES:
+                    raise TerminalRunFenced(
+                        f"Run '{run_id}' is {run['status']}; {kind} "
+                        f"{detail or '?'} refused before it started. "
+                        f"Run reason: {(run['error_reason'] or '-')}")
+                if run["cancel_requested_at"]:
+                    raise TerminalRunFenced(
+                        f"Run '{run_id}' is draining a cancellation requested at "
+                        f"{run['cancel_requested_at']}; {kind} {detail or '?'} "
+                        f"refused. Reason: {(run['error_reason'] or '-')}")
+            if step_instance_id and claim_epoch:
+                row = conn.execute(
+                    "SELECT claim_epoch, status FROM skillflow_steps WHERE id = ?",
+                    (step_instance_id,)).fetchone()
+                if row is not None and (row["claim_epoch"] or 0) not in (0, claim_epoch):
+                    raise StaleClaimFenced(
+                        f"Step instance {step_instance_id} was reclaimed: {kind} "
+                        f"refused for claim_epoch {claim_epoch}.")
+            cur = conn.execute(
+                "INSERT INTO skillflow_active_ops "
+                "(run_id, step_instance_id, claim_epoch, kind, detail) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (run_id, step_instance_id, claim_epoch or 0, kind, detail))
+            return cur.lastrowid
+
+    def _retire_op(self, op_id: int | None) -> None:
+        """Retire an admitted operation and, if it was the last one a pending
+        cancellation was waiting on, COMPLETE the cancellation in the same
+        transaction.
+
+        That is the terminal-transition atomicity: a run becomes `failed`
+        exactly when its last admitted operation retires, never before and never
+        by a second pass that could interleave with a new admission.
+
+        Called from `finally`, so it must not raise on a missing row.
+        """
+        if not op_id:
+            return
+        closed: list[dict] = []
+        reason = ""
+        with self._tx() as conn:
+            row = conn.execute(
+                "SELECT run_id FROM skillflow_active_ops WHERE id = ?",
+                (op_id,)).fetchone()
+            if row is None:
+                raise _TxRollback()
+            run_id = row["run_id"]
+            conn.execute("DELETE FROM skillflow_active_ops WHERE id = ?", (op_id,))
+            run = conn.execute(
+                "SELECT status, error_reason, cancel_requested_at "
+                "FROM skillflow_runs WHERE id = ?", (run_id,)).fetchone()
+            # No cancellation pending, or somebody already terminalised: the
+            # DELETE above is the whole job.
+            if (run is not None and run["cancel_requested_at"]
+                    and run["status"] not in self.TERMINAL_RUN_STATUSES):
+                remaining = conn.execute(
+                    "SELECT COUNT(*) c FROM skillflow_active_ops WHERE run_id = ?",
+                    (run_id,)).fetchone()["c"]
+                if remaining == 0:
+                    reason = run["error_reason"] or "cancelled"
+                    closed = self._terminalise_cancel_in_tx(conn, run_id, reason)
+        for r in closed:
+            self._release_step_tools(r["run_id"], r["step_id"], r["id"],
+                                     r["claim_epoch"] or 0)
+            self.trace(r["run_id"], "step", "claim_closed_by_cancel",
+                       {"reason": reason[:500], "when": "drain_complete"},
+                       step_id=r["step_id"], step_instance_id=r["id"])
+
+    def _terminalise_cancel_in_tx(self, conn, run_id: str, reason: str) -> list[dict]:
+        """Fail the run and close every claim it still holds. Caller holds the tx.
+
+        Returns the closed rows so the caller can release their step tools and
+        trace them OUTSIDE the transaction — `_release_step_tools` takes its own
+        lock, and tracing re-enters the framework.
+        """
+        self._fail_run_in_tx(conn, run_id, reason)
+        rows = [dict(r, run_id=run_id) for r in conn.execute(
+            "SELECT id, step_id, claim_epoch FROM skillflow_steps "
+            "WHERE run_id = ? AND status = 'claimed'", (run_id,)).fetchall()]
+        if rows:
             conn.execute(
-                "UPDATE skillflow_steps SET delivery_started_at = datetime('now') "
-                "WHERE id = ? AND delivery_started_at IS NULL",
-                (token.step_instance_id,))
+                "UPDATE skillflow_steps SET status = 'failed', last_error = ?, "
+                "  completed_at = datetime('now'), updated_at = datetime('now') "
+                "WHERE run_id = ? AND status = 'claimed'",
+                (f"run cancelled: {reason}"[:2000], run_id))
+        return rows
 
     def _epoch_holds(self, step_instance_id: int, claim_epoch: int,
                      conn: "sqlite3.Connection | None" = None) -> bool:
@@ -1924,6 +2030,11 @@ class SkillFlow:
                 "SELECT * FROM skillflow_runs WHERE id = ?", (run_id,)
             ).fetchone()
             if not run or run["status"] not in ("running",) or not run["current_node"]:
+                raise _TxRollback()
+            # A cancellation has been requested and the run is draining. Existing
+            # admitted work finishes; nothing new starts, and a new step is the
+            # most obviously new thing there is.
+            if run["cancel_requested_at"]:
                 raise _TxRollback()
 
             graph_name = run["graph_name"]
@@ -2040,6 +2151,19 @@ class SkillFlow:
             )
             if cursor.rowcount == 0:
                 raise _TxRollback()
+
+            # A fresh claim invalidates any admission recorded against an EARLIER
+            # claim of this same row. Without this, an operation admitted by an
+            # attempt that has since been reset to pending (a validation retry, a
+            # reclaim, an empty-output re-ask) keeps authorising the row forever:
+            # a cancellation then reports the fresh attempt as admitted work and
+            # leaves its claim open, which is a stranded row and a false report.
+            conn.execute(
+                "DELETE FROM skillflow_active_ops WHERE step_instance_id = "
+                "  (SELECT id FROM skillflow_steps WHERE run_id = ? AND step_id = ?)"
+                "  AND claim_epoch < (SELECT COALESCE(claim_epoch, 0) FROM "
+                "                     skillflow_steps WHERE run_id = ? AND step_id = ?)",
+                (run_id, run["current_node"], run_id, run["current_node"]))
 
             step_row = conn.execute(
                 "SELECT id, claim_epoch FROM skillflow_steps "
@@ -2547,19 +2671,13 @@ class SkillFlow:
         # {step}/. A reclaimed executor reaching here would do both alongside
         # its replacement and only then be told it had lost the step.
         self._assert_epoch(token, "confirm_step")
-        # …and then the RUN fence. Order matters and is not arbitrary: the epoch
-        # question ("am I still the executor?") is asked first so a zombie still
-        # gets the accurate StaleClaimFenced it always got, and only a caller
-        # that genuinely holds the claim is told the run ended under it.
-        #
-        # This is the last instruction before `_release_step_tools`, the output
-        # promotion in `after_validate` and `on_deliver` -> `repo_apply`. Live,
-        # 2026-09-05: a run was stopped at 09:09:00 and its already-claimed step
-        # confirmed at 09:09:40, promoting a staged file and committing ac5237b
-        # into a repository no maker was allowed to write to. The epoch fence
-        # above was open, correctly — nobody had reclaimed the step. Only the
-        # run had ended, and nothing asked.
-        self._begin_delivery(token)
+        # NOTE: admission is NOT taken here. It used to be, and that was the
+        # defect an independent reviewer reproduced: stamped at the top, it
+        # covered validation, every retry decision and the empty-output re-ask —
+        # so it survived a return to `pending`, authorised the NEXT claim of the
+        # same row, and let a cancellation report an in-flight delivery over a
+        # hook that had not started. It is taken immediately before the lifecycle
+        # loop instead; see the block below.
         # The claim is over — drop the read tools it owned. Identity-guarded on
         # (instance id, claim epoch), so neither a zombie executor of an earlier
         # instance nor a superseded re-claim of the same row can release the
@@ -2599,194 +2717,222 @@ class SkillFlow:
                 # on — see _handle_validation_failure for why.
                 result.flags["validation_failed"] = True
 
-        # ── Lifecycle hooks ──────────────────────────────────────────
-        if node and self._workspace:
-            lifecycle = self._resolve_lifecycle(node)
-            promoted = None   # what after_validate promoted; None = it didn't say
-            for hook_name, hook_spec in lifecycle.items():
-                # Nothing was promoted → there is nothing to deliver, and running
-                # the deliver hooks on it is worse than not running them at all.
-                # Live, NL2Repo task `funcy`: a t_impl agent answered in 92 tokens
-                # and wrote no file, so `_step_commit` promoted nothing (it never
-                # even created {step}/{item}/) and `repo_apply` then failed on
-                # "Source dir not found" — retrying a TOOL for output only the
-                # AGENT could write — after which the step hard-failed into the
-                # graph's `_error` edge and landed an empty implementation on a
-                # reviewer with nothing to review. Re-ask the agent instead, on the
-                # step's own (shared) retry budget, exactly as a failed validator
-                # does. It also stops a re-run that wrote nothing from delivering
-                # the PREVIOUS attempt's step dir, which _step_commit leaves in
-                # place when it promotes nothing.
-                if hook_name == "on_deliver" and promoted == []:
-                    error = ("Nothing to deliver: the step promoted no files, so "
-                             "its on_deliver hooks were skipped. Write the files "
-                             "this step is required to produce.")
-                    self._emit_lifecycle_event(token, hook_name, "skipped", error)
-                    logging.getLogger("skillflow").warning(
-                        "step %r (run %s) promoted no files — on_deliver skipped, "
-                        "re-asking the step instead of delivering nothing",
-                        token.step_id, token.run_id)
-                    self._handle_validation_failure(token, error)
-                    return
-                hook_result = self._execute_lifecycle_hook(
-                    token, node, hook_name, hook_spec
-                )
-                # Emit warnings (non-fatal) from per-check on_failure: "warn"
-                warnings = hook_result.get("warnings", [])
-                if warnings:
-                    warn_msg = "; ".join(
-                        w.get("error", str(w)) if isinstance(w, dict) else str(w)
-                        for w in warnings
-                    )
-                    self._emit_lifecycle_event(token, hook_name, "warned", warn_msg)
-
-                if not hook_result.get("passed", False):
-                    error = hook_result.get("error", f"Lifecycle hook '{hook_name}' failed")
-                    # A tool-hook sequence bubbles the failing item's on_failure
-                    # in the result; fall back to the spec-level value otherwise.
-                    on_failure = hook_result.get("on_failure") or (
-                        hook_spec.get("on_failure", "fail")
-                        if isinstance(hook_spec, dict) else "fail")
-                    if on_failure == "retry":
-                        self._emit_lifecycle_event(token, hook_name, "retry", error)
-                        self._handle_lifecycle_retry(token, error)
-                        return
-                    elif on_failure == "skip":
+        # ── Delivery: admitted, then the lifecycle hooks ─────────────
+        #
+        # Admission is taken HERE — after output-schema validation, after the
+        # `validation:` specs, after every path that can still send the step back
+        # to `pending` — and immediately before the first hook. Nothing between
+        # this transaction committing and `_execute_lifecycle_hook` being called
+        # can block, wait, validate or retry, so "admitted" is as close to "the
+        # hook has started" as a durable record can honestly get. It is still not
+        # the same thing, and `stop_run` reports it as `admitted_operations`
+        # rather than as work in flight.
+        #
+        # Everything from here to the end of the method is the delivery
+        # operation: the hooks (promotion, `repo_apply` — real git commits) AND
+        # the completion write that publishes their result to the graph. A
+        # cancellation that arrives before this transaction prevents all of it; a
+        # cancellation after it is told, truthfully, that it did not.
+        _op = self._admit_op("delivery", token.run_id,
+                             step_instance_id=token.step_instance_id,
+                             claim_epoch=token.claim_epoch,
+                             detail=token.step_id)
+        try:
+            # ── Lifecycle hooks ──────────────────────────────────────────
+            if node and self._workspace:
+                lifecycle = self._resolve_lifecycle(node)
+                promoted = None   # what after_validate promoted; None = it didn't say
+                for hook_name, hook_spec in lifecycle.items():
+                    # Nothing was promoted → there is nothing to deliver, and running
+                    # the deliver hooks on it is worse than not running them at all.
+                    # Live, NL2Repo task `funcy`: a t_impl agent answered in 92 tokens
+                    # and wrote no file, so `_step_commit` promoted nothing (it never
+                    # even created {step}/{item}/) and `repo_apply` then failed on
+                    # "Source dir not found" — retrying a TOOL for output only the
+                    # AGENT could write — after which the step hard-failed into the
+                    # graph's `_error` edge and landed an empty implementation on a
+                    # reviewer with nothing to review. Re-ask the agent instead, on the
+                    # step's own (shared) retry budget, exactly as a failed validator
+                    # does. It also stops a re-run that wrote nothing from delivering
+                    # the PREVIOUS attempt's step dir, which _step_commit leaves in
+                    # place when it promotes nothing.
+                    if hook_name == "on_deliver" and promoted == []:
+                        error = ("Nothing to deliver: the step promoted no files, so "
+                                 "its on_deliver hooks were skipped. Write the files "
+                                 "this step is required to produce.")
                         self._emit_lifecycle_event(token, hook_name, "skipped", error)
-                        continue
-                    elif on_failure == "warn":
-                        self._emit_lifecycle_event(token, hook_name, "warned", error)
-                        continue
-                    else:
-                        self._emit_lifecycle_event(token, hook_name, "failed", error)
-                        self._handle_lifecycle_failure(token, error)
+                        logging.getLogger("skillflow").warning(
+                            "step %r (run %s) promoted no files — on_deliver skipped, "
+                            "re-asking the step instead of delivering nothing",
+                            token.step_id, token.run_id)
+                        self._handle_validation_failure(token, error)
                         return
-                # Success: emit the terminal event the trace was missing. Surface
-                # any useful detail the hook returned (e.g. files applied count).
-                detail = ""
-                files = hook_result.get("files")
-                if isinstance(files, list):
-                    detail = f"{len(files)} file(s)"
-                    if hook_name == "after_validate":
-                        promoted = files
-                    # A free-form write step that promoted NOTHING is almost always a
-                    # maker that described its files instead of writing them — and it
-                    # used to complete green, hand an empty result downstream, and be
-                    # discovered only by a reviewer whose bounded reject loop then
-                    # burned out. Observed four rounds running, with "0 file(s)" sitting
-                    # right here in the trace the whole time. Surface it as a flag the
-                    # graph CAN route on, and say so in the log.
-                    if node is not None and getattr(node, "output_mode", "") == "write":
-                        result.flags.setdefault("wrote_files", bool(files))
-                        # …unless the step also DELIVERS: an empty delivery is
-                        # re-asked above, so the step does not complete at all and
-                        # this line would be a lie about what happens next.
-                        if not files and "on_deliver" not in lifecycle:
-                            logging.getLogger("skillflow").warning(
-                                "step %r (run %s) declares `output.mode: write` but "
-                                "promoted no files — the step will complete with an "
-                                "empty output", token.step_id, token.run_id)
-                elif hook_result.get("committed"):
-                    detail = "committed"
-                self._emit_lifecycle_event(token, hook_name, "completed", detail)
+                    hook_result = self._execute_lifecycle_hook(
+                        token, node, hook_name, hook_spec
+                    )
+                    # Emit warnings (non-fatal) from per-check on_failure: "warn"
+                    warnings = hook_result.get("warnings", [])
+                    if warnings:
+                        warn_msg = "; ".join(
+                            w.get("error", str(w)) if isinstance(w, dict) else str(w)
+                            for w in warnings
+                        )
+                        self._emit_lifecycle_event(token, hook_name, "warned", warn_msg)
 
-        with self._tx() as conn:
-            # completion_seq: per-run monotonic COMPLETION order. `id` is
-            # creation order — loop/reject re-runs append high-id instances,
-            # so after any loop the two orders diverge permanently and
-            # position reconstruction must sort by THIS, never by id.
-            cursor = conn.execute(
-                """
-                UPDATE skillflow_steps
-                SET status = 'completed', version = version + 1,
-                    outputs_json = ?, result_flags_json = ?,
-                    completion_seq = (SELECT COALESCE(MAX(completion_seq), 0) + 1
-                                      FROM skillflow_steps WHERE run_id = ?),
-                    completed_at = datetime('now'), updated_at = datetime('now')
-                WHERE id = ? AND version = ?
-                """,
-                (
-                    self._serialize(result.outputs),
-                    self._serialize(result.flags),
-                    token.run_id,
-                    token.step_instance_id, token.version,
-                ),
-            )
-            if cursor.rowcount == 0:
-                raise StepVersionConflict(
-                    f"Step '{token.step_id}' (instance {token.step_instance_id}) "
-                    f"version mismatch: expected {token.version}"
-                )
+                    if not hook_result.get("passed", False):
+                        error = hook_result.get("error", f"Lifecycle hook '{hook_name}' failed")
+                        # A tool-hook sequence bubbles the failing item's on_failure
+                        # in the result; fall back to the spec-level value otherwise.
+                        on_failure = hook_result.get("on_failure") or (
+                            hook_spec.get("on_failure", "fail")
+                            if isinstance(hook_spec, dict) else "fail")
+                        if on_failure == "retry":
+                            self._emit_lifecycle_event(token, hook_name, "retry", error)
+                            self._handle_lifecycle_retry(token, error)
+                            return
+                        elif on_failure == "skip":
+                            self._emit_lifecycle_event(token, hook_name, "skipped", error)
+                            continue
+                        elif on_failure == "warn":
+                            self._emit_lifecycle_event(token, hook_name, "warned", error)
+                            continue
+                        else:
+                            self._emit_lifecycle_event(token, hook_name, "failed", error)
+                            self._handle_lifecycle_failure(token, error)
+                            return
+                    # Success: emit the terminal event the trace was missing. Surface
+                    # any useful detail the hook returned (e.g. files applied count).
+                    detail = ""
+                    files = hook_result.get("files")
+                    if isinstance(files, list):
+                        detail = f"{len(files)} file(s)"
+                        if hook_name == "after_validate":
+                            promoted = files
+                        # A free-form write step that promoted NOTHING is almost always a
+                        # maker that described its files instead of writing them — and it
+                        # used to complete green, hand an empty result downstream, and be
+                        # discovered only by a reviewer whose bounded reject loop then
+                        # burned out. Observed four rounds running, with "0 file(s)" sitting
+                        # right here in the trace the whole time. Surface it as a flag the
+                        # graph CAN route on, and say so in the log.
+                        if node is not None and getattr(node, "output_mode", "") == "write":
+                            result.flags.setdefault("wrote_files", bool(files))
+                            # …unless the step also DELIVERS: an empty delivery is
+                            # re-asked above, so the step does not complete at all and
+                            # this line would be a lie about what happens next.
+                            if not files and "on_deliver" not in lifecycle:
+                                logging.getLogger("skillflow").warning(
+                                    "step %r (run %s) declares `output.mode: write` but "
+                                    "promoted no files — the step will complete with an "
+                                    "empty output", token.step_id, token.run_id)
+                    elif hook_result.get("committed"):
+                        detail = "committed"
+                    self._emit_lifecycle_event(token, hook_name, "completed", detail)
 
-            # Resolve next transition inline to close the atomicity gap
-            # between confirm_step and advance_run. If process dies here,
-            # the run already knows its next step.
-            _cycle_exceeded: str | None = None
-            try:
-                next_node = self._resolve_next_in_tx(
-                    conn, token.run_id, token.step_id, result.flags, resolver
+            with self._tx() as conn:
+                # completion_seq: per-run monotonic COMPLETION order. `id` is
+                # creation order — loop/reject re-runs append high-id instances,
+                # so after any loop the two orders diverge permanently and
+                # position reconstruction must sort by THIS, never by id.
+                cursor = conn.execute(
+                    """
+                    UPDATE skillflow_steps
+                    SET status = 'completed', version = version + 1,
+                        outputs_json = ?, result_flags_json = ?,
+                        completion_seq = (SELECT COALESCE(MAX(completion_seq), 0) + 1
+                                          FROM skillflow_steps WHERE run_id = ?),
+                        completed_at = datetime('now'), updated_at = datetime('now')
+                    WHERE id = ? AND version = ?
+                    """,
+                    (
+                        self._serialize(result.outputs),
+                        self._serialize(result.flags),
+                        token.run_id,
+                        token.step_instance_id, token.version,
+                    ),
                 )
-            except CycleLimitExceeded as e:
-                # Reason FIRST, exhausted edges after: hosts truncate this
-                # string for status chips (the one that prompted this change
-                # cuts at 160), and the edge list alone runs ~150 chars on real
-                # step ids — a reason appended after it is out of sight again.
-                self._fail_run_in_tx(
-                    conn, token.run_id,
-                    "Cycle limit exceeded"
-                    + self._routing_reason_suffix(
-                        conn, token.run_id, token.step_id, resolver)
-                    + f" (edges: {e})")
-                # Step completed but the run is now failed — still emit the
-                # step_completed event so the host sees the terminal state.
-                self.notifications.publish_sync(
-                    "step_completed",
-                    {
-                        "run_id": token.run_id, "step_id": token.step_id,
-                        "step_instance_id": token.step_instance_id,
-                    },
-                    step_id=token.step_id, run_id=token.run_id,
-                )
-                _cycle_exceeded = str(e)
-                # Trace is deferred to after the _tx block to avoid a nested
-                # commit on the same connection.
-                next_node = None  # suppress UnboundLocalError below
+                if cursor.rowcount == 0:
+                    raise StepVersionConflict(
+                        f"Step '{token.step_id}' (instance {token.step_instance_id}) "
+                        f"version mismatch: expected {token.version}"
+                    )
 
+                # Resolve next transition inline to close the atomicity gap
+                # between confirm_step and advance_run. If process dies here,
+                # the run already knows its next step.
+                _cycle_exceeded: str | None = None
+                try:
+                    next_node = self._resolve_next_in_tx(
+                        conn, token.run_id, token.step_id, result.flags, resolver
+                    )
+                except CycleLimitExceeded as e:
+                    # Reason FIRST, exhausted edges after: hosts truncate this
+                    # string for status chips (the one that prompted this change
+                    # cuts at 160), and the edge list alone runs ~150 chars on real
+                    # step ids — a reason appended after it is out of sight again.
+                    self._fail_run_in_tx(
+                        conn, token.run_id,
+                        "Cycle limit exceeded"
+                        + self._routing_reason_suffix(
+                            conn, token.run_id, token.step_id, resolver)
+                        + f" (edges: {e})")
+                    # Step completed but the run is now failed — still emit the
+                    # step_completed event so the host sees the terminal state.
+                    self.notifications.publish_sync(
+                        "step_completed",
+                        {
+                            "run_id": token.run_id, "step_id": token.step_id,
+                            "step_instance_id": token.step_instance_id,
+                        },
+                        step_id=token.step_id, run_id=token.run_id,
+                    )
+                    _cycle_exceeded = str(e)
+                    # Trace is deferred to after the _tx block to avoid a nested
+                    # commit on the same connection.
+                    next_node = None  # suppress UnboundLocalError below
+
+                if _cycle_exceeded:
+                    pass  # run is already failed; fall through to trace below
+                elif next_node:
+                    conn.execute(
+                        "UPDATE skillflow_runs SET current_node = ?, updated_at = datetime('now') WHERE id = ?",
+                        (next_node, token.run_id),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE skillflow_runs SET current_node = NULL, updated_at = datetime('now') WHERE id = ?",
+                        (token.run_id,),
+                    )
+
+                if not _cycle_exceeded:
+                    _proj_id = conn.execute(
+                        "SELECT project_id FROM skillflow_runs WHERE id = ?",
+                        (token.run_id,),
+                    ).fetchone()
+                    self.notifications.publish_sync(
+                        "step_completed",
+                        {
+                            "run_id": token.run_id, "step_id": token.step_id,
+                            "step_instance_id": token.step_instance_id,
+                            "project_id": _proj_id["project_id"] if _proj_id else None,
+                        },
+                        step_id=token.step_id, run_id=token.run_id,
+                    )
             if _cycle_exceeded:
-                pass  # run is already failed; fall through to trace below
-            elif next_node:
-                conn.execute(
-                    "UPDATE skillflow_runs SET current_node = ?, updated_at = datetime('now') WHERE id = ?",
-                    (next_node, token.run_id),
-                )
-            else:
-                conn.execute(
-                    "UPDATE skillflow_runs SET current_node = NULL, updated_at = datetime('now') WHERE id = ?",
-                    (token.run_id,),
-                )
-
-            if not _cycle_exceeded:
-                _proj_id = conn.execute(
-                    "SELECT project_id FROM skillflow_runs WHERE id = ?",
-                    (token.run_id,),
-                ).fetchone()
-                self.notifications.publish_sync(
-                    "step_completed",
-                    {
-                        "run_id": token.run_id, "step_id": token.step_id,
-                        "step_instance_id": token.step_instance_id,
-                        "project_id": _proj_id["project_id"] if _proj_id else None,
-                    },
-                    step_id=token.step_id, run_id=token.run_id,
-                )
-        if _cycle_exceeded:
+                self.trace(token.run_id, "step", "completed",
+                           {"flags": result.flags, "cycle_limit_exceeded": _cycle_exceeded},
+                           step_id=token.step_id, step_instance_id=token.step_instance_id)
+                return
             self.trace(token.run_id, "step", "completed",
-                       {"flags": result.flags, "cycle_limit_exceeded": _cycle_exceeded},
+                       {"flags": result.flags, "next_node": next_node},
                        step_id=token.step_id, step_instance_id=token.step_instance_id)
-            return
-        self.trace(token.run_id, "step", "completed",
-                   {"flags": result.flags, "next_node": next_node},
-                   step_id=token.step_id, step_instance_id=token.step_instance_id)
+        finally:
+            # Every exit path retires the admission — the hook-failure and
+            # hook-retry returns inside the loop, the empty-delivery re-ask, a
+            # raised StepVersionConflict, and the normal completion. An admission
+            # that outlives its operation is an authorisation nobody holds, and
+            # the run it belongs to could never terminalise.
+            self._retire_op(_op)
 
     def _handle_validation_failure(self, token: ClaimToken, error: str,
                                    *, promote_on_exhaustion: bool = False) -> bool:
@@ -3473,22 +3619,37 @@ class SkillFlow:
         # is nothing it could usefully do differently, and raising here would
         # explode inside the `except` block of every host that calls fail_step
         # from one. Recorded in the trace so the drop is never silent.
-        _status = self._run_status(token.run_id)
-        if _status in self.TERMINAL_RUN_STATUSES:
-            self._release_step_tools(token.run_id, token.step_id,
-                                     token.step_instance_id, token.claim_epoch)
+        self._release_step_tools(token.run_id, token.step_id,
+                                 token.step_instance_id, token.claim_epoch)
+        # The terminal check and the mutation are ONE transaction. As two, a
+        # cancellation landing between them closed the claim and `_fail_step_in_tx`
+        # then reset that closed row to `pending` — it re-reads `version` from the
+        # row it is about to write, so it cannot notice on its own. Reproduced by
+        # an independent reviewer at exactly that ordering.
+        _fenced = None
+        with self._tx() as conn:
+            run = conn.execute(
+                "SELECT status, cancel_requested_at FROM skillflow_runs WHERE id = ?",
+                (token.run_id,)).fetchone()
+            if run is not None and (run["status"] in self.TERMINAL_RUN_STATUSES
+                                    or run["cancel_requested_at"]):
+                _fenced = run["status"]
+            elif not self._epoch_holds(token.step_instance_id, token.claim_epoch,
+                                       conn):
+                _fenced = "reclaimed"
+            else:
+                self._fail_step_in_tx(conn, token, error, retryable)
+        if _fenced is not None:
+            # Tracing re-enters the framework, so it stays outside the
+            # transaction. Not a raise: callers reach fail_step from inside an
+            # `except` block and have nothing useful to do differently.
             self.trace(token.run_id, "step", "fail_step_fenced",
-                       {"run_status": _status, "error": error[:500]},
+                       {"run_status": _fenced, "error": error[:500]},
                        step_id=token.step_id,
                        step_instance_id=token.step_instance_id)
             logging.getLogger("skillflow").info(
                 "fail_step for step %r ignored: run %s is %s",
-                token.step_id, token.run_id, _status)
-            return
-        self._release_step_tools(token.run_id, token.step_id,
-                                 token.step_instance_id, token.claim_epoch)
-        with self._tx() as conn:
-            self._fail_step_in_tx(conn, token, error, retryable)
+                token.step_id, token.run_id, _fenced)
 
     # A release is never capped — see `release_claim`. This is only how often
     # the warning repeats, so a repeatedly-killed driver is visible without one
@@ -4901,6 +5062,7 @@ class SkillFlow:
             "SELECT * FROM skillflow_runs WHERE id = ?", (run_id,)
         ).fetchone()
         if (run_row and run_row["status"] == "running"
+                and not run_row["cancel_requested_at"]
                 and run_row["current_node"]):
             current = run_row["current_node"]
             if resolver.is_tool(current):
@@ -6388,30 +6550,51 @@ class SkillFlow:
         # hard one — it is what stops a commit — but it is only reached when the
         # step ends, which on a real agent step is minutes away: the run stopped
         # at 09:09:00 on 2026-09-05 went on to spend two more LLM turns, a whole
-        # fresh retry attempt and an `edit` call before it got there. Every
-        # agent tool call in the host funnels through here, so this ends the
-        # writing within one turn instead.
+        # fresh retry attempt and an `edit` call before it got there. Every agent
+        # tool call in the host funnels through here, so this ends the writing
+        # within one turn instead.
         #
-        # An error dict, not a raise: the epoch fence beside it already answers
-        # this way, so the agent turn loop needs no new handling, and the model
-        # is told why in the one place it is guaranteed to read.
+        # ADMISSION, not a status read. Reading the status and then calling the
+        # tool is a check-then-act: an independent reviewer cancelled between the
+        # two and the `create` tool went on to stage a file AFTER the stop had
+        # reported the claim closed — a brand-new side effect, not a running one
+        # being preempted. `_admit_op` makes the check and the record one
+        # transaction, so a cancellation is either before it (the tool is refused
+        # and writes nothing) or after it (the tool runs and the stop says
+        # `draining`, naming this operation).
+        #
+        # EVERY tool is admitted, not only the writing ones. The engine has no
+        # trustworthy read/write classification for host-registered tools, the
+        # cost is two small transactions against a call that already does file
+        # I/O and two trace writes, and "nothing new starts after a stop" is
+        # easier to state and to test when it has no exceptions.
+        #
+        # An error dict, not a raise: the epoch fence above already answers this
+        # way, so the agent turn loop needs no new handling and the model is told
+        # why in the one place it is guaranteed to read.
+        _op = None
         if run_id:
-            _rs = self._run_status(run_id)
-            if _rs in self.TERMINAL_RUN_STATUSES:
-                msg = (f"Run '{run_id}' is {_rs}; tool '{name}' refused. The "
-                       f"run was stopped — do not continue this step.")
+            try:
+                _op = self._admit_op("tool", run_id,
+                                     step_instance_id=step_instance_id,
+                                     claim_epoch=claim_epoch, detail=name)
+            except (TerminalRunFenced, StaleClaimFenced) as e:
                 self.trace(run_id, "tool_call", name,
-                           {"source": "agent", "fenced": msg},
+                           {"source": "agent", "fenced": str(e)},
                            step_id=step_id, step_instance_id=step_instance_id)
-                return {"error": msg}
+                return {"error": str(e)}
         # Trace the call (params summarized — content fields can be huge).
         param_summary = {k: (f"<{len(v)} chars>" if isinstance(v, str) and len(v) > 200 else v)
                          for k, v in (params or {}).items()}
         self.trace(run_id, "tool_call", name,
                    {"source": "agent", "params": param_summary},
                    step_id=step_id, step_instance_id=step_instance_id)
-        result = self._execute_tool_impl(name, params, run_id=run_id,
-                                         step_id=step_id, project_root=project_root)
+        try:
+            result = self._execute_tool_impl(name, params, run_id=run_id,
+                                             step_id=step_id,
+                                             project_root=project_root)
+        finally:
+            self._retire_op(_op)
         # Trace the result (key fields only).
         res_summary: dict = {"source": "agent"}
         if isinstance(result, dict):
