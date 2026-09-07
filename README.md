@@ -286,6 +286,26 @@ failure tells the agent what to call next.
 
 ## Checkpoints
 
+
+### Revision identity and temporary loop restriction (1.5.67)
+
+An explicit rejection of a completed non-loop checkpoint creates a new execution
+instance. Completed rows, prior outputs and trace history remain available; the
+new revision receives fresh execution history and the latest rejection feedback.
+Reclaiming an interrupted execution keeps its existing instance and consumed
+budget: rejection is not an automatic retry or a way to reset an exhausted claim.
+
+A redirect may adopt a never-started pending target atomically. Targets with
+ownership, retry, result or execution-trace history are refused without changing
+the run. The latest rejection is exposed separately from accumulated feedback,
+including when the feedback artifact log lags behind the durable transaction.
+
+**Temporary restriction:** explicit rejection of a loop-body checkpoint, or
+redirecting a rejection into a loop body, is refused before mutation. This release
+does not implement iterator restoration or item-scoped checkpoint revision.
+Ordinary loop execution and non-checkpoint reviewer loopbacks are unchanged.
+Full loop-checkpoint support remains pending; do not treat refusal as support.
+
 Agent **and tool** steps can pause for human approval (`tests/fixtures/checkpoint_cycle.yaml`).
 A checkpoint on a tool step enables the *review-before-checkpoint* pattern: a cheap
 staging tool re-materializes the artifacts to approve, and the human is only asked
@@ -302,7 +322,7 @@ sf.reject_checkpoint(run_id, "draft", "Add more detail to the analysis")
 sf.reject_checkpoint(run_id, "final_review", "Goals not met", redirect_to="plan")
 ```
 
-`redirect_to` makes rejection a human-driven loopback: it sets the run's current node to the target step and injects the feedback there. Over the CLI this is `--redirect-to <step>`. Graphs can pin the target declaratively with `checkpoint_reject_to: "<step>"` on the checkpoint node. A checkpoint can also be rejected *after* a downstream failure (the only invariant is that the checkpoint step is `completed`), so you can reopen earlier work to recover.
+`redirect_to` makes rejection a human-driven loopback: it sets the run's current node to the target step and injects the feedback there. Over the CLI this is `--redirect-to <step>`. Graphs can pin the target declaratively with `checkpoint_reject_to: "<step>"` on the checkpoint node. A checkpoint can also be rejected *after* a downstream failure (the source checkpoint must be `completed`, outside a loop body, and the target must satisfy the revision ownership checks above), so you can reopen earlier work to recover.
 
 **Feedback accumulates.** Every reject round is APPENDED to a per-step log at
 `{config}/_feedback/{step}.md` (beside the step dir — step dirs are wiped on

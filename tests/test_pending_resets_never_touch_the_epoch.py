@@ -27,7 +27,6 @@ EXPECTED_RESETTERS = {
     "_handle_lifecycle_retry",
     "_fail_step_in_tx",
     "_reopen_tool_step_in_tx",
-    "reject_checkpoint",
     "recover_stale_claims",
     # Hands a claim back when the EXECUTOR went away rather than the step
     # failing (a cancelled driver). Like the others it leaves claim_epoch

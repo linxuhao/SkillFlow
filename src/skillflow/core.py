@@ -394,13 +394,13 @@ class SkillFlow:
         # on its own:
         #
         #   * `step_instance_id` names a `skillflow_steps` ROW, not a claim.
-        #     EIGHT UPDATEs in this file reset a row to 'pending'
+        #     SEVEN UPDATEs in this file reset a row to 'pending'
         #     (`_handle_validation_failure`, `_handle_lifecycle_retry`,
         #     `_fail_step_in_tx`'s retry branch, `_reopen_tool_step_in_tx`,
-        #     `reject_checkpoint`, `recover_stale_claims`, `reactivate_run`,
+        #     `recover_stale_claims`, `reactivate_run`,
         #     `release_claim`) and
         #     `claim_next_step` then re-claims the SAME row, bumping only
-        #     `claim_epoch` — none of the eight writes `claim_epoch` at all; the
+        #     `claim_epoch` — none of the seven writes `claim_epoch` at all; the
         #     only two statements that do are the two claim paths, and both
         #     increment. Successive claims of one row therefore share a row id.
         #   * `claim_epoch` restarts per row. Graph re-entry (a loop body, a
@@ -6654,9 +6654,9 @@ class SkillFlow:
         Compare-and-delete on the PAIR (instance id, claim epoch), because
         neither half names a claim alone. `(run_id, step_id)` names the step; the
         row id names one INSTANCE of it but is shared by every re-claim of that
-        row (eight sites reset a row to 'pending' — enumerated where
+        row (seven sites reset a row to 'pending' — enumerated where
         `_step_tools` is declared — and `claim_next_step` re-claims the same row,
-        bumping only `claim_epoch`; none of the eight writes the epoch at all);
+        bumping only `claim_epoch`; none of the seven writes the epoch at all);
         the epoch distinguishes those re-claims but restarts at 1 on
         every fresh row, so it is shared by consecutive instances of one step.
 

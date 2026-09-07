@@ -48,7 +48,7 @@ SkillFlow (orchestrator)  ← SQLite (WAL mode)
   │     path), re-read the edges' from_file targets and put their human-readable
   │     field in error_reason BEFORE the edge detail (hosts truncate for status
   │     chips). null fields skipped. Bounded (3 files / 300 chars), never raises.
-  ├── reject_checkpoint() → reset to pending
+  ├── reject_checkpoint() → fresh non-loop revision identity; loop-body rejection refused
   └── drain_outbox()     → event stream
 
 ToolLoader (multi-source)
