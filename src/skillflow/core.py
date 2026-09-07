@@ -2375,7 +2375,10 @@ class SkillFlow:
             _fb_log = self._read_feedback_log(
                 run["project_id"], run["graph_name"], run["current_node"])
             if _fb_log:
-                feedback = _fb_log
+                # The artifact log is appended after rejection commits. A claim
+                # must never replace newer durable feedback with an older file.
+                feedback = (_fb_log + "\n\n" + str(feedback)
+                            if feedback and str(feedback) not in _fb_log else _fb_log)
 
             # Emit via notification bus (real-time push + durable outbox).
             # publish_sync schedules an async task; outbox write happens
@@ -5767,73 +5770,42 @@ class SkillFlow:
                 )
 
             step_row = conn.execute(
-                "SELECT id, version FROM skillflow_steps WHERE run_id = ? AND step_id = ? AND status = 'completed'",
+                "SELECT * FROM skillflow_steps WHERE run_id = ? AND step_id = ? "
+                "AND status = 'completed' ORDER BY completion_seq DESC, id DESC LIMIT 1",
                 (run_id, step_id),
             ).fetchone()
             if not step_row:
                 raise SkillFlowError(f"Step '{step_id}' not found in completed status")
-
+            target = redirect_to or step_id
+            node = self._get_resolver_for_run(run_id).get_node(target)
+            if node is None:
+                raise SkillFlowError(f"Cannot reject checkpoint '{step_id}' into '{target}': "
+                                     "target is not in the graph version this run is pinned to")
+            conflict = conn.execute(
+                "SELECT id FROM skillflow_steps WHERE run_id = ? AND step_id = ? "
+                "AND status IN ('pending', 'claimed') LIMIT 1", (run_id, target)
+            ).fetchone()
+            if conflict:
+                raise SkillFlowError(f"Cannot reject into '{target}': an execution is already pending or claimed")
+            # A deliberate revision is a new execution, not a lease reclaim.
+            # Keep completed rows and their trace/output identities immutable.
+            prior = conn.execute(
+                "SELECT inputs_json FROM skillflow_steps WHERE run_id = ? AND step_id = ? "
+                "ORDER BY id DESC LIMIT 1", (run_id, target)
+            ).fetchone()
+            previous = self._deserialize(prior['inputs_json']).get('_feedback', '') if prior else ''
+            current_feedback = (str(previous) + "\n\n" + feedback) if previous else feedback
             conn.execute(
-                """
-                UPDATE skillflow_steps
-                SET status = 'pending', version = version + 1,
-                    retry_count = 0,
-                    updated_at = datetime('now')
-                WHERE id = ? AND version = ?
-                """,
-                (step_row["id"], step_row["version"]),
+                "INSERT INTO skillflow_steps "
+                "(run_id,step_id,step_config_json,max_retries,status,inputs_json,created_at,updated_at) "
+                "VALUES (?,?,?,?, 'pending',?,datetime('now'),datetime('now'))",
+                (run_id,target,self._serialize(node.config),node.max_retries,
+                 self._serialize({'_feedback':current_feedback,'_rejection':feedback})),
             )
-            # Inject the rejection feedback so the re-run sees it. We write the
-            # `_feedback` channel (the same one loop-back transitions use, see
-            # the redirect branch below) because that is the key the claim path
-            # preserves across re-claim and the runner reads into the prompt.
-            # `_rejection` is kept too for host display / back-compat, but it is
-            # `_feedback` that actually reaches the agent. Without this the
-            # rejected step re-runs with no knowledge of why it was rejected.
-            conn.execute(
-                """
-                UPDATE skillflow_steps
-                SET inputs_json = json_set(
-                        json_set(inputs_json, '$._rejection', ?),
-                        '$._feedback', ?),
-                    updated_at = datetime('now')
-                WHERE id = ?
-                """,
-                (feedback, feedback, step_row["id"]),
-            )
-            # The redirect target must exist in the graph THIS RUN is pinned to.
-            #
-            # Hosts compute `redirect_to` from the graph by NAME — i.e. from the
-            # CURRENT definition — so once a run is pinned the two can name
-            # different graphs. Reachable in one sitting: a run pauses at a
-            # checkpoint, the config is edited and re-registered, the user
-            # clicks Reject, and `redirect_to` is a node that exists only in the
-            # newer version. Writing it would leave `claim_next_step` resolving
-            # `current_node` to None and rolling back on every tick — the run
-            # stays `running` forever with nothing logged, which is exactly what
-            # an idle run looks like. Fail loudly instead; the caller can show it.
-            _target = redirect_to or step_id
-            if self._get_resolver_for_run(run_id).get_node(_target) is None:
-                raise SkillFlowError(
-                    f"Cannot reject checkpoint '{step_id}' of run {run_id} into "
-                    f"'{_target}': that step is not in the graph version this "
-                    f"run is pinned to. The config changed since the run "
-                    f"started — re-pin the run or start a fresh one.")
             conn.execute(
                 "UPDATE skillflow_runs SET current_node = ?, status = 'running', updated_at = datetime('now') WHERE id = ?",
-                (_target, run_id),
+                (target, run_id),
             )
-            # When redirecting, inject feedback into the redirect target
-            if redirect_to:
-                conn.execute(
-                    """
-                    UPDATE skillflow_steps
-                    SET inputs_json = json_set(inputs_json, '$._feedback', ?),
-                        updated_at = datetime('now')
-                    WHERE run_id = ? AND step_id = ? AND status = 'pending'
-                    """,
-                    (feedback, run_id, redirect_to),
-                )
             self.notifications.publish_sync(
                 "step_checkpoint_rejected",
                 {"run_id": run_id, "step_id": step_id},
