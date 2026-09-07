@@ -5809,6 +5809,7 @@ class SkillFlow:
                     and pending["completed_at"] is None and pending["completion_seq"] is None
                     and self._deserialize(pending["outputs_json"]) == {}
                     and self._deserialize(pending["result_flags_json"]) == {}
+                    and not self.get_trace(run_id, step_instance_id=pending["id"], limit=1)
                     and not conn.execute("SELECT 1 FROM skillflow_trace WHERE step_instance_id = ? LIMIT 1",
                                          (pending["id"],)).fetchone())
                 if not untouched:

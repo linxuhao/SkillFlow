@@ -144,3 +144,24 @@ def test_reclaim_preserves_latest_without_feedback_growth(flow,monkeypatch):
  s.release_claim(n.token,'crash');n2=s.claim_next_step(r)
  assert n2.inputs['_feedback']==feedback
  assert n2.inputs['_resolved_context']['Latest checkpoint rejection']==context['Latest checkpoint rejection']=='remove X'
+
+
+@pytest.mark.parametrize('trace_store', ['external', 'legacy_main'])
+def test_external_trace_configuration_refuses_any_prior_attempt(tmp_path,trace_store):
+ s=SkillFlow(str(tmp_path/'state.db'),workspace_base=str(tmp_path/'ws'),trace_db_path=str(tmp_path/'traces'))
+ s.register_graph(PipelineGraph(name='external',begin='a',steps=[StepNode(id='a',step_type='agent',checkpoint=True,transitions=[Transition(to='b')]),StepNode(id='b',step_type='agent')]))
+ r=s.create_run('external',project_id='p');s.start_run(r);s.advance_run(r);complete(s,r)
+ iid=s._conn.execute("SELECT id FROM skillflow_steps WHERE run_id=? AND step_id='b'",(r,)).fetchone()[0]
+ # Both supported storage routes are exercised through the production writer.
+ writer=s if trace_store=='external' else SkillFlow(str(tmp_path/'state.db'))
+ writer.trace(r,'agent','prompt_delta',{'index':0,'role':'user','content':'prior attempt'},step_id='b',step_instance_id=iid)
+ assert len(writer.get_trace(r,step_instance_id=iid))==1
+ main_before=[tuple(x) for x in s._conn.execute('SELECT * FROM skillflow_trace')]
+ routed_before=s.get_trace(r)
+ rows_before=[tuple(x) for x in s._conn.execute('SELECT * FROM skillflow_steps')]
+ run_before=s.get_run(r)
+ with pytest.raises(SkillFlowError,match='owned or previously attempted'):
+  s.reject_checkpoint(r,'a','new instruction',redirect_to='b')
+ assert [tuple(x) for x in s._conn.execute('SELECT * FROM skillflow_steps')]==rows_before
+ assert [tuple(x) for x in s._conn.execute('SELECT * FROM skillflow_trace')]==main_before
+ assert s.get_trace(r)==routed_before and s.get_run(r)==run_before
