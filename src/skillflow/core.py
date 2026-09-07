@@ -2349,6 +2349,7 @@ class SkillFlow:
             error_context = None
             validation_error = None
             feedback = None
+            rejection = None
             # Read from the instance JUST CLAIMED, not "some row with this step_id".
             # A step that runs more than once — every maker in a Green/Red loop after
             # its first rejection — has several instances, and this query used to have
@@ -2369,16 +2370,17 @@ class SkillFlow:
                     validation_error = existing_inputs["_validation_error"]
                 if "_feedback" in existing_inputs:
                     feedback = existing_inputs["_feedback"]
-            # Prefer the accumulated checkpoint-feedback log (ALL rounds) over the
-            # scalar _feedback (latest only), so a re-run honors every round of
-            # user feedback instead of drifting toward the most recent one.
+                rejection = existing_inputs.get("_rejection")
+            # Durable revision feedback remains authoritative if the artifact
+            # log lags. Never infer identity from prose substring containment.
+            durable_feedback = feedback
             _fb_log = self._read_feedback_log(
                 run["project_id"], run["graph_name"], run["current_node"])
             if _fb_log:
-                # The artifact log is appended after rejection commits. A claim
-                # must never replace newer durable feedback with an older file.
-                feedback = (_fb_log + "\n\n" + str(feedback)
-                            if feedback and str(feedback) not in _fb_log else _fb_log)
+                feedback = _fb_log
+            if rejection is not None:
+                feedback = "\n\n".join(str(x) for x in
+                    (_fb_log, durable_feedback) if x)
 
             # Emit via notification bus (real-time push + durable outbox).
             # publish_sync schedules an async task; outbox write happens
@@ -2762,9 +2764,13 @@ class SkillFlow:
             # any host-side special-casing. The dedicated keys are also kept for
             # hosts/runners that read them directly.
             if feedback is not None:
-                inputs_with_tools["_feedback"] = feedback
+                inputs_with_tools["_feedback"] = durable_feedback if rejection is not None else feedback
+                if rejection is not None:
+                    inputs_with_tools["_rejection"] = rejection
                 rc = inputs_with_tools.setdefault("_resolved_context", {})
                 rc[_FEEDBACK_CONTEXT_LABEL] = feedback
+                if rejection is not None:
+                    rc["Latest checkpoint rejection"] = rejection
             if validation_error is not None:
                 inputs_with_tools["_validation_error"] = validation_error
                 rc = inputs_with_tools.setdefault("_resolved_context", {})
@@ -2777,6 +2783,10 @@ class SkillFlow:
                 "UPDATE skillflow_steps SET inputs_json = ?, updated_at = datetime('now') WHERE id = ?",
                 (self._serialize(inputs_with_tools), step_row["id"]),
             )
+            # Expose the full read contract to callers without feeding its
+            # rendered history back into the next lease's durable accumulator.
+            if feedback is not None:
+                inputs_with_tools["_feedback"] = feedback
 
             claimed_step_id = run["current_node"]
             claimed_instance_id = token.step_instance_id
@@ -5781,27 +5791,51 @@ class SkillFlow:
             if node is None:
                 raise SkillFlowError(f"Cannot reject checkpoint '{step_id}' into '{target}': "
                                      "target is not in the graph version this run is pinned to")
-            conflict = conn.execute(
-                "SELECT id FROM skillflow_steps WHERE run_id = ? AND step_id = ? "
-                "AND status IN ('pending', 'claimed') LIMIT 1", (run_id, target)
-            ).fetchone()
-            if conflict:
-                raise SkillFlowError(f"Cannot reject into '{target}': an execution is already pending or claimed")
+            resolver = self._get_resolver_for_run(run_id)
+            # Re-entering a loop body also requires restoring its iterator and
+            # item-scoped staging. Fresh execution identity alone cannot do that.
+            if resolver.loop_of(step_id) or resolver.loop_of(target):
+                raise SkillFlowError("Explicit checkpoint revision of loop-body steps is not supported")
+            conflicts = conn.execute(
+                "SELECT * FROM skillflow_steps WHERE run_id = ? AND step_id = ? "
+                "AND status IN ('pending', 'claimed')", (run_id, target)
+            ).fetchall()
+            pending = conflicts[0] if len(conflicts) == 1 else None
+            if conflicts:
+                untouched = (pending is not None and pending["status"] == "pending"
+                    and pending["claim_epoch"] == 0 and pending["claimed_at"] is None
+                    and pending["claimed_by"] is None and pending["retry_count"] == 0
+                    and pending["validation_retry_count"] == 0 and pending["last_error"] is None
+                    and pending["completed_at"] is None and pending["completion_seq"] is None
+                    and self._deserialize(pending["outputs_json"]) == {}
+                    and self._deserialize(pending["result_flags_json"]) == {}
+                    and not conn.execute("SELECT 1 FROM skillflow_trace WHERE step_instance_id = ? LIMIT 1",
+                                         (pending["id"],)).fetchone())
+                if not untouched:
+                    raise SkillFlowError(f"Cannot reject into '{target}': an execution is owned or previously attempted")
             # A deliberate revision is a new execution, not a lease reclaim.
             # Keep completed rows and their trace/output identities immutable.
             prior = conn.execute(
-                "SELECT inputs_json FROM skillflow_steps WHERE run_id = ? AND step_id = ? "
+                "SELECT * FROM skillflow_steps WHERE run_id = ? AND step_id = ? "
                 "ORDER BY id DESC LIMIT 1", (run_id, target)
             ).fetchone()
             previous = self._deserialize(prior['inputs_json']).get('_feedback', '') if prior else ''
             current_feedback = (str(previous) + "\n\n" + feedback) if previous else feedback
-            conn.execute(
-                "INSERT INTO skillflow_steps "
-                "(run_id,step_id,step_config_json,max_retries,status,inputs_json,created_at,updated_at) "
-                "VALUES (?,?,?,?, 'pending',?,datetime('now'),datetime('now'))",
-                (run_id,target,self._serialize(node.config),node.max_retries,
-                 self._serialize({'_feedback':current_feedback,'_rejection':feedback})),
-            )
+            revision_inputs = self._deserialize(pending["inputs_json"]) if pending else {}
+            revision_inputs.update({'_feedback': current_feedback, '_rejection': feedback})
+            if pending:
+                # An initial unclaimed row has no execution history to restart.
+                # Adopt it in this transaction; never leave duplicate claimable rows.
+                conn.execute("UPDATE skillflow_steps SET inputs_json = ?, updated_at = datetime('now') WHERE id = ?",
+                             (self._serialize(revision_inputs), pending["id"]))
+            else:
+                conn.execute(
+                    "INSERT INTO skillflow_steps "
+                    "(run_id,step_id,step_config_json,max_retries,status,inputs_json,created_at,updated_at) "
+                    "VALUES (?,?,?,?, 'pending',?,datetime('now'),datetime('now'))",
+                    (run_id,target,self._serialize(node.config),node.max_retries,
+                     self._serialize(revision_inputs)),
+                )
             conn.execute(
                 "UPDATE skillflow_runs SET current_node = ?, status = 'running', updated_at = datetime('now') WHERE id = ?",
                 (target, run_id),
