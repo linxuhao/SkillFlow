@@ -201,6 +201,20 @@ def generate_write_tool_schemas(output_mode: str,
     mechanism exists to remove. A non-glob slot is a required output of the step
     and is never droppable.
     """
+    staging_hint = (
+        " Writes go to this step's staging, not directly to the repo. "
+        "To verify with read, use the output's relative path and omit source: "
+        "the latest staged content is visible; the result's source field names "
+        "the layer read. Explicit source='repo' reads the repo baseline, when "
+        "available. finish_step signals delivery through configured promotion "
+        "and apply hooks; do not manually call repo_apply. Repo application "
+        "depends on the pipeline configuration."
+    )
+    edit_hint = (
+        " Each successive old_str must match the latest staged content. "
+        "new_str is required and must be a string; use an explicit empty "
+        "string only for intentional deletion."
+    )
     if output_mode == "write" and not fixed:
         tools = [{
             "name": "create",
@@ -210,7 +224,9 @@ def generate_write_tool_schemas(output_mode: str,
                 "are accepted aliases; a leading 'project/' and any '.'/'..' "
                 "components are stripped). Fails if the file already exists — "
                 "use 'edit' to change an existing file — except that an existing "
-                "0-byte file is overwritten. Empty 'content' is refused."
+                "0-byte file is overwritten. Empty 'content' is refused. "
+                "Keep the same repo-relative file path; do not prepend a step "
+                "name such as implement/ or a .tmp directory." + staging_hint
             ),
             "parameters": {
                 "file": {"type": "string", "required": True},
@@ -227,14 +243,16 @@ def generate_write_tool_schemas(output_mode: str,
                 "found exactly once. For multiple changes, call edit repeatedly. "
                 "A leading 'project/' in 'file' is stripped. Baseline is your "
                 "staging, then the repo; on a revision loop it may be this "
-                "step's own promoted output."
+                "step's own promoted output. Keep the same repo-relative file "
+                "path; do not prepend a step name such as implement/ or a .tmp "
+                "directory." + staging_hint + edit_hint
             ),
             "parameters": {
                 "file": {"type": "string", "required": True},
                 "old_str": {"type": "string", "required": True,
                             "description": "Exact text to find (must appear exactly once)."},
                 "new_str": {"type": "string", "required": True,
-                            "description": "Replacement text."},
+                            "description": "Required replacement string; explicit empty string deletes."},
             },
         }]
         if allow_full_write:
@@ -359,6 +377,7 @@ def generate_write_tool_schemas(output_mode: str,
                     f"Create {pattern} with initial content. "
                     f"If file already exists, it is archived with a numeric suffix, "
                     f"so {pattern} always holds the latest version.{write_hint}"
+                    + staging_hint
                 ),
                 "parameters": create_params,
             })
@@ -368,7 +387,7 @@ def generate_write_tool_schemas(output_mode: str,
                 "old_str": {"type": "string", "required": True,
                             "description": "Exact text to find (must appear exactly once)."},
                 "new_str": {"type": "string", "required": True,
-                            "description": "Replacement text."},
+                            "description": "Required replacement string; explicit empty string deletes."},
             }
             if is_glob:
                 edit_params = {"id": dict(params["id"]), **edit_params}
@@ -401,6 +420,9 @@ def generate_write_tool_schemas(output_mode: str,
                     f"previous version): edit exactly the flagged spots — a full "
                     f"rewrite from memory silently corrupts unflagged parts. "
                     f"Fails if the file is absent or old_str isn't found exactly once.{fmt_hint}"
+                    f" The output path is fixed by {pattern}; if an id is requested, "
+                    f"it replaces * in that pattern, not a staging path."
+                    + staging_hint + edit_hint
                 ),
                 "parameters": edit_params,
             })

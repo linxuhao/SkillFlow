@@ -584,3 +584,29 @@ def test_edit_explicit_deletion_then_successive_edit(tmp_path, mode):
     assert edit("keep me", "kept") == {"edited": "app.py"}
     assert (staging / "app.py").read_text() == "kept\n"
     assert (repo / "app.py").read_text() == original
+
+
+@pytest.mark.parametrize("mode,fixed,edit_name", [
+    ("write", {}, "edit"),
+    ("content", {"plan": "plan.md"}, "edit_plan"),
+    ("content", {"task": "tasks/*.md"}, "edit_task"),
+])
+def test_edit_schema_explains_staging_contract(mode, fixed, edit_name):
+    schemas = generate_write_tool_schemas(mode, fixed)
+    edit = next(tool for tool in schemas if tool["name"] == edit_name)
+    description = edit["description"]
+    for instruction in ("not directly to the repo", "omit source",
+                        "source field", "source='repo'", "latest staged content",
+                        "explicit empty", "do not manually call repo_apply",
+                        "depends on the pipeline configuration"):
+        assert instruction in description
+    assert edit["parameters"]["new_str"]["required"] is True
+    assert edit["parameters"]["new_str"]["type"] == "string"
+    if mode == "write":
+        assert "repo-relative file" in description
+        assert "implement/" in description
+    else:
+        assert "output path is fixed" in description
+        assert "file" not in edit["parameters"]
+    create = next(tool for tool in schemas if tool["name"].startswith("create"))
+    assert "not directly to the repo" in create["description"]
