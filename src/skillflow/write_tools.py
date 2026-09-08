@@ -640,7 +640,10 @@ def execute_edit(slot: str, fixed: dict, params: dict,
     """
     base_name = resolve_write_target(slot, fixed, params)
     old_str = _ensure_str(params.get("old_str", ""))
-    new_str = _ensure_str(params.get("new_str", ""))
+    new_str = params.get("new_str")
+    if not isinstance(new_str, str):
+        return {"error": f"edit_{slot}: 'new_str' is required and must be a string "
+                          "(use an explicit empty string to delete)"}
     if not old_str:
         return {"error": f"edit_{slot}: 'old_str' is required and must be non-empty"}
 
@@ -770,7 +773,10 @@ def execute_generic_edit(params: dict, output_dir: str,
         return {"error": "Invalid filename: path traversal denied"}
     rel = str(Path(*safe_parts))
     old_str = _ensure_str(params.get("old_str", ""))
-    new_str = _ensure_str(params.get("new_str", ""))
+    new_str = params.get("new_str")
+    if not isinstance(new_str, str):
+        return {"error": "edit: 'new_str' is required and must be a string "
+                         "(use an explicit empty string to delete)"}
     if not old_str:
         return {"error": "edit: 'old_str' is required and must be non-empty"}
 

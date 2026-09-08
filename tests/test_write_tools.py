@@ -1,5 +1,7 @@
 """Tests for skillflow.write_tools."""
 
+import pytest
+
 from skillflow.write_tools import (generate_write_tool_schemas, resolve_write_target,
                                    execute_edit, execute_generic_create,
                                    execute_generic_edit)
@@ -527,3 +529,58 @@ class TestEditBaselineFallback:
             fallback_source_dir=str(prior))
         assert res == {"edited": "notes.md"}
         assert (tmp_path / "stage" / "notes.md").read_text() == "keep\nfixed\n"
+
+
+@pytest.mark.parametrize("mode", ["generic", "slot"])
+@pytest.mark.parametrize("staged", [False, True])
+@pytest.mark.parametrize("replacement", [{}, {"new_str": None}, {"new_str": 0},
+                                       {"new_str": False}, {"new_str": []},
+                                       {"new_str": {"text": "replacement"}}])
+def test_edit_rejects_invalid_replacement_without_mutation(
+        tmp_path, mode, staged, replacement):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("target\nrepo tail\n")
+    staging = tmp_path / "staging"
+    if staged:
+        staging.mkdir()
+        (staging / "app.py").write_text("target\nstaged tail\n")
+
+    def snapshot():
+        return {str(p.relative_to(tmp_path)): p.read_bytes() if p.is_file() else None
+                for p in tmp_path.rglob("*")}
+
+    before = snapshot()
+    params = {"old_str": "target", **replacement}
+    if mode == "generic":
+        result = execute_generic_edit({"file": "app.py", **params},
+                                      str(staging), str(repo))
+    else:
+        result = execute_edit("app", {"app": "app.py"}, params,
+                              str(staging), str(repo))
+    assert "error" in result
+    assert "new_str" in result["error"]
+    assert snapshot() == before
+
+
+@pytest.mark.parametrize("mode", ["generic", "slot"])
+def test_edit_explicit_deletion_then_successive_edit(tmp_path, mode):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    original = "remove me\nkeep me\n"
+    (repo / "app.py").write_text(original)
+    staging = tmp_path / "staging"
+
+    def edit(old_str, new_str):
+        params = {"old_str": old_str, "new_str": new_str}
+        if mode == "generic":
+            return execute_generic_edit({"file": "app.py", **params},
+                                        str(staging), str(repo))
+        return execute_edit("app", {"app": "app.py"}, params,
+                            str(staging), str(repo))
+
+    assert edit("remove me\n", "") == {"edited": "app.py"}
+    assert (staging / "app.py").read_text() == "keep me\n"
+    assert edit("keep me", "kept") == {"edited": "app.py"}
+    assert (staging / "app.py").read_text() == "kept\n"
+    assert (repo / "app.py").read_text() == original
