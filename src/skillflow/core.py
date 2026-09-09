@@ -1437,7 +1437,7 @@ class SkillFlow:
         """
         with self._tx() as conn:
             run = conn.execute(
-                "SELECT status, error_reason, graph_name FROM skillflow_runs WHERE id = ?",
+                "SELECT status, error_reason, graph_name, current_node FROM skillflow_runs WHERE id = ?",
                 (run_id,),
             ).fetchone()
             if not run:
@@ -1450,7 +1450,14 @@ class SkillFlow:
 
             # Try to find which step caused the failure
             error_reason = run["error_reason"] or ""
-            retry_step_id = self._extract_step_from_error(error_reason)
+            current = conn.execute(
+                "SELECT id, status FROM skillflow_steps WHERE run_id = ? AND step_id = ? "
+                "ORDER BY id DESC LIMIT 1", (run_id, run["current_node"]),
+            ).fetchone()
+            failed_instance = (current["id"] if run["status"] == "failed" and current
+                               and current["status"] == "failed" else None)
+            retry_step_id = (run["current_node"] if failed_instance is not None
+                             else self._extract_step_from_error(error_reason))
             if not retry_step_id:
                 # Fallback: use the last completed step — by COMPLETION order,
                 # not id (same divergence as advance_run: a looped run's
@@ -1481,18 +1488,26 @@ class SkillFlow:
                 )
 
             if retry_step_id:
-                # Reset the latest instance of the failed step to pending
+                # A failed current instance owns the retry. Older completed
+                # instances belong to earlier loop passes and keep their outputs.
+                # With no failed instance, retain the intentional routing/paused
+                # recovery behavior of reopening the named completed step.
+                reset_id = failed_instance
+                if reset_id is None:
+                    completed = conn.execute(
+                        "SELECT id FROM skillflow_steps WHERE run_id = ? AND step_id = ? "
+                        "AND status = 'completed' ORDER BY id DESC LIMIT 1",
+                        (run_id, retry_step_id),
+                    ).fetchone()
+                    reset_id = completed["id"] if completed else None
                 conn.execute(
                     """UPDATE skillflow_steps SET status = 'pending',
-                       version = version + 1,
+                       version = version + 1, retry_count = 0, validation_retry_count = 0,
+                       claimed_at = NULL, claimed_by = NULL,
+                       inputs_json = json_remove(COALESCE(inputs_json, '{}'), '$._validation_error'),
                        outputs_json = '{}', result_flags_json = '{}',
-                       updated_at = datetime('now')
-                    WHERE id = (
-                        SELECT id FROM skillflow_steps
-                        WHERE run_id = ? AND step_id = ? AND status = 'completed'
-                        ORDER BY id DESC LIMIT 1
-                    )""",
-                    (run_id, retry_step_id),
+                       updated_at = datetime('now') WHERE id = ?""",
+                    (reset_id,),
                 )
 
             conn.execute(
