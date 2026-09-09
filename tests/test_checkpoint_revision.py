@@ -165,3 +165,31 @@ def test_external_trace_configuration_refuses_any_prior_attempt(tmp_path,trace_s
  assert [tuple(x) for x in s._conn.execute('SELECT * FROM skillflow_steps')]==rows_before
  assert [tuple(x) for x in s._conn.execute('SELECT * FROM skillflow_trace')]==main_before
  assert s.get_trace(r)==routed_before and s.get_run(r)==run_before
+
+
+def stranded(flow):
+ s,r=flow;complete(s,r);s.reject_checkpoint(r,'a','revise UI');c=s.claim_next_step(r)
+ s.trace(r,'agent','prompt_delta',{'turn':5,'role':'assistant','content':'unfinished'},step_id='a',step_instance_id=c.token.step_instance_id)
+ s.release_claim(c.token,'fixture simulates interrupted driver')
+ # Reproduce the old host startup bug, not the recovery operation.
+ with s._tx() as db: db.execute('UPDATE skillflow_runs SET current_node=NULL WHERE id=?',(r,))
+ s.advance_run(r)
+ run=s.get_run(r);assert run['status']=='paused'
+ return s,r,c,dict(step_instance_id=c.token.step_instance_id,step_id='a',expected_current_node=run['current_node'],graph_version=run['graph_version'],graph_digest=run['graph_digest'])
+
+def test_recover_stranded_revision_preserves_all_steps_and_transcript(flow):
+ s,r,c,args=stranded(flow)
+ rows=[dict(x) for x in s._conn.execute('SELECT * FROM skillflow_steps WHERE run_id=?',(r,))]
+ trace=s.get_trace(r,step_instance_id=c.token.step_instance_id)
+ assert s.recover_stranded_checkpoint_revision(r,**args)['current_node']=='a'
+ assert [dict(x) for x in s._conn.execute('SELECT * FROM skillflow_steps WHERE run_id=?',(r,))]==rows
+ assert s.get_trace(r,step_instance_id=c.token.step_instance_id)[:len(trace)]==trace
+ assert s.advance_run(r)=='a'
+ assert s.claim_next_step(r).token.step_instance_id==c.token.step_instance_id
+ with pytest.raises(SkillFlowError):s.recover_stranded_checkpoint_revision(r,**args)
+
+@pytest.mark.parametrize('field,value',[('step_instance_id',-1),('step_id','b'),('expected_current_node','other'),('graph_version',99),('graph_digest','wrong')])
+def test_stranded_recovery_refuses_stale_target(flow,field,value):
+ s,r,c,args=stranded(flow);before=s.get_run(r);args[field]=value
+ with pytest.raises(SkillFlowError):s.recover_stranded_checkpoint_revision(r,**args)
+ assert s.get_run(r)==before

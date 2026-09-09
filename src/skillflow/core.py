@@ -5787,6 +5787,49 @@ class SkillFlow:
                 return None
             return next_node
 
+    def recover_stranded_checkpoint_revision(self, run_id: str, *, step_instance_id: int,
+            step_id: str, expected_current_node: str, graph_version: int,
+            graph_digest: str) -> dict:
+        """Resume only an interrupted revision stranded behind its old checkpoint.
+
+        This is not approval or a new rejection. Preserve the execution identity,
+        transcript, feedback, counters and historical output; only repair routing.
+        """
+        if type(step_instance_id) is not int or type(graph_version) is not int:
+            raise SkillFlowError("exact integer instance and graph version required")
+        with self._tx() as conn:
+            run = conn.execute("SELECT * FROM skillflow_runs WHERE id=?", (run_id,)).fetchone()
+            if (not run or run["status"] != "paused" or run["current_node"] != expected_current_node
+                    or run["graph_version"] != graph_version or run["graph_digest"] != graph_digest):
+                raise SkillFlowError("stranded revision run state or graph pin changed")
+            version = self.get_graph_version(run["graph_name"], graph_version)
+            if not version or version["digest"] != graph_digest:
+                raise SkillFlowError("pinned graph history unavailable or inconsistent")
+            resolver = self._get_resolver_for_run(run_id)
+            node = resolver.get_node(step_id)
+            if not node or not node.checkpoint or resolver.loop_of(step_id):
+                raise SkillFlowError("recovery requires a non-loop checkpoint revision")
+            rows = conn.execute("SELECT * FROM skillflow_steps WHERE run_id=? AND step_id=? "
+                                "ORDER BY id DESC", (run_id, step_id)).fetchall()
+            row = rows[0] if rows else None
+            if (not row or row["id"] != step_instance_id or row["status"] != "pending"
+                    or row["claim_epoch"] < 1 or row["claimed_at"] or row["claimed_by"]
+                    or row["completed_at"] or row["completion_seq"]
+                    or not self._deserialize(row["inputs_json"]).get("_rejection")
+                    or not any(r["status"] == "completed" for r in rows[1:])):
+                raise SkillFlowError("no matching interrupted checkpoint revision")
+            if conn.execute("SELECT 1 FROM skillflow_steps WHERE run_id=? AND status='claimed'",
+                            (run_id,)).fetchone() or conn.execute(
+                    "SELECT 1 FROM skillflow_active_ops WHERE run_id=?", (run_id,)).fetchone():
+                raise SkillFlowError("run still has an execution owner")
+            conn.execute("UPDATE skillflow_runs SET current_node=?,status='running',"
+                         "updated_at=datetime('now') WHERE id=?", (step_id, run_id))
+        self.trace(run_id, "step", "checkpoint_revision_recovered", {
+            "step_instance_id": step_instance_id, "previous_current_node": expected_current_node,
+            "graph_version": graph_version, "graph_digest": graph_digest},
+            step_id=step_id, step_instance_id=step_instance_id)
+        return self.get_run(run_id)
+
     def reject_checkpoint(self, run_id: str, step_id: str, feedback: str,
                           redirect_to: str = "") -> None:
         with self._tx() as conn:
