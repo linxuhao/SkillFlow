@@ -60,3 +60,31 @@ def test_normal_resume_does_not_reopen_completed_checkpoint(sf):
     before = rows(sf,run)
     sf.resume_run(run)
     assert rows(sf,run) == before
+
+
+def test_fanout_wave_retry_keeps_siblings_unclaimed_and_continues(sf_with_workspace):
+    from skillflow.core import StepResult
+    from test_integration_configs import _loop_prepare, _drive_loop
+    sf = sf_with_workspace
+    run = _loop_prepare(sf, [["alpha", "beta"], ["gamma"]])
+    sf.advance_run(run)
+    first = sf.claim_next_step(run)
+    assert first.step_id == "process_task"
+    assert first.inputs["_resolved_context"]["[current_task]"] == "alpha"
+    # Wave syntax is flattened by the resolver: there is one current item and
+    # one claim, not concurrently executing alpha/beta sibling branches.
+    assert sf.claim_next_step(run) is None
+    sf.fail_step(first.token, "native turn budget exhausted", retryable=False)
+    assert sf.get_run(run)["status"] == "failed"
+    assert sf.claim_next_step(run) is None
+    prepare = dict(sf._conn.execute("SELECT * FROM skillflow_steps WHERE run_id=? AND step_id='prepare'",(run,)).fetchone())
+    sf.reactivate_run(run)
+    retried = sf.claim_next_step(run)
+    assert retried.token.step_instance_id == first.token.step_instance_id
+    assert retried.inputs["_resolved_context"]["[current_task]"] == "alpha"
+    assert sf.claim_next_step(run) is None
+    sf.confirm_step(retried.token, StepResult())
+    count, items = _drive_loop(sf, run)
+    assert count == 2 and items == ["beta", "gamma"]
+    assert sf.get_run(run)["status"] == "completed"
+    assert dict(sf._conn.execute("SELECT * FROM skillflow_steps WHERE id=?",(prepare["id"],)).fetchone()) == prepare
