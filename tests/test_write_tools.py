@@ -610,3 +610,36 @@ def test_edit_schema_explains_staging_contract(mode, fixed, edit_name):
         assert "file" not in edit["parameters"]
     create = next(tool for tool in schemas if tool["name"].startswith("create"))
     assert "not directly to the repo" in create["description"]
+
+
+@pytest.mark.parametrize('mode', ['generic', 'slot'])
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+def test_raw_read_edit_roundtrip_and_failed_indent_is_safe(tmp_path, mode, newline):
+    from skillflow.read_tools import make_read_tool_fns
+    from skillflow.write_tools import execute_generic_edit, execute_edit
+    repo = tmp_path / 'repo'; repo.mkdir()
+    staging = tmp_path / 'staging'
+    original = newline.join(['def f():', '\treturn 1', '', '  keep', ''])
+    (repo / 'a.py').write_bytes(original.encode())
+    read = make_read_tool_fns(
+        [{'source_type': 'repository', 'mode': 'tool'}],
+        code_root=str(repo), step_tmp_dir=str(staging))['read']
+
+    def edit(old, new):
+        params = {'file': 'a.py', 'old_str': old, 'new_str': new}
+        if mode == 'generic':
+            return execute_generic_edit(params, str(staging), str(repo))
+        return execute_edit('code', {'code': 'a.py'}, params, str(staging), str(repo))
+
+    failed = edit('\t\treturn 1', '\treturn 2')
+    assert 'not found' in failed['error'] and 'raw=true' in failed['hint']
+    assert not (staging / 'a.py').exists()
+    snippet = read('a.py', start_line=1, end_line=3, raw=True)['content']
+    assert snippet == '\treturn 1' + newline * 2
+    assert 'error' not in edit(snippet, snippet.replace('1', '2'))
+    staged = read('a.py', raw=True)
+    assert staged['source'] == 'staging'
+    assert 'error' not in edit(staged['content'], staged['content'].replace('2', '3'))
+    assert (staging / 'a.py').read_bytes() == original.replace('1', '3').encode()
+    assert (repo / 'a.py').read_bytes() == original.encode()
+    assert read('a.py', raw=True)['content'] == original.replace('1', '3')

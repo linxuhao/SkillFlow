@@ -374,3 +374,47 @@ class TestReadCharCap:
         import inspect, skillflow.read_tools as rt
         src = inspect.getsource(rt)
         assert "24K characters" in src and "2000 lines" in src
+
+
+class TestRawReads:
+    def test_raw_window_preserves_text_and_default_display(self, tmp_path):
+        repo = tmp_path / 'repo'; repo.mkdir()
+        original = b'def f():\r\n\treturn 1\r\n\r\n  tail'
+        (repo / 'a.py').write_bytes(original)
+        read = make_read_tool_fns(
+            [{'source_type': 'repository', 'mode': 'tool'}],
+            code_root=str(repo))['read']
+        assert read('a.py')['content'] == '1\tdef f():\n2\t\treturn 1\n3\t\n4\t  tail'
+        result = read('a.py', raw=True)
+        assert result['content'].encode() == original
+        assert result['returned_lines'] == result['total_lines'] == 4
+        window = read('a.py', start_line=1, end_line=3, raw=True)
+        assert window['content'] == '\treturn 1\r\n\r\n'
+        assert window['start_line'] == 1 and window['returned_lines'] == 2
+        assert window['truncated'] is True
+        assert read('wrong/a.py', raw=True)['content'].encode() == original
+
+    def test_raw_paging_reconstructs_without_normalization(self, monkeypatch):
+        from skillflow import read_tools
+        monkeypatch.setattr(read_tools, '_MAX_READ_CHARS', 9)
+        monkeypatch.setattr(read_tools, '_MAX_READ_LINES', 2)
+        text = '\ta\r\n\r\nlonger line\n\tend'
+        start, chunks = 0, []
+        while True:
+            result = read_tools._page_lines(text, start, raw=True)
+            chunks.append(result['content'])
+            start += result['returned_lines']
+            if not result['truncated']:
+                break
+        assert ''.join(chunks) == text
+        assert chunks == ['\ta\r\n\r\n', 'longer line\n', '\tend']
+        assert read_tools._page_lines('', raw=True)['content'] == ''
+        assert read_tools._page_lines(text, 100, raw=True)['returned_lines'] == 0
+
+    def test_raw_schema_is_opt_in(self, tmp_path):
+        schemas = generate_read_tool_schemas(
+            [{'source_type': 'repository', 'mode': 'tool'}], code_root=str(tmp_path))
+        schema = next(s for s in schemas if s['name'] == 'read')
+        assert schema['parameters']['raw']['type'] == 'boolean'
+        assert not schema['parameters']['raw'].get('required')
+        assert 'raw=true' in schema['description']

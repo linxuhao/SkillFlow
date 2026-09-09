@@ -212,6 +212,8 @@ def generate_write_tool_schemas(output_mode: str,
     )
     edit_hint = (
         " Each successive old_str must match the latest staged content. "
+        "Re-read with raw=true and omit source for exact snippets without "
+        "display line numbers; preserve indentation and line endings. "
         "new_str is required and must be a string; use an explicit empty "
         "string only for intentional deletion."
     )
@@ -623,7 +625,13 @@ def _unique_replace(content: str, old_str: str, new_str: str, *,
     """
     occurrences = content.count(old_str)
     if occurrences == 0:
-        return None, {"error": f"{tool}: 'old_str' not found in '{name}'"}
+        return None, {"error": f"{tool}: 'old_str' not found in '{name}'",
+                      "hint": "Re-read the file with raw=true, omitting source for "
+                              "the working tree (latest staging), or source='self' "
+                              "for this step's own output. Copy exact original text, "
+                              "including tabs, spaces and line endings, without "
+                              "display line-number prefixes. No whitespace-fuzzy "
+                              "replacement is performed."}
     if occurrences > 1:
         return None, {"error": (f"{tool}: 'old_str' matches {occurrences} times in "
                                 f"'{name}' — include more surrounding context to make it unique")}
@@ -685,14 +693,15 @@ def execute_edit(slot: str, fixed: dict, params: dict,
                           "staging, or this run's prior output). Use "
                           f"create_{slot}/write_{slot} to author it first.")}
 
-    content = src.read_text(encoding="utf-8")
+    with src.open(encoding="utf-8", newline="") as stream:
+        content = stream.read()
     updated, err = _unique_replace(content, old_str, new_str,
                                    tool=f"edit_{slot}", name=base_name)
     if err:
         return err
     out = Path(output_dir) / base_name
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(updated, encoding="utf-8")
+    out.write_text(updated, encoding="utf-8", newline="")
     return {"edited": base_name}
 
 
@@ -816,11 +825,12 @@ def execute_generic_edit(params: dict, output_dir: str,
                           "edit (nothing in the repo, staging, or this run's "
                           "prior output). Use 'create' for a new file.")}
 
-    content = src.read_text(encoding="utf-8")
+    with src.open(encoding="utf-8", newline="") as stream:
+        content = stream.read()
     updated, err = _unique_replace(content, old_str, new_str,
                                    tool="edit", name=rel)
     if err:
         return err
     staged.parent.mkdir(parents=True, exist_ok=True)
-    staged.write_text(updated, encoding="utf-8")
+    staged.write_text(updated, encoding="utf-8", newline="")
     return {"edited": rel}

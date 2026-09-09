@@ -51,15 +51,15 @@ def _is_blocked_path(rel) -> bool:
     return any(part in _BLOCKED_DIR_PARTS for part in Path(rel).parts)
 
 
-def _page_lines(text: str, start_line: int = 0, end_line: int | None = None) -> dict:
-    """Slice file text into a line-numbered window with paging metadata.
+def _page_lines(text: str, start_line: int = 0, end_line: int | None = None, raw: bool = False) -> dict:
+    """Slice file text into a window with paging metadata; raw preserves text.
 
     ``start_line`` is 0-based (matching the ``read_file`` native tool); when
     ``end_line`` is None the window is capped at ``_MAX_READ_LINES`` lines.
     Returns content plus ``total_lines``/``returned_lines``/``truncated`` so the
     caller can page rather than be cut off without warning.
     """
-    lines = text.splitlines()
+    lines = text.splitlines(keepends=raw)
     total = len(lines)
     start = start_line if isinstance(start_line, int) and start_line > 0 else 0
     start = min(start, total)
@@ -68,12 +68,12 @@ def _page_lines(text: str, start_line: int = 0, end_line: int | None = None) -> 
     else:
         end = min(start + _MAX_READ_LINES, total)
     selected = lines[start:end]
-    numbered = [f"{start + i + 1}\t{ln}" for i, ln in enumerate(selected)]
+    numbered = selected if raw else [f"{start + i + 1}\t{ln}" for i, ln in enumerate(selected)]
     # Cut to whole lines under the character cap (always keep at least one).
     budget = _MAX_READ_CHARS
     kept = 0
     for ln in numbered:
-        cost = len(ln) + 1
+        cost = len(ln) + (0 if raw else 1)
         if kept and budget - cost < 0:
             break
         budget -= cost
@@ -82,7 +82,7 @@ def _page_lines(text: str, start_line: int = 0, end_line: int | None = None) -> 
         numbered = numbered[:kept]
         end = start + kept
     return {
-        "content": "\n".join(numbered),
+        "content": ("" if raw else "\n").join(numbered),
         "start_line": start,
         "returned_lines": len(numbered),
         "total_lines": total,
@@ -278,7 +278,9 @@ def generate_read_tool_schemas(
                 "`start_line + returned_lines` — page with start_line/end_line "
                 "(0-based), or `search` first and read only the region you "
                 "need. `total_lines` is the whole file's length. Args are "
-                "0-based; returned lines are 1-based, `N\\t`-prefixed. If "
+                "0-based; default returned lines are 1-based, `N\\t`-prefixed. "
+                "Use raw=true for exact edit snippets: content has no prefixes "
+                "and preserves original indentation and line endings. If "
                 "`path` does not exist at that location but its basename is "
                 "unique across layers, that file is served instead and "
                 "`resolved_from` names it."),
@@ -286,6 +288,8 @@ def generate_read_tool_schemas(
                 "path": {"type": "string", "required": True,
                          "description": "Repo-relative file path (e.g. 'core/db.py')."},
                 "source": src_param,
+                "raw": {"type": "boolean",
+                        "description": "Return original text without line-number prefixes (default false)."},
                 "start_line": {"type": "integer",
                                "description": "0-based first line (optional)"},
                 "end_line": {"type": "integer",
@@ -510,7 +514,7 @@ def _deleted_this_step(step_tmp_dir: str) -> set:
 
 
 def unified_read(smap, path, source=None, start_line=0, end_line=None,
-                 deleted=None):
+                 deleted=None, raw=False):
     layers, err = _layers_for(smap, source)
     if err:
         return err
@@ -524,10 +528,11 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
             continue
         if cand.is_file():
             try:
-                text = cand.read_text(encoding="utf-8", errors="replace")
+                with cand.open(encoding="utf-8", errors="replace", newline="" if raw else None) as stream:
+                    text = stream.read()
             except Exception as e:
                 return {"error": str(e)}
-            out = _page_lines(text, start_line, end_line)
+            out = _page_lines(text, start_line, end_line, raw=raw)
             out["source"] = tag
             out["path"] = path
             return out
@@ -562,10 +567,11 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
     if len(matches) == 1:
         tag, rel, f = matches[0]
         try:
-            text = f.read_text(encoding="utf-8", errors="replace")
+            with f.open(encoding="utf-8", errors="replace", newline="" if raw else None) as stream:
+                text = stream.read()
         except Exception as e:
             return {"error": str(e)}
-        out = _page_lines(text, start_line, end_line)
+        out = _page_lines(text, start_line, end_line, raw=raw)
         out["source"] = tag
         out["path"] = rel
         out["resolved_from"] = path  # the requested path was wrong; this is where it really lives
@@ -711,8 +717,8 @@ def make_read_tool_fns(specs: list[dict], workspace_root: str = "",
     deleted = _deleted_this_step(step_tmp_dir)
 
     def _read(path: str, source: str = None, start_line: int = 0,
-              end_line: int | None = None) -> dict:
-        return unified_read(smap, path, source, start_line, end_line, deleted)
+              end_line: int | None = None, raw: bool = False) -> dict:
+        return unified_read(smap, path, source, start_line, end_line, deleted, raw=raw)
 
     def _search(pattern: str, source: str = None, glob: str = None,
                 context_lines: int = 0, files_with_matches: bool = False,
