@@ -6,6 +6,8 @@
 
 import json
 
+import pytest
+
 from skillflow.read_tools import (make_read_tool_fns, generate_read_tool_schemas,
                                   get_read_tool_names)
 
@@ -418,3 +420,79 @@ class TestRawReads:
         assert schema['parameters']['raw']['type'] == 'boolean'
         assert not schema['parameters']['raw'].get('required')
         assert 'raw=true' in schema['description']
+
+
+class TestSearchPathContract:
+    def test_path_restricts_to_one_file(self, tmp_path):
+        _mk_step(tmp_path, {
+            "chosen.py": "HIT chosen\n",
+            "other.py": "HIT other\n",
+        })
+        result = _step_fns(tmp_path)["search"](
+            "HIT", source="step:2", path="chosen.py")
+        assert [m["file"] for m in result["matches"]] == ["chosen.py"]
+
+    def test_path_restricts_to_subdirectory(self, tmp_path):
+        _mk_step(tmp_path, {
+            "pkg/chosen.py": "HIT chosen\n",
+            "outside.py": "HIT outside\n",
+        })
+        result = _step_fns(tmp_path)["search"](
+            "HIT", source="step:2", path="pkg")
+        assert [m["file"] for m in result["matches"]] == ["pkg/chosen.py"]
+
+    def test_path_traversal_is_rejected_not_widened(self, tmp_path):
+        _mk_step(tmp_path, {"a.py": "HIT\n"})
+        result = _step_fns(tmp_path)["search"](
+            "HIT", source="step:2", path="../")
+        assert "path traversal denied" in result["error"]
+
+    def test_missing_path_is_explicit_not_a_full_tree_search(self, tmp_path):
+        _mk_step(tmp_path, {"a.py": "HIT\n"})
+        result = _step_fns(tmp_path)["search"](
+            "HIT", source="step:2", path="missing")
+        assert "path not found" in result["error"]
+        assert "matches" not in result
+
+    def test_unknown_scope_parameter_is_not_silently_ignored(self, tmp_path):
+        _mk_step(tmp_path, {"a.py": "HIT\n"})
+        with pytest.raises(TypeError, match="unexpected keyword"):
+            _step_fns(tmp_path)["search"]("HIT", root="../")
+
+    def test_schema_advertises_path(self, tmp_path):
+        _mk_step(tmp_path, {"a.py": "HIT\n"})
+        search = next(s for s in generate_read_tool_schemas(
+            [_STEP_SPEC], str(tmp_path), "dpe_default") if s["name"] == "search")
+        assert "path" in search["parameters"]
+
+
+class TestExplicitStagingSource:
+    def test_staging_alias_reads_only_pending_output(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        stage = tmp_path / "stage"
+        stage.mkdir()
+        (repo / "repo_only.py").write_text("REPO\n")
+        (stage / "pending.py").write_text("PENDING\n")
+        fns = make_read_tool_fns(
+            [{"source_type": "repository", "mode": "tool"}],
+            str(tmp_path), code_root=str(repo), step_tmp_dir=str(stage))
+        assert fns["read"]("pending.py", source="staging")["source"] == "staging"
+        missing = fns["read"]("repo_only.py", source="staging")
+        assert "not found" in missing["error"].lower()
+        search = fns["search"]("REPO", source="staging")
+        assert search["matches"] == []
+
+    def test_staging_alias_respects_queued_deletion(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        stage = tmp_path / "stage"
+        stage.mkdir()
+        (stage / "gone.py").write_text("pending\n")
+        (stage / "_deletions.json").write_text(
+            '{"deletions": ["gone.py"]}')
+        fns = make_read_tool_fns(
+            [{"source_type": "repository", "mode": "tool"}],
+            str(tmp_path), code_root=str(repo), step_tmp_dir=str(stage))
+        result = fns["read"]("gone.py", source="staging")
+        assert "deleted this step" in result["error"]

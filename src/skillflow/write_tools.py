@@ -243,14 +243,23 @@ def generate_write_tool_schemas(output_mode: str,
                 "'old_str' must appear exactly once; include surrounding context "
                 "to make it unique. Fails if the file is absent or 'old_str' isn't "
                 "found exactly once. For multiple changes, call edit repeatedly. "
-                "A leading 'project/' in 'file' is stripped. Baseline is your "
+                "Pass exactly one repo-relative path argument: 'file' or "
+                "'file_path' (legacy 'filename'/'path' are also accepted). A "
+                "leading 'project/' is stripped. Baseline is your "
                 "staging, then the repo; on a revision loop it may be this "
                 "step's own promoted output. Keep the same repo-relative file "
                 "path; do not prepend a step name such as implement/ or a .tmp "
                 "directory." + staging_hint + edit_hint
             ),
             "parameters": {
-                "file": {"type": "string", "required": True},
+                "file": {"type": "string", "required": False,
+                         "description": "Repo-relative path; use either file or file_path."},
+                "file_path": {"type": "string", "required": False,
+                              "description": "Alias for file; do not pass both."},
+                "filename": {"type": "string", "required": False,
+                             "description": "Legacy alias for file; do not combine aliases."},
+                "path": {"type": "string", "required": False,
+                         "description": "Legacy alias for file; do not combine aliases."},
                 "old_str": {"type": "string", "required": True,
                             "description": "Exact text to find (must appear exactly once)."},
                 "new_str": {"type": "string", "required": True,
@@ -798,7 +807,22 @@ def execute_generic_edit(params: dict, output_dir: str,
     promotion + repo_apply overwrites the repo copy. The repo is never edited in
     place — ``edit`` only reads it as a baseline.
     """
-    raw = params.get("file") or params.get("filename") or params.get("path", "")
+    allowed = {"file", "file_path", "filename", "path", "old_str", "new_str"}
+    unknown = sorted(set(params) - allowed)
+    if unknown:
+        return {"error": (f"edit: unknown parameter(s): {', '.join(unknown)}; "
+                          "allowed: file, file_path, filename, path, "
+                          "old_str, new_str")}
+    path_args = [(key, params.get(key)) for key in
+                 ("file", "file_path", "filename", "path") if params.get(key)]
+    if not path_args:
+        return {"error": ("edit: one path parameter is required: file, "
+                          "file_path, filename, or path")}
+    if len(path_args) > 1:
+        return {"error": ("edit: pass exactly one path parameter "
+                          "(file, file_path, filename, or path), not: "
+                          + ", ".join(key for key, _ in path_args))}
+    raw = path_args[0][1]
     safe_parts = normalize_repo_path(raw)
     if not safe_parts:
         return {"error": "Invalid filename: path traversal denied"}

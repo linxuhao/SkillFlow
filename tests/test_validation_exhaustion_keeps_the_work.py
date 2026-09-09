@@ -240,3 +240,48 @@ def test_only_the_last_attempt_promotes(tmp_path, budget):
     _stage_and_confirm(sf, rid)
     assert _step_row(sf, rid)["status"] == "completed"
     assert (sf._workspace.get_step_dir("pid", f"b{budget}", "impl") / "ok.py").exists()
+
+
+def test_fail_policy_preserves_staging_and_routes_before_promotion(tmp_path):
+    graph = PipelineGraph(
+        name="fail_closed", begin="impl",
+        steps=[
+            StepNode(
+                id="impl", step_type="agent", output_mode="write",
+                max_retries=1,
+                validation=[{"files": ["*.py"], "tool": "lint"}],
+                validation_on_exhaustion="fail",
+                transitions=[
+                    Transition(to="repair", match={"_error": True}),
+                    Transition(to="review"),
+                ],
+            ),
+            StepNode(id="repair", step_type="agent",
+                     transitions=[Transition(to=None)]),
+            StepNode(id="review", step_type="agent",
+                     transitions=[Transition(to=None)]),
+        ],
+    )
+    sf = _sf(tmp_path, graph)
+    rid = _start(sf, "fail_closed")
+    _stage_and_confirm(sf, rid)  # retry
+    _stage_and_confirm(sf, rid)  # exhaust and route through _error
+
+    row = _step_row(sf, rid)
+    assert row["status"] == "failed"
+    assert "Output validation failed" in row["last_error"]
+    run = sf._conn.execute(
+        "SELECT current_node FROM skillflow_runs WHERE id = ?", (rid,)
+    ).fetchone()
+    assert run["current_node"] == "repair"
+
+    step_dir = sf._workspace.get_step_dir("pid", "fail_closed", "impl")
+    tmp_dir = sf._workspace.get_step_tmp_dir("pid", "fail_closed", "impl")
+    assert not step_dir.exists(), "fail-closed validation must not promote"
+    assert (tmp_dir / "ok.py").read_text() == GOOD_FILE
+    assert (tmp_dir / "bad_encoding2.py").read_text() == REQUIRED_BROKEN_FIXTURE
+
+    exhausted = [r for r in sf.get_trace(rid)
+                 if r["event"] == "validation_exhausted"]
+    assert exhausted
+    assert exhausted[-1]["payload"]["promoted"] is False

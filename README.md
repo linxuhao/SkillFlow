@@ -342,6 +342,22 @@ Steps declare validation specs auto-executed by skillflow. See `tests/fixtures/s
 
 Available validators: `json_schema`, `syntax_lint`, `py_compile`, `pytest`, `file_exists`.
 
+Validation retries share the step's `max_retries` budget. By default, an
+exhausted `validation:` block promotes the staged output with
+`validation_failed: true`, preserving existing graphs that route that flag to a
+reviewer. A step that must not publish or deliver invalid output declares:
+
+```yaml
+validation_on_exhaustion: fail
+transitions:
+  - to: repair
+    match: {_error: true}
+```
+
+The `fail` policy leaves the staging directory intact, records
+`validation_exhausted` with `promoted: false`, and takes the `_error` route
+before promotion or lifecycle hooks such as `repo_apply`.
+
 ## Lifecycle Hooks
 
 Steps with `output.mode: "write"` can trigger deliver and post-deliver hooks. See `tests/fixtures/lifecycle_hooks.yaml`:

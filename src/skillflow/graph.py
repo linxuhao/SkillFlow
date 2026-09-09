@@ -121,11 +121,13 @@ class StepNode:
         call instead of an accident of omission.
         output_fixed: Fixed output filename mapping (content mode).
         validation: List of validation specs (files + tool + params).
-                    A spec that still fails once the retry budget is spent does
-                    NOT kill the step: its output is promoted and the result
-                    carries ``validation_failed: true``, so a transition
-                    (``match: {validation_failed: true}``) or an ``end_conditions``
-                    ``flag_match`` decides what an unsatisfied validator means here.
+                    By default, a spec that still fails once the retry budget is
+                    spent promotes the output with ``validation_failed: true``;
+                    a transition or end condition can route that flag.
+        validation_on_exhaustion: What validation-spec exhaustion means.
+                    ``"promote"`` (default) preserves existing behavior.
+                    ``"fail"`` fails before promotion or delivery and follows
+                    the step's ``_error`` transition when declared.
     """
 
     id: str
@@ -165,6 +167,7 @@ class StepNode:
     output_allow_full_write: bool = False
     output_carry_forward: bool = False
     validation: list[dict] = field(default_factory=list)
+    validation_on_exhaustion: str = "promote"
     notify: list[str] | None = None  # event types to push (None = outbox only)
     lifecycle: dict[str, Any] = field(default_factory=dict)
 
@@ -177,6 +180,11 @@ class StepNode:
         if self.step_type == "loop" and not self.loop:
             raise ValueError(
                 f"StepNode '{self.id}': step_type='loop' requires a 'loop' config"
+            )
+        if self.validation_on_exhaustion not in ("promote", "fail"):
+            raise ValueError(
+                f"StepNode '{self.id}': validation_on_exhaustion must be "
+                f"'promote' or 'fail', got '{self.validation_on_exhaustion}'"
             )
         # Normalize context specs so consumers (claim_next_step, ContextResolver)
         # always see the normalized form regardless of how the StepNode was created.
@@ -349,6 +357,8 @@ class PipelineGraph:
                     output_allow_full_write=bool((s.get("output") or {}).get("allow_full_write", False)),
                     output_carry_forward=bool((s.get("output") or {}).get("carry_forward", False)),
                     validation=s.get("validation", []),
+                    validation_on_exhaustion=s.get(
+                        "validation_on_exhaustion", "promote"),
                     notify=s.get("notify"),
                     lifecycle=s.get("lifecycle", {}),
                     loop=LoopConfig(**s["loop"]) if s.get("loop") else None,
@@ -455,6 +465,8 @@ class PipelineGraph:
                     sd["output"]["carry_forward"] = True
             if s.validation:
                 sd["validation"] = s.validation
+            if s.validation_on_exhaustion != "promote":
+                sd["validation_on_exhaustion"] = s.validation_on_exhaustion
             if s.lifecycle:
                 sd["lifecycle"] = s.lifecycle
             if s.loop:

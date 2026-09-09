@@ -572,3 +572,26 @@ def test_feedback_of_spec_normalization():
     assert s["source_type"] == "feedback"
     assert s["mode"] == "inline"
     assert s["feedback_of"] == "outline"
+
+
+def test_validation_on_exhaustion_roundtrip_and_default():
+    default = StepNode(id="default")
+    assert default.validation_on_exhaustion == "promote"
+
+    graph = PipelineGraph._from_dict({
+        "name": "strict-validation",
+        "begin": "impl",
+        "steps": [{
+            "id": "impl",
+            "validation": [{"files": ["*.py"], "tool": "lint"}],
+            "validation_on_exhaustion": "fail",
+        }],
+    })
+    assert graph.steps[0].validation_on_exhaustion == "fail"
+    restored = PipelineGraph._from_dict(graph.to_dict())
+    assert restored.steps[0].validation_on_exhaustion == "fail"
+
+
+def test_validation_on_exhaustion_rejects_unknown_policy():
+    with pytest.raises(ValueError, match="validation_on_exhaustion"):
+        StepNode(id="impl", validation_on_exhaustion="continue")

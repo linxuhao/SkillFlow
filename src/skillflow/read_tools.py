@@ -305,11 +305,15 @@ def generate_read_tool_schemas(
                 "`text` is clipped to 200 chars; `truncated` is true when "
                 "max_results was hit (max_results<=0 means 50). Skips .git/"
                 "node_modules/__pycache__ and binary files (.pyc/.so/.bin). An "
-                "invalid regex falls back to a literal substring match."),
+                "invalid regex falls back to a literal substring match. Use "
+                "path to restrict the search to one file or subdirectory; "
+                "the path must stay inside the selected source."),
             "parameters": {
                 "pattern": {"type": "string", "required": True,
                             "description": "Regex (case-insensitive) or literal substring."},
                 "source": src_param,
+                "path": {"type": "string",
+                         "description": "Optional repo-relative file or subdirectory to search."},
                 "glob": {"type": "string",
                          "description": "Optional filename glob filter (e.g. '*.py')"},
                 "context_lines": {"type": "integer",
@@ -444,6 +448,8 @@ def build_source_map(specs: list[dict], workspace_root: str,
     named: dict[str, list[tuple[str, str]]] = {}
     if self_layers:
         named["self"] = self_layers
+    if step_tmp_dir:
+        named["staging"] = [("staging", step_tmp_dir)]
     if code_root and Path(code_root).is_dir():
         named["repo"] = [("repo", code_root)]
 
@@ -520,7 +526,7 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
         return err
     # Reading the working tree / own scratch reflects a deletion queued this
     # step (the repo copy still exists until repo_delete runs on deliver).
-    if deleted and path in deleted and (source in (None, "", "self")):
+    if deleted and path in deleted and source in (None, "", "self", "staging"):
         return {"error": f"'{path}' was deleted this step", "source": "staging"}
     for tag, root in layers:
         cand = _within(Path(root), path)
@@ -602,7 +608,7 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
 
 
 def unified_search(smap, pattern, source=None, glob=None, context_lines=0,
-                   files_with_matches=False, max_results=50):
+                   files_with_matches=False, max_results=50, path=None):
     layers, err = _layers_for(smap, source)
     if err:
         return err
@@ -615,12 +621,26 @@ def unified_search(smap, pattern, source=None, glob=None, context_lines=0,
     matches, files_hit = [], []
     seen = set()  # earlier layer wins → staging shadows repo
     truncated = False
+    path_found = not path
     for tag, root in layers:
         d = Path(root)
         if not d.is_dir():
             continue
-        for f in sorted(d.rglob(glob) if glob else d.rglob("*")):
+        search_root = _within(d, path) if path else d
+        if search_root is None:
+            return {"error": f"search: invalid path '{path}': path traversal denied"}
+        if not search_root.exists():
+            continue
+        path_found = True
+        if search_root.is_file():
+            candidates = [search_root]
+        else:
+            candidates = sorted(search_root.rglob(glob) if glob
+                                else search_root.rglob("*"))
+        for f in candidates:
             if not f.is_file() or f.name == ".gitkeep":
+                continue
+            if search_root.is_file() and glob and not f.match(glob):
                 continue
             rel = str(f.relative_to(d))
             if _is_blocked_path(rel):
@@ -662,6 +682,9 @@ def unified_search(smap, pattern, source=None, glob=None, context_lines=0,
         if truncated:
             break
 
+    if not path_found:
+        return {"error": f"search: path not found: {path}",
+                "searched": [t for t, _ in layers]}
     if files_with_matches:
         return {"files": files_hit, "truncated": truncated}
     return {"matches": matches, "truncated": truncated}
@@ -722,9 +745,9 @@ def make_read_tool_fns(specs: list[dict], workspace_root: str = "",
 
     def _search(pattern: str, source: str = None, glob: str = None,
                 context_lines: int = 0, files_with_matches: bool = False,
-                max_results: int = 50) -> dict:
+                max_results: int = 50, path: str = None) -> dict:
         return unified_search(smap, pattern, source, glob, context_lines,
-                              files_with_matches, max_results)
+                              files_with_matches, max_results, path)
 
     def _list(source: str = None, glob: str = None) -> str:
         return unified_list(smap, source, glob)

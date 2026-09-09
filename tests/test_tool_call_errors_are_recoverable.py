@@ -105,3 +105,32 @@ def test_framework_injected_params_are_not_advertised():
     assert "Accepted parameters: path" in res["error"]
     for injected in ("workspace_root", "project_root", "step_id", "run_id"):
         assert injected not in res["error"].split("Accepted parameters:")[1]
+
+
+def test_unknown_optional_scope_is_rejected_before_tool_runs():
+    called = False
+
+    def search(pattern, path=None):
+        nonlocal called
+        called = True
+        return {"matches": [{"file": "outside.py"}]}
+
+    sf = _sf_with(search, name="search")
+    result = sf.execute_tool("search", {"pattern": "HIT", "root": "../"})
+    assert "unrecognised argument" in result["error"]
+    assert "No tool action was performed" in result["error"]
+    assert called is False
+
+
+def test_arbitrary_single_name_is_not_rebound_to_required_path():
+    called = False
+
+    def read_file(path):
+        nonlocal called
+        called = True
+        return {"content": path}
+
+    sf = _sf_with(read_file)
+    result = sf.execute_tool("read_file", {"root": "../"})
+    assert "unrecognised argument" in result["error"]
+    assert called is False

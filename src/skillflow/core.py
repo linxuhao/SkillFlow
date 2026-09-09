@@ -2900,8 +2900,10 @@ class SkillFlow:
                 error_msg = "Validation failed:\n" + "\n".join(
                     e.get("error", str(e)) for e in errors
                 )
+                promote = getattr(
+                    node, "validation_on_exhaustion", "promote") == "promote"
                 if not self._handle_validation_failure(
-                        token, error_msg, promote_on_exhaustion=True):
+                        token, error_msg, promote_on_exhaustion=promote):
                     return
                 # Budget exhausted. Fall THROUGH to the lifecycle hooks so the
                 # staged output is promoted, carrying a flag the graph can route
@@ -3162,6 +3164,7 @@ class SkillFlow:
         if not node:
             return False
         promoting = False
+        exhausted_failure = False
         with self._tx() as conn:
             row = conn.execute(
                 "SELECT retry_count, validation_retry_count, max_retries FROM skillflow_steps WHERE id = ?",
@@ -3217,7 +3220,10 @@ class SkillFlow:
                 )
             else:
                 # Retry budget exhausted — permanent failure
-                self._fail_step_in_tx(conn, token, f"Output validation failed: {error}", retryable=False)
+                self._fail_step_in_tx(
+                    conn, token, f"Output validation failed: {error}",
+                    retryable=False)
+                exhausted_failure = True
 
         if promoting:
             # Trace AFTER the tx — self.trace commits on the same connection.
@@ -3230,6 +3236,12 @@ class SkillFlow:
                 "its output with flag validation_failed=true instead of discarding it; "
                 "route on that flag if this step must not proceed unchecked. %s",
                 token.step_id, token.run_id, total_retries, error)
+        elif exhausted_failure:
+            self.trace(token.run_id, "step", "validation_exhausted",
+                       {"error": error, "retry_count": total_retries,
+                        "promoted": False},
+                       step_id=token.step_id,
+                       step_instance_id=token.step_instance_id)
         return promoting
 
     def _validate_outputs(self, token: ClaimToken, node: StepNode) -> dict:
@@ -7129,7 +7141,20 @@ class SkillFlow:
         except (ValueError, TypeError):
             pass
         if sig is not None:
-            kwargs, dropped = _rebind_unambiguous_param(sig, kwargs, dropped, params or {})
+            kwargs, dropped = _rebind_unambiguous_param(
+                sig, kwargs, dropped, params or {})
+            if dropped:
+                expected = ", ".join(
+                    p for p in sig.parameters
+                    if p not in ("workspace_root", "project_root", "step_id",
+                                 "run_id", "kwargs", "args"))
+                return {
+                    "error": (
+                        f"{name}() failed: unrecognised argument(s): "
+                        f"{', '.join(sorted(dropped))}. Accepted parameters: "
+                        f"{expected}. No tool action was performed."
+                    )
+                }
         try:
             result = fn(**kwargs)
         except Exception as e:
@@ -7270,12 +7295,17 @@ def _rebind_unambiguous_param(sig, kwargs: dict, dropped: list,
     filter then DROPS `file` and the call fails on a missing `path` — the filter
     turns a recoverable "unexpected keyword" into a hard "missing argument".
 
-    When exactly one argument was dropped and exactly one required parameter is
-    unfilled, the intended mapping is not a guess: there is only one of each. Bind
-    them. With more than one on either side it IS a guess, so leave it alone and let
-    the caller report the accepted parameter names instead.
+    When exactly one established file/path alias was dropped and exactly one
+    required file/path parameter is unfilled, bind them. Arbitrary names and
+    ambiguous calls are reported without invoking the tool.
     """
     if len(dropped) != 1:
+        return kwargs, dropped
+    # Rebind only the established file/path vocabulary. An arbitrary scope-like
+    # name (root, directory, workspace) must never become a path merely because
+    # the call happens to have one required hole.
+    path_names = {"path", "file", "files", "filename", "file_path", "graph_path"}
+    if dropped[0] not in path_names:
         return kwargs, dropped
     import inspect as _inspect
     missing = [n for n, p in sig.parameters.items()
@@ -7283,7 +7313,7 @@ def _rebind_unambiguous_param(sig, kwargs: dict, dropped: list,
                and p.kind in (_inspect.Parameter.POSITIONAL_OR_KEYWORD,
                               _inspect.Parameter.KEYWORD_ONLY)
                and n not in kwargs]
-    if len(missing) != 1:
+    if len(missing) != 1 or missing[0] not in path_names:
         return kwargs, dropped
     return {**kwargs, missing[0]: original[dropped[0]]}, []
 

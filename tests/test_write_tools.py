@@ -643,3 +643,50 @@ def test_raw_read_edit_roundtrip_and_failed_indent_is_safe(tmp_path, mode, newli
     assert (staging / 'a.py').read_bytes() == original.replace('1', '3').encode()
     assert (repo / 'a.py').read_bytes() == original.encode()
     assert read('a.py', raw=True)['content'] == original.replace('1', '3')
+
+
+class TestGenericEditPathContract:
+    def test_schema_accepts_file_path_without_requiring_file(self):
+        edit = next(s for s in generate_write_tool_schemas("write", {})
+                    if s["name"] == "edit")
+        assert edit["parameters"]["file"]["required"] is False
+        assert edit["parameters"]["file_path"]["required"] is False
+
+    def test_file_path_alias_edits_exact_unique_match(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        stage = tmp_path / "stage"
+        stage.mkdir()
+        (repo / "app.py").write_text("before\nTARGET\nafter\n")
+        result = execute_generic_edit(
+            {"file_path": "app.py", "old_str": "TARGET", "new_str": "DONE"},
+            str(stage), source_dir=str(repo))
+        assert result == {"edited": "app.py"}
+        assert (stage / "app.py").read_text() == "before\nDONE\nafter\n"
+
+    def test_conflicting_path_aliases_fail_without_writing(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        stage = tmp_path / "stage"
+        stage.mkdir()
+        (repo / "a.py").write_text("TARGET\n")
+        (repo / "b.py").write_text("TARGET\n")
+        result = execute_generic_edit(
+            {"file": "a.py", "file_path": "b.py",
+             "old_str": "TARGET", "new_str": "DONE"},
+            str(stage), source_dir=str(repo))
+        assert "pass exactly one path parameter" in result["error"]
+        assert list(stage.iterdir()) == []
+
+    def test_unknown_parameter_fails_without_widening_or_writing(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        stage = tmp_path / "stage"
+        stage.mkdir()
+        (repo / "app.py").write_text("TARGET\n")
+        result = execute_generic_edit(
+            {"file": "app.py", "old_str": "TARGET", "new_str": "DONE",
+             "root": "../"},
+            str(stage), source_dir=str(repo))
+        assert "unknown parameter" in result["error"]
+        assert list(stage.iterdir()) == []
