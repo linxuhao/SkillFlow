@@ -332,6 +332,37 @@ class TestLint:
         assert all_ok is False
         assert len(results) == 2
 
+    # ── Manifest semantics ──
+
+    def test_dotless_manifest_key_still_dispatches(self, tmp_path):
+        """`{"py": ...}` means `.py`: the lookup key is Path.suffix (with dot).
+
+        The manifest is LLM-authored; the dotless form matched nothing, so
+        every file fell to `skip` and the call passed on zero checks."""
+        (tmp_path / "manifest.json").write_text('{"py": "basic", "JS": "basic"}')
+        (tmp_path / "bad.py").write_text("x")   # basic: too short → fails
+        all_ok, results = self._lint(tmp_path, "bad.py", manifest_path="manifest.json")
+        assert all_ok is False
+        assert "No linter configured" not in results[0]["error_message"]
+
+    def test_manifest_merges_over_defaults(self, tmp_path):
+        """Naming a manifest must not switch off the extensions it omits."""
+        (tmp_path / "manifest.json").write_text('{".js": "basic"}')
+        (tmp_path / "bad.py").write_text("def broken(\n")  # default .py → ruff
+        all_ok, results = self._lint(tmp_path, "bad.py", manifest_path="manifest.json")
+        assert all_ok is False
+        assert "No linter configured" not in results[0]["error_message"]
+
+    def test_recursive_glob_skips_vendored_dirs(self, tmp_path):
+        """`**/*.js` over a node project must not lint node_modules."""
+        (tmp_path / "app.js").write_text("console.log('hello world');")
+        vendored = tmp_path / "node_modules" / "dep"
+        vendored.mkdir(parents=True)
+        (vendored / "tiny.js").write_text("x")  # basic would fail this
+        all_ok, results = self._lint(tmp_path, "**/*.js")
+        assert [Path(r["file"]).name for r in results] == ["app.js"]
+        assert all_ok is True
+
     # ── Custom (host-registered) backends ──
 
     def test_custom_backend_dispatch(self, tmp_path):

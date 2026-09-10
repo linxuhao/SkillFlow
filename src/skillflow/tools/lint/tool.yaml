@@ -20,5 +20,5 @@ parameters:
     required: false
   manifest_path:
     type: string
-    description: "Optional path to linter_manifest.json relative to workspace_root. Uses built-in defaults if omitted."
+    description: "Optional path to linter_manifest.json relative to workspace_root, merged OVER the built-in defaults (.py→ruff, .html→djlint, .js/.css→basic): a listed extension overrides its default, unlisted ones keep theirs. Keys are normalised ('py' and '.PY' both mean '.py'). Recursive globs skip .git/node_modules/.venv/__pycache__."
     required: false

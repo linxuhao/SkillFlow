@@ -1,6 +1,17 @@
 """Generic linter — dispatch to ruff, djlint, or basic checks per extension.
 
-Reads an optional linter_manifest.json (extension → linter mapping).
+Reads an optional linter_manifest.json (extension → linter mapping) and MERGES
+it over the built-in defaults: a key present in the manifest overrides that
+extension, every other extension keeps its default. Keys are normalised —
+``"py"`` and ``".PY"`` both mean ``".py"`` — because the manifest is typically
+LLM-authored, and the lookup key is ``Path.suffix``, which carries the dot: a
+dotless manifest matched nothing, so every file fell to ``skip`` and the whole
+call passed vacuously. Replacing the defaults had the same effect one level up:
+naming ``manifest_path`` at all switched off ``.py → ruff``.
+
+Recursive globs skip the same directories the read tools skip (``.git``,
+``node_modules``, ``.venv``, ``__pycache__``): ``**/*.js`` over a node project
+would otherwise hand thousands of vendored files to the backend one at a time.
 Auto-installs missing linters via pip (cached per process).
 
 Hosts may register additional backends via
@@ -28,6 +39,10 @@ _DEFAULT_MANIFEST: dict[str, str] = {
     ".css": "basic",
 }
 
+# Directories a recursive glob never descends into — the same set dir_tree,
+# list_tree and the read tools use, so "the files of this repo" means one thing.
+_BLOCKED_DIRS = frozenset({".git", "__pycache__", ".venv", "node_modules"})
+
 
 # ── Public entry point ──────────────────────────────────────────────────
 
@@ -53,6 +68,8 @@ def lint(files: list[str], *, workspace_root: str = "",
         for fp in matches:
             if not fp.is_file():
                 continue
+            if _BLOCKED_DIRS.intersection(fp.relative_to(root).parts[:-1]):
+                continue
             ext = fp.suffix.lower()
             backend = manifest.get(ext, "skip")
             results.append(_run_backend(backend, fp))
@@ -63,17 +80,25 @@ def lint(files: list[str], *, workspace_root: str = "",
 
 # ── Manifest loading ────────────────────────────────────────────────────
 
+def _normalise_ext(key: str) -> str:
+    """``py`` / ``.PY`` / `` .py `` → ``.py``, the form ``Path.suffix`` yields."""
+    key = str(key).strip().lower()
+    return key if key.startswith(".") else "." + key
+
+
 def _load_manifest(root: Path, manifest_path: str | None) -> dict[str, str]:
+    manifest = dict(_DEFAULT_MANIFEST)
     if manifest_path:
         mp = (root / manifest_path).resolve()
         try:
             if mp.exists():
                 data = json.loads(mp.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    return {str(k): str(v) for k, v in data.items()}
+                    manifest.update({_normalise_ext(k): str(v)
+                                     for k, v in data.items() if str(k).strip()})
         except (json.JSONDecodeError, OSError):
             pass
-    return dict(_DEFAULT_MANIFEST)
+    return manifest
 
 
 # ── Backend dispatch ────────────────────────────────────────────────────
