@@ -340,23 +340,17 @@ class WorkspaceManager:
 
         for key, value in params.items():
             if isinstance(value, str):
-                value = (value
-                         .replace("$STEP_TMP_DIR",
-                                  str(self.get_step_tmp_dir(project_id, config_name, step_id)))
-                         .replace("$STEP_DIR",
-                                  str(self.get_step_dir(project_id, config_name, step_id,
-                                                        item=item)))
-                         # backward compat aliases
-                         .replace("$STEP_DRAFT_DIR",
-                                  str(self.get_step_tmp_dir(project_id, config_name, step_id)))
-                         .replace("$STEP_FINAL_DIR",
-                                  str(self.get_step_dir(project_id, config_name, step_id,
-                                                        item=item)))
-                         .replace("$TASK_DIR",
-                                  str(self.get_tasks_dir(project_id)))
-                         .replace("$CONFIG_DIR",
-                                  str(self.get_config_path(project_id, config_name)))
-                         )
+                replacements = {
+                    "$STEP_TMP_DIR": lambda: self.get_step_tmp_dir(project_id, config_name, step_id),
+                    "$STEP_DIR": lambda: self.get_step_dir(project_id, config_name, step_id, item=item),
+                    "$STEP_DRAFT_DIR": lambda: self.get_step_tmp_dir(project_id, config_name, step_id),
+                    "$STEP_FINAL_DIR": lambda: self.get_step_dir(project_id, config_name, step_id, item=item),
+                    "$TASK_DIR": lambda: self.get_tasks_dir(project_id),
+                    "$CONFIG_DIR": lambda: self.get_config_path(project_id, config_name),
+                }
+                for marker, resolve in replacements.items():
+                    if marker in value:
+                        value = value.replace(marker, str(resolve()))
                 if "$PROJECT_ROOT" in value:
                     value = value.replace("$PROJECT_ROOT", _root())
             resolved[key] = value

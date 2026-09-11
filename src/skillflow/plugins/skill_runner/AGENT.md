@@ -190,3 +190,9 @@ Your job:
 - **Loop steps** — auto-iterated, each iteration appears as a regular agent step
 - **Error handlers** — routed automatically on retry exhaustion
 - **Stale claims** — auto-recovered by advance_run
+
+
+Output destinations are explicit in the step response: `output_target`, per-slot
+`output_targets`, and `artifact_dir`. Use the exposed tools or submit named slot
+values; direct code writes use the run worktree, artifacts retain publication.
+Do not assume `output_dir` is staging or copy sources to artifact folders.

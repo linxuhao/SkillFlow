@@ -42,6 +42,9 @@ class SkillResponse:
     steps_completed: int = 0
     # Output file contract — where to write fixed-output files before submit
     output_dir: str = ""
+    output_target: str = "artifact"
+    output_targets: dict[str, str] = field(default_factory=dict)
+    artifact_dir: str = ""
     expected_files: list[str] = field(default_factory=list)
     validation_error: str = ""
 
@@ -109,7 +112,7 @@ class PromptAssembler:
                 "proxy), by writing it with `write_<slot>` before submitting. "
                 "Do not try to call write_/create_ tools that your host does "
                 "not expose, and do not write these files with your own file "
-                "tools — they belong to skillflow's staging area."
+                "tools — use the engine so each slot reaches its declared artifact/code destination."
             )
 
         parts.append("Produce the expected output in the format specified, "
@@ -319,6 +322,9 @@ class SkillTool:
             tool_name=tool_name,
             tool_params=tool_params,
             output_dir=claimed.inputs.get("_output_dir", ""),
+            output_target=claimed.inputs.get("_output_target", "artifact"),
+            output_targets=claimed.inputs.get("_output_targets", {}),
+            artifact_dir=claimed.inputs.get("_artifact_dir", ""),
             expected_files=claimed.inputs.get("_expected_files", []),
             validation_error=claimed.validation_error or claimed.inputs.get("_validation_error", ""),
         )
@@ -347,15 +353,17 @@ class SkillTool:
                 return
         except Exception:
             return
-        import json as _json
-        tmp_dir = self.sf._workspace.get_step_tmp_dir(pid, gname, step_id)
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        for slot, spec in node.output_fixed.items():
-            fname = spec if isinstance(spec, str) else spec.get("file", f"{slot}.json")
-            content = result.get(slot, "")
-            if isinstance(content, (dict, list)):
-                content = _json.dumps(content, indent=2)
-            (tmp_dir / fname).write_text(str(content), encoding="utf-8")
+        claim = self._current_claim
+        if claim is None or claim.step_id != step_id:
+            raise RuntimeError("Output submission requires this step's active claim")
+        for slot in node.output_fixed:
+            if slot not in result:
+                continue  # proxy-written slots must not be overwritten with empty text
+            reply = self.sf.execute_tool("write_" + slot, {"content": result[slot]},
+                run_id=self.run_id, step_id=step_id,
+                step_instance_id=claim.token.step_instance_id, claim_epoch=claim.token.claim_epoch)
+            if reply.get("error"):
+                raise ValueError(f"Output {slot!r} rejected: {reply['error']}")
 
     # ── internal ──────────────────────────────────────────────────
 

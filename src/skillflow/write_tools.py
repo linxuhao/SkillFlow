@@ -176,10 +176,43 @@ def _archive_old_file(directory: Path, base_name: str) -> str | None:
         i += 1
 
 
+def _describe_output_targets(tools: list[dict], fixed: dict, default: str) -> list[dict]:
+    """Descriptions derived from explicit targets, never tool/role heuristics."""
+    for schema in tools:
+        name = schema["name"]
+        if name == "finish_step":
+            continue
+        slot = name.split("_", 1)[1] if "_" in name else None
+        entry = fixed.get(slot, {}) if slot else {}
+        target = entry.get("target", default) if isinstance(entry, dict) else default
+        schema["output_target"] = target
+        if target != "code":
+            continue
+        pattern = _get_pattern(slot, fixed) if slot else "the specified repo-relative file"
+        verb = name.split("_", 1)[0]
+        operation = {
+            "edit": "Replace old_str exactly once in the CURRENT file with new_str. Preserve all other bytes. "
+                    "Use read(raw=true) for exact text; repeated edits build on the previous edit. ",
+            "create": ("Write the declared code file. " if slot else
+                       "Create a NEW file; an existing nonempty file must be changed with edit. "),
+            "write": "Replace the whole file; prefer edit for an existing file. ",
+            "delete": "Delete the specified file immediately. ",
+        }.get(verb, "Write the declared code output. ")
+        fmt = entry.get("format") if isinstance(entry, dict) else None
+        schema["description"] = (operation + f"Destination: code, {pattern}, directly in this run's worktree. "
+            "No code staging, promotion, path-prefix stripping, or copying to artifacts. "
+            "Read/search/tests see the change immediately; validation and review still apply. "
+            "Do not supply absolute paths, '..', '.git' or a symlink. "
+            "If id is requested it replaces '*' in the declared filename."
+            + (f" Expected format: {fmt}" if fmt else ""))
+    return tools
+
+
 def generate_write_tool_schemas(output_mode: str,
                                 fixed: dict,
                                 allow_full_write: bool = False,
-                                carry_forward: bool = False) -> list[dict]:
+                                carry_forward: bool = False,
+                                output_target: str = "artifact") -> list[dict]:
     """Generate tool schema dicts for write/create/edit/append tools.
 
     Returns a list of dicts with 'name', 'description', 'parameters'.
@@ -290,7 +323,7 @@ def generate_write_tool_schemas(output_mode: str,
                            "description": "Brief summary of what was created or completed"},
             },
         })
-        return tools
+        return _describe_output_targets(tools, fixed, output_target)
 
     if output_mode == "content":
         tools = []
@@ -451,7 +484,7 @@ def generate_write_tool_schemas(output_mode: str,
                            "description": "Brief summary of what was created or completed"},
             },
         })
-        return tools
+        return _describe_output_targets(tools, fixed, output_target)
 
     return []
 
@@ -553,11 +586,14 @@ def resolve_write_target(slot: str, fixed: dict, params: dict) -> str:
 
 
 def execute_write(slot: str, fixed: dict, params: dict,
-                  output_dir: str, on_exists: str = "replace") -> dict:
+                  output_dir: str, on_exists: str = "replace", *, strict_paths: bool = False) -> dict:
     """Execute a write_{slot} tool call. Resolves filename, applies on_exists mode."""
     base_name = resolve_write_target(slot, fixed, params)
     mode = on_exists if on_exists != "replace" else _get_on_exists(slot, fixed)
     directory = Path(output_dir)
+    if strict_paths:
+        from skillflow.output_targets import code_path
+        code_path(directory, base_name)
     directory.mkdir(parents=True, exist_ok=True)
 
     if mode == "append":
@@ -581,7 +617,7 @@ def execute_write(slot: str, fixed: dict, params: dict,
     filename = base_name
     path = directory / filename
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    _write_output_text(path, content, direct=strict_paths)
     result = {"written": filename}
     if mode == "new" and archived:
         result["archived"] = archived
@@ -649,7 +685,7 @@ def _unique_replace(content: str, old_str: str, new_str: str, *,
 
 def execute_edit(slot: str, fixed: dict, params: dict,
                  output_dir: str, source_dir: str = "",
-                 fallback_source_dir: str = "") -> dict:
+                 fallback_source_dir: str = "", *, strict_paths: bool = False) -> dict:
     """Execute an edit_{slot} call: surgical str-replace on the EXISTING file.
 
     Baseline is STAGING-FIRST, and the order is the whole point: one step makes
@@ -678,6 +714,9 @@ def execute_edit(slot: str, fixed: dict, params: dict,
     where normal promotion + repo_apply overwrites the repo copy.
     """
     base_name = resolve_write_target(slot, fixed, params)
+    if strict_paths:
+        from skillflow.output_targets import code_path
+        code_path(Path(output_dir), base_name)
     old_str = _ensure_str(params.get("old_str", ""))
     new_str = params.get("new_str")
     if not isinstance(new_str, str):
@@ -710,8 +749,41 @@ def execute_edit(slot: str, fixed: dict, params: dict,
         return err
     out = Path(output_dir) / base_name
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(updated, encoding="utf-8", newline="")
+    _write_output_text(out, updated, direct=strict_paths, newline="")
     return {"edited": base_name}
+
+
+def _destination_parts(raw: str, output_dir: str, strict_paths: bool) -> list[str]:
+    if strict_paths:
+        from skillflow.output_targets import code_path
+        root = Path(output_dir).resolve()
+        try:
+            return list(code_path(root, raw).relative_to(root).parts)
+        except (ValueError, TypeError):
+            return []
+    return normalize_repo_path(raw)
+
+
+def _write_output_text(path: Path, content: str, *, direct: bool = False, newline=None):
+    if not direct:
+        path.write_text(content, encoding="utf-8", newline=newline)
+        return
+    import os
+    import stat
+    import tempfile
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
+    fd, tmp = tempfile.mkstemp(prefix=".code-write-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def normalize_repo_path(raw: str) -> list[str]:
@@ -730,20 +802,20 @@ def normalize_repo_path(raw: str) -> list[str]:
     return parts
 
 
-def execute_generic_write(params: dict, output_dir: str) -> dict:
+def execute_generic_write(params: dict, output_dir: str, *, strict_paths: bool = False) -> dict:
     """Execute a generic write(file, content) call. Sanitizes filename."""
     raw = params.get("file") or params.get("filename") or params.get("path", "")
-    safe_parts = normalize_repo_path(raw)
+    safe_parts = _destination_parts(raw, output_dir, strict_paths)
     if not safe_parts:
         return {"error": "Invalid filename: path traversal denied"}
     path = Path(output_dir) / str(Path(*safe_parts))
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_ensure_str(params.get("content", "")), encoding="utf-8")
+    _write_output_text(path, _ensure_str(params.get("content", "")), direct=strict_paths)
     return {"written": str(Path(*safe_parts))}
 
 
 def execute_generic_create(params: dict, output_dir: str,
-                           source_dir: str = "") -> dict:
+                           source_dir: str = "", *, strict_paths: bool = False) -> dict:
     """Execute a generic create(file, content) call for new repo files.
 
     Writes the whole file into ``output_dir`` (staging). Refuses to create a
@@ -752,7 +824,7 @@ def execute_generic_create(params: dict, output_dir: str,
     create can never silently clobber an existing file's contents.
     """
     raw = params.get("file") or params.get("filename") or params.get("path", "")
-    safe_parts = normalize_repo_path(raw)
+    safe_parts = _destination_parts(raw, output_dir, strict_paths)
     if not safe_parts:
         return {"error": "Invalid filename: path traversal denied"}
     rel = str(Path(*safe_parts))
@@ -788,13 +860,13 @@ def execute_generic_create(params: dict, output_dir: str,
         return {"error": (f"create: '{rel}' already exists — use 'edit' to change "
                           f"an existing file (create is for new files only).")}
     staged.parent.mkdir(parents=True, exist_ok=True)
-    staged.write_text(content, encoding="utf-8")
+    _write_output_text(staged, content, direct=strict_paths)
     return {"written": rel}
 
 
 def execute_generic_edit(params: dict, output_dir: str,
                          source_dir: str = "",
-                         fallback_source_dir: str = "") -> dict:
+                         fallback_source_dir: str = "", *, strict_paths: bool = False) -> dict:
     """Execute a generic edit(file, old_str, new_str) call on an EXISTING file.
 
     Baseline is staging-first: read ``output_dir/file`` if a prior edit/create
@@ -823,7 +895,7 @@ def execute_generic_edit(params: dict, output_dir: str,
                           "(file, file_path, filename, or path), not: "
                           + ", ".join(key for key, _ in path_args))}
     raw = path_args[0][1]
-    safe_parts = normalize_repo_path(raw)
+    safe_parts = _destination_parts(raw, output_dir, strict_paths)
     if not safe_parts:
         return {"error": "Invalid filename: path traversal denied"}
     rel = str(Path(*safe_parts))
@@ -856,5 +928,5 @@ def execute_generic_edit(params: dict, output_dir: str,
     if err:
         return err
     staged.parent.mkdir(parents=True, exist_ok=True)
-    staged.write_text(updated, encoding="utf-8", newline="")
+    _write_output_text(staged, updated, direct=strict_paths, newline="")
     return {"edited": rel}

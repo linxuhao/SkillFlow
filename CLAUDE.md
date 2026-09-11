@@ -111,3 +111,44 @@ Native tools (13): read_file, write, list_tree, dir_tree, json_schema, syntax_li
 ## Host integration
 
 - `WorkspaceManager(code_path_resolver=…)` — optional hook mapping a project to a host-managed code path (e.g. an existing repo), so `repo_apply` commits into the real repo. `SkillFlow(code_path_resolver=…)` forwards it.
+
+
+## Output destinations: artifact or code
+
+Agent `output.target` defaults to `artifact`; `code` writes directly to the
+resolver-owned Git worktree, independently of `output.mode`. Fixed slots may
+override target; mixed outputs use default artifact with explicit code slots.
+
+```yaml
+output:
+  mode: content
+  target: artifact
+  fixed:
+    plan: {file: plan.md, target: artifact}
+    readme: {file: README.md, target: code}
+```
+
+Code outputs have no tmp directory, read overlay, promotion, deferred deletion,
+or repo_apply hook. Validation runs against changed candidate paths in code;
+failed validation never promotes code. The engine records path metadata outside
+the repository, commits only tracked output paths, and publishes a
+`code_changes.json` artifact receipt with base/candidate commit. Artifact-only
+publication remains backward-compatible. New tasks require a clean code tree;
+resume retains the owning step's pending changes, and review revisions of the
+same task preserve its original base. No automatic reset or rollback is performed.
+
+Do not point STEP_TMP_DIR at a worktree. Do not use code targets for tool nodes: a
+tool's effects are explicit in its implementation. Custom agent tools declare
+`output_dir` and `output_target` keyword parameters and return actual changed
+paths under `written`/`edited`/`created`/`deleted`/`removed`; partial failures must
+report their successful subset as well as `error`. The engine injects destinations
+and accounts for those paths. Opaque external writers are not implicitly trusted.
+
+A host can seed a failed-code recovery with artifact metadata
+`.code-output-relay.json` (`base_commit`, `recovery_commit`, `steps` mapping step
+ids to inherited paths). The engine verifies Git ancestry and subjects the
+inherited paths to normal validation; recovery is not approval. Hosts must
+quiesce the old run and preserve provenance before producing that recovery commit.
+
+The private local-version build `1.5.72+aitelier.output1` is for the coordinated
+AItelier migration; no public package publication is implied.

@@ -1,0 +1,23 @@
+name: output_targets_example
+begin: design
+steps:
+  - id: design
+    step_type: agent
+    output:
+      mode: content
+      target: artifact
+      fixed:
+        plan: {file: plan.md}
+        readme: {file: README.md, target: code}
+    transitions: [{to: implement}]
+  - id: implement
+    step_type: agent
+    output: {mode: write, target: code}
+    validation:
+      - tool: syntax_lint
+        files: ['*.py']
+    validation_on_exhaustion: fail
+    transitions: [{to: done}]
+  - id: done
+    step_type: gate
+    transitions: [{to: null}]

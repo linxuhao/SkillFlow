@@ -33,11 +33,34 @@ def _accepts(fn, param: str) -> bool:
                for p in sig.parameters.values())
 
 
+def matches_output_glob(path: str, pattern: str) -> bool:
+    """The recursive, zero-or-more-directory semantics of Path.rglob.
+
+    Match names without reading source files. PurePath.match treats ** as a
+    single directory and skips both root files and deeper candidates.
+    """
+    from fnmatch import fnmatchcase
+    from functools import lru_cache
+    parts = Path(path).parts
+    patterns = ("**", *Path(pattern).parts)
+
+    @lru_cache(None)
+    def match(i, j):
+        if j == len(patterns):
+            return i == len(parts)
+        if patterns[j] == "**":
+            return match(i, j + 1) or (i < len(parts) and match(i + 1, j))
+        return (i < len(parts) and fnmatchcase(parts[i], patterns[j])
+                and match(i + 1, j + 1))
+
+    return match(0, 0)
+
+
 class StepValidator:
     """Runs validation tool specs against step output files."""
 
     def __init__(self, tool_loader: "ToolLoader", workspace_root: Path,
-                 trace_sink=None, config_name: str = ""):
+                 trace_sink=None, config_name: str = "", candidate_files: list[str] | None = None):
         self._tool_loader = tool_loader
         self._workspace_root = Path(workspace_root)
         # Which pipeline this validation belongs to. A validation tool that has
@@ -49,6 +72,7 @@ class StepValidator:
         # Optional callable(event: str, payload: dict) — pre-bound by the caller
         # with run/step ids so validation/check tools land in the run trace too.
         self._trace_sink = trace_sink
+        self._candidate_files = candidate_files
 
     def _trace(self, event: str, payload: dict) -> None:
         if self._trace_sink:
@@ -76,6 +100,19 @@ class StepValidator:
 
         for spec in specs:
             file_patterns = spec.get("files", [])
+            if self._candidate_files is not None and file_patterns:
+                selected = []
+                for pattern in file_patterns:
+                    if any(c in pattern for c in "*?["):
+                        selected.extend(path for path in self._candidate_files
+                                        if matches_output_glob(path, pattern)
+                                        and (self._workspace_root / path).is_file())
+                    else:
+                        selected.append(pattern)  # explicit required files are never skipped
+                file_patterns = list(dict.fromkeys(selected))
+                if not file_patterns:
+                    self._trace(spec.get("tool", ""), {"source": "validation", "skipped": "no changed matching files"})
+                    continue
             tool_name = spec.get("tool", "")
             on_failure = spec.get("on_failure", "fail")
             if not tool_name:

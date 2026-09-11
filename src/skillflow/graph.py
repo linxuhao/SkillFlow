@@ -163,6 +163,7 @@ class StepNode:
     capability: object = ""
     context: list[dict] = field(default_factory=list)
     output_mode: str = ""
+    output_target: str = "artifact"  # artifact publication or direct code worktree
     output_fixed: dict = field(default_factory=dict)
     output_allow_full_write: bool = False
     output_carry_forward: bool = False
@@ -186,6 +187,8 @@ class StepNode:
                 f"StepNode '{self.id}': validation_on_exhaustion must be "
                 f"'promote' or 'fail', got '{self.validation_on_exhaustion}'"
             )
+        from skillflow.output_targets import validate_output_targets
+        validate_output_targets(self)
         # Normalize context specs so consumers (claim_next_step, ContextResolver)
         # always see the normalized form regardless of how the StepNode was created.
         if self.context:
@@ -353,6 +356,7 @@ class PipelineGraph:
                     capability=s.get("capability", ""),
                     context=s.get("context", []),
                     output_mode=(s.get("output") or {}).get("mode", "") or s.get("output_mode", ""),
+                    output_target=(s.get("output") or {}).get("target", "artifact"),
                     output_fixed=(s.get("output") or {}).get("fixed", {}),
                     output_allow_full_write=bool((s.get("output") or {}).get("allow_full_write", False)),
                     output_carry_forward=bool((s.get("output") or {}).get("carry_forward", False)),
@@ -455,8 +459,10 @@ class PipelineGraph:
             # every pinned run would execute the lossy copy. None of the shipped
             # configs omit `mode`, but a generated one may.
             if (s.output_fixed or s.output_allow_full_write
-                    or s.output_carry_forward):
+                    or s.output_carry_forward or s.output_target != "artifact"):
                 sd["output"] = {}
+                if s.output_target != "artifact":
+                    sd["output"]["target"] = s.output_target
                 if s.output_fixed:
                     sd["output"]["fixed"] = s.output_fixed
                 if s.output_allow_full_write:

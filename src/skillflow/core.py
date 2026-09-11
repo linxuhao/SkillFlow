@@ -24,6 +24,7 @@ from typing import Any, Awaitable, Callable, Protocol, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from skillflow.tool_loader import ToolLoader
+    from skillflow.notifications import NotificationBus
 
 from skillflow.schema import ALL_DDL
 from skillflow.graph import (
@@ -2566,6 +2567,21 @@ class SkillFlow:
                     if k.startswith("[") and k not in inputs_with_tools["_resolved_context"]:
                         inputs_with_tools["_resolved_context"][k] = v
 
+            from skillflow.output_targets import has_target, target_for
+            if self._workspace and has_target(node, "code"):
+                _code_item = self._loop_item_for_step(run_id, self._get_resolver_for_run(run_id), node.id)
+                _relay_file = self._workspace.get_config_path(
+                    run["project_id"], run["graph_name"]) / ".code-output-relay.json"
+                _inherited = None
+                if _relay_file.is_file():
+                    _relay = json.loads(_relay_file.read_text(encoding="utf-8"))
+                    if node.id in _relay.get("steps", {}):
+                        _inherited = {"base_commit": _relay["base_commit"],
+                                      "recovery_commit": _relay["recovery_commit"],
+                                      "paths": _relay["steps"][node.id]}
+                self._code_output(run_id, node.id).prepare(
+                    run_id, token.step_instance_id, _code_item, inherited=_inherited)
+
             # Merge dynamic write tool schemas derived from the step's output
             # contract (mode). Write-mode without fixed slots → create/edit
             # (+ write only when allow_full_write); content-mode → write_/create_/
@@ -2574,7 +2590,9 @@ class SkillFlow:
                 from skillflow.write_tools import generate_write_tool_schemas
                 for ws in generate_write_tool_schemas(
                         node.output_mode, node.output_fixed,
-                        allow_full_write=node.output_allow_full_write):
+                        allow_full_write=node.output_allow_full_write,
+                        carry_forward=node.output_carry_forward,
+                        output_target=node.output_target):
                     tool_schemas[ws["name"]] = ws
 
             # Merge dynamic read tool schemas from graph's context specs
@@ -2601,17 +2619,18 @@ class SkillFlow:
                     # pristine → re-edit stale old_str → thrash). Build the
                     # source map ONCE and share it with both the schema and the
                     # fn builders (avoids re-resolving every context spec twice).
-                    _step_tmp = str(self._workspace.get_step_tmp_dir(
+                    _step_tmp = (str(self._workspace.get_step_tmp_dir(
                         run["project_id"], run["graph_name"], node.id))
+                        if has_target(node, "artifact") else "")
                     # Own promoted layer: per-item for a loop-body step, so the
                     # 'self'/'promoted' read tier sees THIS item's prior round
                     # (not the flat parent listing every sibling item).
                     _own_lid = loop_context.get("_reader_loop") if loop_context else ""
                     _own_item = ((loop_context.get("_loop_items") or {}).get(_own_lid)
                                  if _own_lid else None)
-                    _step_dir = str(self._workspace.get_step_dir(
+                    _step_dir = (str(self._workspace.get_step_dir(
                         run["project_id"], run["graph_name"], node.id,
-                        item=_own_item))
+                        item=_own_item)) if has_target(node, "artifact") else "")
                     _smap = build_source_map(
                         node.context,
                         workspace_root=ws_root,
@@ -2727,9 +2746,7 @@ class SkillFlow:
 
             # Provide output directory + expected files
             if self._workspace:
-                tmp_dir = self._workspace.get_step_tmp_dir(
-                    run["project_id"], run["graph_name"], node.id
-                )
+                tmp_dir = self.output_directory(run_id, node.id)
                 # Staging PERSISTS across retries (do not wipe). A retry inherits
                 # the prior attempt's prompt (KV-cache reuse), so the agent issues
                 # follow-up edits against the state it already produced — staging
@@ -2750,8 +2767,8 @@ class SkillFlow:
                 # Empty-only: a retry mid-step already has its accumulated state
                 # here (see the note above) and must not be overwritten by the
                 # older promoted copy.
-                if getattr(node, "output_carry_forward", False) and not any(
-                        tmp_dir.iterdir()):
+                if (target_for(node) == "artifact" and getattr(node, "output_carry_forward", False)
+                        and not any(tmp_dir.iterdir())):
                     _prior = self._workspace.get_step_dir(
                         run["project_id"], run["graph_name"], node.id)
                     if _prior.exists():
@@ -2763,6 +2780,16 @@ class SkillFlow:
                             _dst.parent.mkdir(parents=True, exist_ok=True)
                             _shutil.copy2(_src, _dst)
                 inputs_with_tools["_output_dir"] = str(tmp_dir)
+                inputs_with_tools["_output_target"] = target_for(node)
+                inputs_with_tools["_output_fixed"] = node.output_fixed
+                inputs_with_tools["_output_targets"] = {s: target_for(node, s) for s in node.output_fixed}
+                inputs_with_tools["_has_code_output"] = has_target(node, "code")
+                from skillflow.output_targets import uses_legacy_code_delivery
+                inputs_with_tools["_legacy_code_staging"] = uses_legacy_code_delivery(node)
+                inputs_with_tools["_config_name"] = run["graph_name"]
+                inputs_with_tools["_artifact_dir"] = str(self._workspace.get_step_dir(
+                    run["project_id"], run["graph_name"], node.id,
+                    item=self._loop_item_for_step(run_id, self._get_resolver_for_run(run_id), node.id)))
                 if node.output_fixed:
                     from skillflow.write_tools import _get_pattern
                     inputs_with_tools["_expected_files"] = [
@@ -2900,8 +2927,9 @@ class SkillFlow:
                 error_msg = "Validation failed:\n" + "\n".join(
                     e.get("error", str(e)) for e in errors
                 )
-                promote = getattr(
-                    node, "validation_on_exhaustion", "promote") == "promote"
+                from skillflow.output_targets import has_target
+                promote = (getattr(node, "validation_on_exhaustion", "promote") == "promote"
+                           and not has_target(node, "code"))
                 if not self._handle_validation_failure(
                         token, error_msg, promote_on_exhaustion=promote):
                     return
@@ -3021,6 +3049,18 @@ class SkillFlow:
                     elif hook_result.get("committed"):
                         detail = "committed"
                     self._emit_lifecycle_event(token, hook_name, "completed", detail)
+
+            from skillflow.output_targets import has_target
+            if node and self._workspace and has_target(node, "code"):
+                try:
+                    item = self._loop_item_for_step(token.run_id, resolver, token.step_id)
+                    receipt = self._workspace.get_step_dir(
+                        self._get_project_id(token.run_id), self._get_graph_name(token.run_id),
+                        token.step_id, item=item) / "code_changes.json"
+                    self._code_output(token.run_id, token.step_id).assert_published(receipt)
+                except (ValueError, RuntimeError, OSError) as exc:
+                    self._handle_lifecycle_failure(token, str(exc))
+                    return
 
             with self._tx() as conn:
                 # completion_seq: per-run monotonic COMPLETION order. `id` is
@@ -3244,17 +3284,112 @@ class SkillFlow:
                        step_instance_id=token.step_instance_id)
         return promoting
 
+    def _code_output(self, run_id: str, step_id: str):
+        from skillflow.output_targets import CodeOutput
+        from skillflow.workspace import _sanitize_item
+        pid, gname = self._get_project_id(run_id), self._get_graph_name(run_id)
+        root = self._workspace.get_project_code_path(pid, run_id=run_id)
+        if root is None:
+            raise ValueError("output.target=code requires a code worktree; this run has no repository")
+        journal = (self._workspace.get_config_path(pid, gname) / ".code-output"
+                   / _sanitize_item(run_id) / (_sanitize_item(step_id) + ".json"))
+        return CodeOutput(root, journal)
+
+    def output_directory(self, run_id: str, step_id: str, slot: str | None = None):
+        """Actual write destination, independent of artifact publication paths."""
+        from skillflow.output_targets import target_for
+        node = self._get_resolver_for_run(run_id).get_node(step_id)
+        if target_for(node, slot) == "code":
+            return self._code_output(run_id, step_id).root
+        return self._workspace.get_step_tmp_dir(
+            self._get_project_id(run_id), self._get_graph_name(run_id), step_id)
+
+    def _record_code_result(self, run_id: str, step_id: str, result):
+        from skillflow.output_targets import target_for
+        if not isinstance(result, dict) or not run_id or not step_id:
+            return result
+        node = self._get_resolver_for_run(run_id).get_node(step_id)
+        target = result.get("output_target", target_for(node))
+        if target != "code":
+            return result
+        paths = []
+        for key in ("written", "edited", "created", "deleted", "removed"):
+            value = result.get(key)
+            if isinstance(value, str) and value:
+                paths.append(value)
+            elif isinstance(value, list):
+                paths.extend(p for p in value if isinstance(p, str) and p)
+        if paths:
+            self._code_output(run_id, step_id).record(paths)
+            result["output_target"] = "code"
+        return result
+
+    def _validate_target_specs(self, token, node, specs, *, artifact_root=None):
+        """Split fixed-slot contracts by destination; code globs see changed files."""
+        from skillflow.output_targets import has_target, target_for
+        from skillflow.step_validation import StepValidator, matches_output_glob
+        from skillflow.write_tools import _get_pattern
+        from pathlib import PurePath
+        pid, gname = self._get_project_id(token.run_id), self._get_graph_name(token.run_id)
+        has_code = has_target(node, "code")
+        code = self._code_output(token.run_id, token.step_id) if has_code else None
+        candidates = code.load()["paths"] if code else []
+        fixed = node.output_fixed or {}
+        groups = {"artifact": [], "code": []}
+        for original in specs:
+            spec = dict(original)
+            explicit = spec.pop("target", None)
+            if explicit is not None and explicit not in groups:
+                return {"passed": False, "errors": [{"error": "validation target must be artifact or code"}]}
+            if explicit or not fixed or not has_code:
+                groups[explicit or target_for(node)].append(spec)
+                continue
+            patterns = spec.get("files", [])
+            if not patterns:
+                groups[target_for(node)].append(spec)
+                continue
+            selected = {"artifact": [], "code": []}
+            for pattern in patterns:
+                matched = False
+                for slot in fixed:
+                    declared = _get_pattern(slot, fixed)
+                    if declared == pattern or matches_output_glob(declared, pattern):
+                        selected[target_for(node, slot)].append(declared)
+                        matched = True
+                    elif not any(c in pattern for c in "*?[") and PurePath(pattern).match(declared):
+                        selected[target_for(node, slot)].append(pattern)
+                        matched = True
+                if not matched:
+                    selected[target_for(node)].append(pattern)
+            for target, files in selected.items():
+                if files:
+                    groups[target].append({**spec, "files": list(dict.fromkeys(files))})
+        results = []
+        for target, selected in groups.items():
+            if not selected:
+                continue
+            if target == "code":
+                if code is None:
+                    results.append({"passed": False, "errors": [{"error": "No code output declared"}]})
+                    continue
+                root, paths = code.root, candidates
+            else:
+                root = artifact_root or self._workspace.get_step_tmp_dir(pid, gname, token.step_id)
+                paths = None
+            validator = StepValidator(self._tool_loader, root, config_name=gname,
+                       trace_sink=self._validation_trace_sink(token), candidate_files=paths)
+            results.append(validator.validate(selected))
+        return {"passed": all(x.get("passed") for x in results),
+                "errors": [e for x in results for e in x.get("errors", [])],
+                "warnings": [e for x in results for e in x.get("warnings", [])]}
+
     def _validate_outputs(self, token: ClaimToken, node: StepNode) -> dict:
         """Run graph validation specs against draft outputs. Returns {passed, errors}."""
         if not self._workspace:
             return {"passed": True}
         pid = self._get_project_id(token.run_id)
         gname = self._get_graph_name(token.run_id)
-        tmp_dir = self._workspace.get_step_tmp_dir(pid, gname, token.step_id)
-        from skillflow.step_validation import StepValidator
-        validator = StepValidator(self._tool_loader, tmp_dir, config_name=gname,
-                                  trace_sink=self._validation_trace_sink(token))
-        return validator.validate(node.validation)
+        return self._validate_target_specs(token, node, node.validation)
 
     def _validation_trace_sink(self, token: ClaimToken):
         """Pre-bound (event, payload) sink so validation/check tools land in
@@ -3497,7 +3632,7 @@ class SkillFlow:
         gname = self._get_graph_name(token.run_id)
 
         # after_deliver checks against the project repo, not step output
-        if hook_name == "after_deliver":
+        if hook_name == "after_deliver" or getattr(node, "output_target", "artifact") == "code":
             check_dir = self._workspace.get_project_code_path(
                 pid, run_id=token.run_id)
         else:
@@ -3526,10 +3661,18 @@ class SkillFlow:
                       "warnings": warnings}
         else:
             from skillflow.step_validation import StepValidator
-            validator = StepValidator(self._tool_loader, check_dir,
-                                      config_name=gname,
-                                      trace_sink=self._validation_trace_sink(token))
-            result = validator.validate(check_specs)
+            from skillflow.output_targets import has_target
+            if has_target(node, "code"):
+                item = self._loop_item_for_step(token.run_id, self._get_resolver_for_run(token.run_id), token.step_id)
+                artifact_root = self._workspace.get_step_dir(pid, gname, token.step_id, item=item)
+                result = self._validate_target_specs(token, node, check_specs, artifact_root=artifact_root)
+            else:
+                # Legacy artifact-only after_deliver checks retain their repo
+                # contract. Mixed/new code steps route each declared slot.
+                validator = StepValidator(self._tool_loader, check_dir,
+                                          config_name=gname,
+                                          trace_sink=self._validation_trace_sink(token))
+                result = validator.validate(check_specs)
         # Normalize: StepValidator returns "errors" (plural list),
         # but callers expect "error" (singular string).
         if "errors" in result and "error" not in result:
@@ -3560,11 +3703,25 @@ class SkillFlow:
         gname = self._get_graph_name(token.run_id)
         resolver = self._get_resolver_for_run(token.run_id)
         item = self._loop_item_for_step(token.run_id, resolver, token.step_id)
-        tmp_dir = self._workspace.get_step_tmp_dir(pid, gname, token.step_id)
         step_dir = self._workspace.get_step_dir(pid, gname, token.step_id, item=item)
+        node = resolver.get_node(token.step_id)
+        from skillflow.output_targets import has_target
+        code_result = None
+        if has_target(node, "code"):
+            # Validate BEFORE this hook. A failed commit retains the worktree.
+            try:
+                code_result = self._code_output(token.run_id, token.step_id).commit(
+                    step_dir / "code_changes.json", f"step: {token.step_id} [{pid}] {item or ''}".strip())
+            except (RuntimeError, ValueError, OSError) as exc:
+                return {"passed": False, "error": str(exc)}
+            if not has_target(node, "artifact"):
+                if self._artifact_history:
+                    self._artifact_commit(pid, gname, token.step_id, token.run_id)
+                return code_result
+        tmp_dir = self._workspace.get_step_tmp_dir(pid, gname, token.step_id)
 
         if not tmp_dir.exists() or not any(tmp_dir.iterdir()):
-            return {"passed": True, "files": []}
+            return code_result or {"passed": True, "files": []}
 
         import shutil
         from skillflow.workspace import _sanitize_item
@@ -3578,6 +3735,8 @@ class SkillFlow:
             if f.is_file():
                 moved_files.append(prefix + str(f.relative_to(tmp_dir)))
 
+        receipt_bytes = ((step_dir / "code_changes.json").read_bytes()
+                         if code_result is not None else None)
         # Atomic: remove old {step}[/item] dir, rename tmp → it. The prior dir was
         # already committed to the artifact-history git by its own _step_commit,
         # so this rmtree loses no history when artifact_history is on.
@@ -3597,6 +3756,9 @@ class SkillFlow:
                     except OSError:
                         pass
         os.rename(str(tmp_dir), str(step_dir))
+        if receipt_bytes is not None:
+            (step_dir / "code_changes.json").write_bytes(receipt_bytes)
+            moved_files.extend(code_result["files"])
 
         if self._artifact_history:
             self._artifact_commit(pid, gname, token.step_id, token.run_id)
@@ -4497,6 +4659,10 @@ class SkillFlow:
                 or result.get("created"))
         if not name:
             return result
+        if result.get("output_target") == "code":
+            result["path"] = name
+            result["note"] = "written directly to the run worktree; validation is still required"
+            return result
         try:
             resolver = self._get_resolver_for_run(run_id)
             item = self._loop_item_for_step(run_id, resolver, step_id)
@@ -4866,7 +5032,17 @@ class SkillFlow:
         step_dir = self._workspace.get_step_dir(project_id, graph_name, step_id,
                                                 item=item)
         def read(path: str) -> str:
-            f = step_dir / path
+            from skillflow.output_targets import target_for, code_path
+            from skillflow.write_tools import _get_pattern
+            from pathlib import PurePath
+            node = self._get_resolver_for_run(run_id).get_node(step_id) if run_id else None
+            target = target_for(node)
+            for slot in (getattr(node, "output_fixed", {}) or {}):
+                if PurePath(path).match(_get_pattern(slot, node.output_fixed)):
+                    target = target_for(node, slot)
+                    break
+            f = (code_path(self._code_output(run_id, step_id).root, path)
+                 if target == "code" else step_dir / path)
             if not f.exists():
                 raise FileNotFoundError(f"Output file not found: {path}")
             return f.read_text(encoding="utf-8")
@@ -6878,6 +7054,7 @@ class SkillFlow:
             result = self._execute_tool_impl(name, params, run_id=run_id,
                                              step_id=step_id,
                                              project_root=project_root)
+            result = self._record_code_result(run_id, step_id, result)
         finally:
             self._retire_op(_op)
         # Trace the result (key fields only).
@@ -6930,7 +7107,8 @@ class SkillFlow:
                 for ws in generate_write_tool_schemas(
                         node.output_mode, node.output_fixed,
                         allow_full_write=node.output_allow_full_write,
-                        carry_forward=getattr(node, "output_carry_forward", False)):
+                        carry_forward=getattr(node, "output_carry_forward", False),
+                        output_target=node.output_target):
                     allowed.add(ws["name"])
             # Add read tool names from context specs (mode ∈ {tool, both})
             if node.context:
@@ -6967,7 +7145,10 @@ class SkillFlow:
         if allowed and name not in allowed:
             return {"error": f"Tool '{name}' not allowed. Allowed: {sorted(allowed)}"}
 
+        from skillflow.output_targets import target_for, code_path
         fixed = node.output_fixed if node else {}
+        if node is not None and target_for(node) == "code":
+            project_root = str(self._code_output(run_id, step_id).root)
 
         # Write/create/edit tools — write to step tmp directory (atomic staging)
         if (name.startswith("write_") or name.startswith("create_")
@@ -6976,25 +7157,35 @@ class SkillFlow:
                 return {"error": "No workspace configured for write tool"}
             pid = self._get_project_id(run_id)
             gname = self._get_graph_name(run_id)
-            tmp_dir = self._workspace.get_step_tmp_dir(pid, gname, step_id)
             from skillflow.write_tools import (execute_write, execute_create,
-                                               execute_edit, execute_delete)
-            slot = name[name.index("_") + 1:]  # everything after first _
+                                               execute_edit, execute_delete, resolve_write_target)
+            slot = name[name.index("_") + 1:]
+            tmp_dir = self.output_directory(run_id, step_id, slot)
+            direct = target_for(node, slot) == "code"
+            if direct:
+                try:
+                    code_path(tmp_dir, resolve_write_target(slot, fixed, params))
+                except (ValueError, TypeError) as exc:
+                    return {"error": str(exc)}
             if name.startswith("delete_"):
                 res = execute_delete(slot, fixed, params, str(tmp_dir))
             elif name.startswith("create_"):
-                res = execute_create(slot, fixed, params, str(tmp_dir))
+                # Code has git history, not sibling .vN artifact copies.
+                res = (execute_write(slot, fixed, params, str(tmp_dir), strict_paths=True)
+                       if direct else execute_create(slot, fixed, params, str(tmp_dir)))
             elif name.startswith("edit_"):
                 # Edit the EXISTING file from the consolidated repo (project_root),
                 # writing the result into staging for promotion + repo_apply.
                 # For outputs that never reach the repo, the step's own promoted
                 # dir is the baseline — same-run gated (see helper).
                 res = execute_edit(slot, fixed, params, str(tmp_dir),
-                                   source_dir=project_root or "",
-                                   fallback_source_dir=self._edit_fallback_dir(
-                                       run_id, pid, gname, step_id))
+                                   source_dir="" if direct else project_root or "",
+                                   fallback_source_dir="" if direct else self._edit_fallback_dir(
+                                       run_id, pid, gname, step_id), strict_paths=direct)
             else:
-                res = execute_write(slot, fixed, params, str(tmp_dir))
+                res = execute_write(slot, fixed, params, str(tmp_dir), strict_paths=direct)
+            if direct and isinstance(res, dict):
+                res["output_target"] = "code"
             return self._enrich_write_path(run_id, step_id, res)
 
         # Generic write-mode tools (mode: write, no fixed slots): create new
@@ -7006,20 +7197,23 @@ class SkillFlow:
                 return {"error": "No workspace configured for write tool"}
             pid = self._get_project_id(run_id)
             gname = self._get_graph_name(run_id)
-            tmp_dir = self._workspace.get_step_tmp_dir(pid, gname, step_id)
+            tmp_dir = self.output_directory(run_id, step_id)
+            direct = target_for(node) == "code"
             from skillflow.write_tools import (execute_generic_create,
                                                execute_generic_edit,
                                                execute_generic_write)
             if name == "create":
                 res = execute_generic_create(params, str(tmp_dir),
-                                             source_dir=project_root or "")
+                                             source_dir="" if direct else project_root or "", strict_paths=direct)
             elif name == "edit":
                 res = execute_generic_edit(params, str(tmp_dir),
-                                           source_dir=project_root or "",
-                                           fallback_source_dir=self._edit_fallback_dir(
-                                               run_id, pid, gname, step_id))
+                                           source_dir="" if direct else project_root or "",
+                                           fallback_source_dir="" if direct else self._edit_fallback_dir(
+                                               run_id, pid, gname, step_id), strict_paths=direct)
             else:
-                res = execute_generic_write(params, str(tmp_dir))
+                res = execute_generic_write(params, str(tmp_dir), strict_paths=direct)
+            if direct and isinstance(res, dict):
+                res["output_target"] = "code"
             return self._enrich_write_path(run_id, step_id, res)
 
         # finish_step — no-op completion signal; the host runner detects it and
@@ -7156,12 +7350,20 @@ class SkillFlow:
                             run_id, self._get_resolver_for_run(run_id), step_id)
                     except Exception:
                         _item = None
-                    kwargs.setdefault("step_tmp_dir",
-                                      str(self._workspace.get_step_tmp_dir(pid, gname, step_id)))
-                    kwargs.setdefault("step_dir",
-                                      str(self._workspace.get_step_dir(pid, gname, step_id,
-                                                                       item=_item)))
+                    from skillflow.output_targets import has_target, target_for
+                    # Host-owned destinations: never let a caller inject an output root.
+                    kwargs["output_dir"] = str(self.output_directory(run_id, step_id))
+                    kwargs["output_target"] = target_for(node)
+                    from skillflow.output_targets import uses_legacy_code_delivery
+                    kwargs["legacy_code_staging"] = uses_legacy_code_delivery(node)
+                    kwargs["step_tmp_dir"] = (str(self._workspace.get_step_tmp_dir(pid, gname, step_id))
+                                               if has_target(node, "artifact") else "")
+                    kwargs["step_dir"] = (str(self._workspace.get_step_dir(pid, gname, step_id, item=_item))
+                                           if has_target(node, "artifact") else "")
             except Exception:
+                from skillflow.output_targets import has_target
+                if node is not None and has_target(node, "code"):
+                    raise  # no fallback root is permitted for direct code outputs
                 # Without these, read_file loses the staging/step dirs and can't
                 # see files the agent just wrote (breaks staging-first reads).
                 import logging
