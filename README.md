@@ -802,3 +802,14 @@ Run any mutating linter in `validation`, before the code commit; post-delivery
 checks must not modify the candidate. Immediate review revisions retain the
 task's original base, while a new execution after intervening accepted code
 starts from the new clean HEAD. Paths use canonical forward slashes.
+
+### Tools that produce reports inside a code step
+
+A tool may declare `output: {target: artifact}` in its `tool.yaml`. The host
+then supplies its `out_dir`/`output_dir` as the current step's artifact destination,
+not the code worktree. This is for test/compile reports and screenshots; code
+writers normally inherit the step target. The resulting `artifact_written`
+paths are diagnostic outputs, not delivered source files. Read them with
+`read(source="self", path="test_report.json")`; default reads still see code.
+A tool declaring `target: code` cannot elevate an artifact-only step into a
+code-writing step. Tool nodes retain their explicit `tool_params` destinations.

@@ -150,7 +150,7 @@ class ToolLoader:
                 f"Tool '{name}': impl.py must export function '{name}'"
             )
 
-        schema = self._cache[name][0] if name in self._cache else {}
+        schema = self._cache[name][0] if name in self._cache else None
         self._cache[name] = (schema, fn)
         return fn
 

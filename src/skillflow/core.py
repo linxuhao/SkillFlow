@@ -2628,9 +2628,12 @@ class SkillFlow:
                     _own_lid = loop_context.get("_reader_loop") if loop_context else ""
                     _own_item = ((loop_context.get("_loop_items") or {}).get(_own_lid)
                                  if _own_lid else None)
-                    _step_dir = (str(self._workspace.get_step_dir(
+                    # Explicit source="self" addresses metadata/diagnostic
+                    # artifacts even on a code step. This is NOT part of the
+                    # default working-tree layers and cannot shadow code.
+                    _step_dir = str(self._workspace.get_step_dir(
                         run["project_id"], run["graph_name"], node.id,
-                        item=_own_item)) if has_target(node, "artifact") else "")
+                        item=_own_item))
                     _smap = build_source_map(
                         node.context,
                         workspace_root=ws_root,
@@ -3311,6 +3314,13 @@ class SkillFlow:
         node = self._get_resolver_for_run(run_id).get_node(step_id)
         target = result.get("output_target", target_for(node))
         if target != "code":
+            if target == "artifact" and target_for(node) == "code":
+                # Auxiliary reports are preserved, but are not code writes or
+                # code-resume paths. Do not make a test report satisfy a source
+                # delivery or invalidate source-read caches.
+                for key in ("written", "edited", "created", "deleted", "removed"):
+                    if key in result:
+                        result["artifact_" + key] = result.pop(key)
             return result
         paths = []
         for key in ("written", "edited", "created", "deleted", "removed"):
@@ -7225,6 +7235,7 @@ class SkillFlow:
         # the claim that built it, so ask that step first — the shared loader has
         # no callable for it and must never be allowed to answer with another
         # step's.
+        tool_output_target = None
         fn = self._step_tool_fn(run_id, step_id, name)
         if fn is None:
             # Refuse only if the name is still DYNAMIC — i.e. nothing on disk
@@ -7246,6 +7257,17 @@ class SkillFlow:
                 return {"error": f"Tool '{name}' is provided per step, and this "
                                  f"step has no read surface (or its claim has "
                                  f"already ended)."}
+            schema = self._tool_loader.load_schema(name) or {}
+            output = (schema.get("output") or {}) if isinstance(schema, dict) else {}
+            if not isinstance(output, dict):
+                return {"error": f"Tool {name!r}: output must be a mapping"}
+            tool_output_target = output.get("target")
+            if tool_output_target not in (None, "artifact", "code"):
+                return {"error": f"Tool {name!r}: output.target must be artifact or code"}
+            if tool_output_target == "code":
+                from skillflow.output_targets import has_target
+                if node is None or not has_target(node, "code"):
+                    return {"error": "A code-output tool requires a step with declared code outputs"}
             fn = self._tool_loader.load_fn(name)
         # `project_root=""` from the host means "no opinion", NOT "the process
         # CWD" — so ask the code-path resolver, as the tool-STEP path
@@ -7354,6 +7376,16 @@ class SkillFlow:
                     # Host-owned destinations: never let a caller inject an output root.
                     kwargs["output_dir"] = str(self.output_directory(run_id, step_id))
                     kwargs["output_target"] = target_for(node)
+                    if tool_output_target:
+                        if tool_output_target == "artifact":
+                            dest = (self._workspace.get_step_tmp_dir(pid, gname, step_id)
+                                    if has_target(node, "artifact") else
+                                    self._workspace.get_step_dir(pid, gname, step_id, item=_item))
+                        else:
+                            dest = self._code_output(run_id, step_id).root
+                        kwargs["output_dir"] = str(dest)
+                        kwargs["out_dir"] = str(dest)
+                        kwargs["output_target"] = tool_output_target
                     from skillflow.output_targets import uses_legacy_code_delivery
                     kwargs["legacy_code_staging"] = uses_legacy_code_delivery(node)
                     kwargs["step_tmp_dir"] = (str(self._workspace.get_step_tmp_dir(pid, gname, step_id))
@@ -7421,7 +7453,10 @@ class SkillFlow:
                 msg += (f". These arguments were not recognised and were ignored: "
                         f"{', '.join(sorted(dropped))}")
             return {"error": msg}
-        return result if isinstance(result, dict) else {"output": result}
+        result = result if isinstance(result, dict) else {"output": result}
+        if tool_output_target:
+            result["output_target"] = tool_output_target
+        return result
 
     def _read_edge_counts(self, conn: sqlite3.Connection, run_id: str) -> dict[tuple[str, str], int]:
         result: dict[tuple[str, str], int] = {}

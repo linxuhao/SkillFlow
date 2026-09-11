@@ -369,3 +369,55 @@ def test_fixed_code_paths_cannot_validate_one_path_and_write_another(tmp_path):
                       {"content": "answer = 42"}, str(root), strict_paths=True)
     assert not (root / "folder/code.py").exists()
     assert not (root / r"folder\code.py").exists()
+
+
+def test_diagnostic_artifacts_do_not_become_code_or_shadow_default_reads(tmp_path):
+    node = StepNode(id='implement', output_mode='write', output_target='code',
+                    config={'extra_tools': ['diagnostic']},
+                    context=[{'from': 'repository', 'mode': 'tool'}],
+                    transitions=[Transition(to=None)])
+    sf, rid, claim, root = engine(tmp_path, node)
+    def diagnostic(*, out_dir='', project_root=''):
+        # Like run_tests: reports fall back to the repo unless the host directs
+        # them into artifacts. This must never be counted as source delivery.
+        target = Path(out_dir or project_root)
+        target.mkdir(parents=True, exist_ok=True)
+        (target / 'test_report.json').write_text('{"passed":true}')
+        return {'written': 'test_report.json', 'passed': True}
+    sf._tool_loader.register_dynamic_tool('diagnostic', {'output': {'target': 'artifact'}}, diagnostic)
+    result = call(sf, rid, claim, 'diagnostic', out_dir=str(root))
+    assert result['artifact_written'] == 'test_report.json', result
+    assert 'written' not in result
+    assert not (root / 'test_report.json').exists()
+    assert 'error' not in call(sf, rid, claim, 'read', source='self', path='test_report.json')
+    assert 'error' in call(sf, rid, claim, 'read', path='test_report.json')
+    assert sf._code_output(rid, node.id).load()['paths'] == []
+    sf.confirm_step(claim.token, StepResult())
+    assert sf.get_steps(rid)[0]['status'] == 'completed'
+    artifact = Path(claim.inputs['_artifact_dir'])
+    assert (artifact / 'test_report.json').exists()
+    assert json.loads((artifact / 'code_changes.json').read_text())['files'] == []
+    assert git(root, 'status', '--porcelain').strip() == ''
+
+
+def test_tool_cannot_elevate_an_artifact_step_to_code(tmp_path):
+    node = StepNode(id='plan', output_mode='content', output_fixed={'plan': 'plan.md'},
+                    config={'extra_tools': ['elevate']}, transitions=[Transition(to=None)])
+    sf, rid, claim, root = engine(tmp_path, node)
+    def elevate(**kwargs):
+        pytest.fail('an artifact-only step executed a code-output tool')
+    sf._tool_loader.register_dynamic_tool('elevate', {'output': {'target': 'code'}}, elevate)
+    assert 'error' in call(sf, rid, claim, 'elevate')
+
+
+def test_loading_a_tool_function_first_does_not_erase_output_metadata(tmp_path):
+    tool = tmp_path / "report"
+    tool.mkdir()
+    (tool / "tool.yaml").write_text("name: report\ndescription: report\nparameters: {}\noutput: {target: artifact}\n")
+    (tool / "impl.py").write_text("def report():\n    return {}\n")
+    loader = ToolLoader(tmp_path)
+    assert callable(loader.load_fn("report"))
+    assert loader.load_schema("report")["output"]["target"] == "artifact"
+    # Empty dynamic schemas still remain legitimate, without a disk lookup.
+    loader.register_dynamic_tool("dynamic", {}, lambda: {})
+    assert loader.load_schema("dynamic") == {}
