@@ -190,13 +190,17 @@ def _describe_output_targets(tools: list[dict], fixed: dict, default: str, carry
             destination = (
                 " Destination: code in this run's worktree. Use repo-relative paths. "
                 "Read, search and tests use the current file, including your edits. "
+                "A successful mutation changes the uncommitted worktree immediately; "
+                "it is not validation, commit, review or delivery. "
                 "Paths must stay within the worktree and name regular files; "
                 "absolute paths, '..', '.git' and symlinks are rejected. "
                 "The candidate requires validation and review."
             )
         else:
             destination = (
-                " Destination: artifact in this step's output folder. "
+                " Destination: artifact in this step's staged candidate folder. "
+                "A successful mutation changes only that candidate; it is not "
+                "promoted or published until the step passes confirmation. "
                 "Use paths relative to that folder. To read the current artifact, "
                 "use its relative path with source='self'. "
                 "The required artifact set is validated before publication."

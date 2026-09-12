@@ -1,0 +1,34 @@
+name: apply_patch
+output:
+  target: code
+description: |
+  Apply a strict multi-file text patch directly in this run's code worktree.
+  Read current text first. Updates require exactly one matching context and
+  ordered, non-overlapping hunks against the ORIGINAL file; no fuzzy matching.
+  All paths and hunks are checked before any write. On an I/O failure, inspect
+  partial/written/deleted and reread those files; do not blindly replay the batch.
+  Validation and review still gate delivery. Repo-relative paths only; no .git,
+  symlinks, traversal or caller-selected roots. Maximum 128 files / 2 MiB patch,
+  16 MiB per file and 64 MiB combined preflight content.
+  Format (literal prefixes, bare @@ only):
+  *** Begin Patch
+  *** Update File: src/example.py
+  @@
+   def answer():
+  -    return 1
+  +    return 2
+  *** Add File: tests/new_test.py
+  +assert answer() == 2
+  *** Delete File: obsolete.txt
+  *** End Patch
+  Each hunk line starts with space (unchanged), - (remove) or + (add).
+  Include unique unchanged context for insertion into a nonempty file. Add refuses
+  existing files; Delete requires an existing regular file and takes no body.
+  UTF-8 updates preserve LF/CRLF and the existing EOF newline; Add uses LF with a
+  final newline (no content lines creates an empty file). Mixed line endings,
+  move/rename, numbered/anchored @@ and EOF markers are unsupported and refused.
+parameters:
+  patch:
+    type: string
+    required: true
+    description: Complete Begin/End Patch text containing file operations and hunks.

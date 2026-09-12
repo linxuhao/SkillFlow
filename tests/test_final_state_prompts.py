@@ -18,7 +18,7 @@ def test_output_descriptions_are_self_contained(target, mode, fixed):
                                          allow_full_write=True)
     for schema in schemas:
         text = schema["description"]
-        for obsolete in ("staging", "overlay", "promotion", "repo_apply", "repo baseline"):
+        for obsolete in ("overlay", "repo_apply", "repo baseline"):
             assert obsolete not in text.lower()
         if schema["name"] == "finish_step":
             assert "validation" in text
@@ -29,7 +29,8 @@ def test_output_descriptions_are_self_contained(target, mode, fixed):
             assert "worktree" in text and "repo-relative" in text
             assert "archived" not in text
         else:
-            assert "step's output folder" in text
+            assert "step's staged candidate folder" in text
+            assert "not promoted or published until" in text
             assert "source='self'" in text
 
 
@@ -64,7 +65,8 @@ def test_artifact_revision_explains_preservation_and_explicit_removal():
     desc = schemas["delete_task"]["description"]
     assert "preserves unchanged artifacts" in desc
     assert "manifest" in desc and "Destination: artifact" in desc
-    assert "staging" not in desc
+    assert "staged candidate folder" in desc
+    assert "not promoted or published until" in desc
 
 
 def test_code_read_catalog_uses_current_worktree(tmp_path):

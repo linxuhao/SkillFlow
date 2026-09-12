@@ -741,8 +741,9 @@ src/skillflow/
 │   ├── linter/          # Config validator + skillflow_lint tool
 │   ├── skill_runner/    # SkillTool — interactive pipeline facade
 │   └── skill_converter/ # Skill description → pipeline YAML
-└── tools/               # Native tools (13)
-    ├── read_file/       ├── write/          ├── list_tree/
+└── tools/               # Native tools
+    ├── read_file/       ├── write/          ├── apply_patch/
+    ├── list_tree/
     ├── dir_tree/        ├── json_schema/    ├── syntax_lint/
     ├── py_compile/      ├── pytest/         ├── repo_apply/
     ├── repo_validate/   ├── draft_commit/   ├── file_exists/
@@ -787,6 +788,25 @@ tool's effects are explicit in its implementation. Custom agent tools declare
 paths under `written`/`edited`/`created`/`deleted`/`removed`; partial failures must
 report their successful subset as well as `error`. The engine injects destinations
 and accounts for those paths. Opaque external writers are not implicitly trusted.
+
+The native `apply_patch(patch)` tool is an explicit grant for generic code-output
+agent steps. It accepts the strict Begin/End Patch subset documented by its live
+tool schema: repo-relative Add/Update/Delete operations, bare `@@` hunks, and
+exact unique whole-line context. It never performs whitespace-fuzzy replacement.
+Every operation is preflighted before publication, so parse, path, stale-context,
+ambiguity, newline, or file-state failure leaves the complete batch unchanged.
+Filesystem I/O can still fail after an earlier per-file atomic publication; in
+that case `partial`, `written`, and `deleted` report the exact completed subset.
+Read those paths and repair the remainder instead of replaying the original batch.
+
+Generated `edit` and `edit_<slot>` have a different lifecycle. For artifact
+outputs, success means the new bytes exist only in the step's staged candidate;
+read them with `read(..., source='self', raw=true)` and do not claim publication
+until confirmation succeeds. For direct code outputs, success changes the
+uncommitted run worktree immediately, while validation, commit, review, and
+delivery remain pending. On `old_str` failure, reread the current destination
+with `raw=true`, copy tabs/spaces/newlines exactly, and add context until the
+match is unique. The engine does not normalize or fuzz the match.
 
 A host can seed a failed-code recovery with artifact metadata
 `.code-output-relay.json` (`base_commit`, `recovery_commit`, `steps` mapping step

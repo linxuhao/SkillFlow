@@ -196,3 +196,9 @@ Output destinations are explicit in the step response: `output_target`, per-slot
 `output_targets`, and `artifact_dir`. Use the exposed tools or submit named slot
 values; direct code writes use the run worktree, artifacts retain publication.
 Do not assume `output_dir` is staging or copy sources to artifact folders.
+An artifact `edit` success updates only the staged candidate; reread it with
+`source='self'` and `raw=true` after a mismatch. A direct-code edit or granted
+`apply_patch` changes the uncommitted run worktree immediately, while validation,
+commit, review, and delivery are still pending. `old_str` and patch context are
+strict and exact; reread and retry with current unique context rather than asking
+for whitespace-fuzzy replacement.

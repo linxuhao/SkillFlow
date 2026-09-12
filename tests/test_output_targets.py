@@ -76,6 +76,53 @@ def test_code_writes_reads_searches_same_tree_without_tmp(tmp_path, monkeypatch)
     assert not tmp.exists()
 
 
+def test_native_apply_patch_multiline_is_strict_and_readable(tmp_path):
+    node = StepNode(
+        id='implement', output_mode='write', output_target='code',
+        config={'extra_tools': ['apply_patch']},
+        context=[{'from': 'repository', 'mode': 'tool'}],
+        transitions=[Transition(to=None)],
+    )
+    sf, rid, claim, root = engine(tmp_path, node)
+    schema = claim.inputs['_tool_schemas']['apply_patch']
+    assert 'no fuzzy matching' in schema['description']
+    assert set(schema['parameters']) == {'patch'}
+
+    patch = '''*** Begin Patch
+*** Update File: original.py
+@@
+-answer = 1
++def answer():
++    return 2
+*** Add File: nested/new.py
++VALUE = 3
+*** End Patch
+'''
+    result = call(sf, rid, claim, 'apply_patch', patch=patch)
+    assert result['applied'] is True
+    assert result['written'] == ['original.py', 'nested/new.py']
+    assert (root / 'original.py').read_text() == 'def answer():\n    return 2\n'
+    assert 'return 2' in str(call(sf, rid, claim, 'read', path='original.py'))
+
+    before = (root / 'original.py').read_bytes()
+    ambiguous = '''*** Begin Patch
+*** Add File: should_not_exist.py
++bad = True
+*** Update File: original.py
+@@
+-    return 2
++    return 4
+@@
+-    return 2
++    return 5
+*** End Patch
+'''
+    failed = call(sf, rid, claim, 'apply_patch', patch=ambiguous)
+    assert failed['applied'] is False and failed['phase'] == 'preflight'
+    assert not (root / 'should_not_exist.py').exists()
+    assert (root / 'original.py').read_bytes() == before
+
+
 def test_mixed_fixed_slots_never_copy_code_to_artifact_output(tmp_path):
     node = StepNode(id='design', output_mode='content', context=[{'from':'repository','mode':'tool'}],
         output_fixed={'plan': 'plan.md', 'manifest': {'file': 'manifest.json', 'target': 'code'}},
