@@ -176,7 +176,7 @@ def _archive_old_file(directory: Path, base_name: str) -> str | None:
         i += 1
 
 
-def _describe_output_targets(tools: list[dict], fixed: dict, default: str) -> list[dict]:
+def _describe_output_targets(tools: list[dict], fixed: dict, default: str, carry_forward: bool = False) -> list[dict]:
     """Attach the declared destination to each output operation."""
     for schema in tools:
         name = schema["name"]
@@ -201,6 +201,9 @@ def _describe_output_targets(tools: list[dict], fixed: dict, default: str) -> li
                 "use its relative path with source='self'. "
                 "The required artifact set is validated before publication."
             )
+            if carry_forward:
+                destination += (" Unchanged artifacts are preserved. Write only additions or changes; "
+                                "use the artifact delete tool and update the manifest for removals.")
         schema["description"] += destination
     return tools
 
@@ -300,7 +303,7 @@ def generate_write_tool_schemas(output_mode: str,
                            "description": "Brief summary of what was created or completed"},
             },
         })
-        return _describe_output_targets(tools, fixed, output_target)
+        return _describe_output_targets(tools, fixed, output_target, carry_forward)
 
     if output_mode == "content":
         tools = []
@@ -461,7 +464,7 @@ def generate_write_tool_schemas(output_mode: str,
                            "description": "Brief summary of what was created or completed"},
             },
         })
-        return _describe_output_targets(tools, fixed, output_target)
+        return _describe_output_targets(tools, fixed, output_target, carry_forward)
 
     return []
 

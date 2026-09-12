@@ -410,7 +410,9 @@ def _source_roots(spec: dict, workspace_root: str, current_config: str,
 def build_source_map(specs: list[dict], workspace_root: str,
                      current_config: str = "", code_root: str = "",
                      loop_context: dict | None = None,
-                     step_tmp_dir: str = "", step_dir: str = "") -> dict:
+                     step_tmp_dir: str = "", step_dir: str = "",
+                     artifact_revision: bool = False, current_step: str = "",
+                     output_target: str = "artifact") -> dict:
     """Resolve a step's readable sources.
 
     Returns {working_tree, named, allowed}:
@@ -439,17 +441,20 @@ def build_source_map(specs: list[dict], workspace_root: str,
         (tag, d) for tag, d in
         (("staging", step_tmp_dir), ("promoted", step_dir)) if d]
 
+    if artifact_revision:
+        self_layers = [("candidate", step_tmp_dir)] if step_tmp_dir else []
+
     working_tree: list[tuple[str, str]] = []
-    if step_tmp_dir:
-        working_tree.append(("staging", step_tmp_dir))
-    if code_root and Path(code_root).is_dir():
+    if step_tmp_dir and not (artifact_revision and output_target == "code"):
+        working_tree.append(("candidate" if artifact_revision else "staging", step_tmp_dir))
+    if code_root and Path(code_root).is_dir() and not (artifact_revision and output_target == "artifact"):
         working_tree.append(("repo", code_root))
 
     named: dict[str, list[tuple[str, str]]] = {}
     if self_layers:
         named["self"] = self_layers
     if step_tmp_dir:
-        named["staging"] = [("staging", step_tmp_dir)]
+        named["candidate" if artifact_revision else "staging"] = [("candidate" if artifact_revision else "staging", step_tmp_dir)]
     if code_root and Path(code_root).is_dir():
         named["repo"] = [("repo", code_root)]
 
@@ -463,6 +468,11 @@ def build_source_map(specs: list[dict], workspace_root: str,
             continue
         roots = _source_roots(spec, workspace_root, current_config, code_root,
                               loop_context)
+        if (artifact_revision and spec.get("source_type") == "step"
+                and spec.get("step_id") == current_step
+                and spec.get("config_name", "") in ("", current_config)
+                and spec.get("scope", "task") != "all"):
+            roots = [step_tmp_dir]
         if roots:
             named[key] = [(key, r) for r in roots]
 

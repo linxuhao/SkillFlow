@@ -13,7 +13,8 @@ BLOCKED = {".git", "__pycache__", ".venv", "node_modules", ".gitkeep", "_snapsho
 
 def list_tree(path: str = ".", depth: int = 3, *,
               workspace_root: str = "",
-              step_tmp_dir: str = "", step_dir: str = "") -> dict:
+              step_tmp_dir: str = "", step_dir: str = "",
+              artifact_revision: bool = False, output_target: str = "artifact") -> dict:
     # Build search path list
     search_roots: list[tuple[str, str]] = []
     if workspace_root:
@@ -23,13 +24,16 @@ def list_tree(path: str = ".", depth: int = 3, *,
     if step_dir:
         search_roots.append(("step output", step_dir))
 
+    if artifact_revision and output_target == "artifact":
+        search_roots = [("artifact candidate", step_tmp_dir)] if step_tmp_dir else []
+
     target = None
     found_root = ""
     found_label = ""
     for label, root_dir in search_roots:
         root = Path(root_dir)
         candidate = (root / path).resolve()
-        if not str(candidate).startswith(str(root.resolve())):
+        if not candidate.is_relative_to(root.resolve()):
             continue
         if candidate.exists():
             target = candidate

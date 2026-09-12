@@ -1,6 +1,10 @@
 name: list_tree
 description: >
-  List directory structure of the project workspace.
+  List files and directories at the selected relative path, up to depth four
+  and 200 entries. During an artifact revision, list the complete current
+  candidate. Otherwise search the project, current outputs and published outputs.
+  Returns tree, entry_count and found_in.
+
 parameters:
   path:
     type: string

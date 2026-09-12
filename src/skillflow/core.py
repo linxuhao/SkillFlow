@@ -2378,6 +2378,7 @@ class SkillFlow:
                 "SELECT inputs_json FROM skillflow_steps WHERE id = ?",
                 (step_row["id"],),
             ).fetchone() if step_row else None
+            existing_inputs = {}
             if existing:
                 existing_inputs = self._deserialize(existing["inputs_json"])
                 if "_error" in existing_inputs:
@@ -2398,26 +2399,15 @@ class SkillFlow:
                 feedback = "\n\n".join(str(x) for x in
                     (_fb_log, durable_feedback) if x)
 
-            # Emit via notification bus (real-time push + durable outbox).
-            # publish_sync schedules an async task; outbox write happens
-            # after this _tx transaction commits, avoiding premature commit.
-            self.notifications.publish_sync(
-                "step_claimed",
-                {
-                    "run_id": run_id, "step_id": run["current_node"],
-                    "step_instance_id": step_row["id"] if step_row else None,
-                    "project_id": run["project_id"],
-                },
-                step_id=run["current_node"],
-                run_id=run_id,
-            )
-
             token = ClaimToken(
                 step_id=run["current_node"], run_id=run_id,
                 step_instance_id=step_row["id"] if step_row else 0,
                 version=ver + 1, claimed_at=claimed_at,
                 claim_epoch=(step_row["claim_epoch"] or 0) if step_row else 0,
             )
+
+            artifact_candidate = self._prepare_artifact_candidate(
+                conn, run, node, token, existing_inputs)
 
             # Drop whatever the PREVIOUS claim of this step left behind, before
             # anything that can skip the re-bind below. That bind sits under
@@ -2509,6 +2499,10 @@ class SkillFlow:
                     _key = (_krow["item_context_key"] if _krow else "") or "loop_item"
                     loop_context[f"[{_key}]"] = _items[_rl]
                     loop_context[_key] = _items[_rl]
+
+            if artifact_candidate is not None:
+                inputs_with_tools["_artifact_candidate"] = artifact_candidate
+            inputs_with_tools["_output_carry_forward"] = bool(node.output_carry_forward)
 
             # Resolve context specs from the graph step node (loop vars available as $var)
             if self._workspace and node.context:
@@ -2642,6 +2636,9 @@ class SkillFlow:
                         loop_context=loop_context if loop_context else None,
                         step_tmp_dir=_step_tmp,
                         step_dir=_step_dir,
+                        artifact_revision=artifact_candidate is not None,
+                        current_step=node.id,
+                        output_target=target_for(node),
                     )
                     read_schemas = generate_read_tool_schemas(
                         node.context,
@@ -2759,29 +2756,6 @@ class SkillFlow:
                 # successful step consumes tmp via promotion (tmp→step_dir rename),
                 # so the next step still starts clean without an explicit wipe.
                 tmp_dir.mkdir(parents=True, exist_ok=True)
-                # carry_forward: seed an EMPTY staging from this step's own
-                # promoted output. Promotion is a replace (rmtree + rename), so a
-                # re-run after a rejection starts blank and an agent that writes
-                # only what it changed destroys the rest — which is precisely the
-                # reading its briefing invites ("step output — files from previous
-                # retries", searched after staging). Live 2026-08-26: a re-planned
-                # PM emitted 2 of 9 task cards and promotion deleted the other 8,
-                # while the manifest still named them.
-                # Empty-only: a retry mid-step already has its accumulated state
-                # here (see the note above) and must not be overwritten by the
-                # older promoted copy.
-                if (target_for(node) == "artifact" and getattr(node, "output_carry_forward", False)
-                        and not any(tmp_dir.iterdir())):
-                    _prior = self._workspace.get_step_dir(
-                        run["project_id"], run["graph_name"], node.id)
-                    if _prior.exists():
-                        import shutil as _shutil
-                        for _src in sorted(_prior.rglob("*")):
-                            if not _src.is_file():
-                                continue
-                            _dst = tmp_dir / _src.relative_to(_prior)
-                            _dst.parent.mkdir(parents=True, exist_ok=True)
-                            _shutil.copy2(_src, _dst)
                 inputs_with_tools["_output_dir"] = str(tmp_dir)
                 inputs_with_tools["_output_target"] = target_for(node)
                 inputs_with_tools["_output_fixed"] = node.output_fixed
@@ -2832,6 +2806,20 @@ class SkillFlow:
             # rendered history back into the next lease's durable accumulator.
             if feedback is not None:
                 inputs_with_tools["_feedback"] = feedback
+
+            # Announce only after candidate preparation and claim-input persistence.
+            # Synchronous notification delivery can write the durable outbox, so
+            # ownership errors must be raised before reaching this boundary.
+            self.notifications.publish_sync(
+                "step_claimed",
+                {
+                    "run_id": run_id, "step_id": run["current_node"],
+                    "step_instance_id": step_row["id"] if step_row else None,
+                    "project_id": run["project_id"],
+                },
+                step_id=run["current_node"],
+                run_id=run_id,
+            )
 
             claimed_step_id = run["current_node"]
             claimed_instance_id = token.step_instance_id
@@ -2932,7 +2920,7 @@ class SkillFlow:
                 )
                 from skillflow.output_targets import has_target
                 promote = (getattr(node, "validation_on_exhaustion", "promote") == "promote"
-                           and not has_target(node, "code"))
+                           and not has_target(node, "code") and not node.output_carry_forward)
                 if not self._handle_validation_failure(
                         token, error_msg, promote_on_exhaustion=promote):
                     return
@@ -3286,6 +3274,73 @@ class SkillFlow:
                        step_id=token.step_id,
                        step_instance_id=token.step_instance_id)
         return promoting
+
+    def _prepare_artifact_candidate(self, conn, run, node, token, existing_inputs):
+        """One candidate per execution instance, shared by every host/tool mode."""
+        from skillflow.artifact_revision import merge_candidate
+        from skillflow.output_targets import has_target, atomic_json
+        from skillflow.workspace import _sanitize_item
+        if not (self._workspace and node.output_carry_forward and has_target(node, "artifact")):
+            return None
+        pid, graph = run["project_id"], run["graph_name"]
+        item = self._loop_item_for_step(token.run_id, self._get_resolver_for_run(token.run_id), node.id)
+        identity = {"run_id": token.run_id, "step_instance_id": token.step_instance_id,
+                    "item": item}
+        config_dir = self._workspace.get_config_path(pid, graph)
+        candidate = config_dir / f"{node.id}.tmp"
+        owner_path = config_dir / ".artifact-candidates" / (_sanitize_item(node.id) + ".json")
+        if owner_path.is_symlink() or owner_path.parent.is_symlink():
+            raise SkillFlowError("Artifact candidate ownership path is unsafe")
+        owner = self._deserialize(owner_path.read_text()) if owner_path.exists() else None
+        if owner and owner != identity:
+            previous = conn.execute(
+                "SELECT s.status, r.status AS run_status FROM skillflow_steps s "
+                "JOIN skillflow_runs r ON r.id=s.run_id WHERE s.id=? AND s.run_id=?",
+                (owner.get("step_instance_id"), owner.get("run_id"))).fetchone()
+            if previous and previous["status"] in ("claimed", "pending") and previous["run_status"] not in ("failed", "completed", "cancelled"):
+                raise SkillFlowError("Artifact candidate is owned by another execution awaiting completion")
+        competing = conn.execute(
+            "SELECT s.id FROM skillflow_steps s JOIN skillflow_runs r ON r.id=s.run_id "
+            "WHERE r.project_id=? AND r.graph_name=? AND s.step_id=? "
+            "AND s.status='claimed' AND s.id != ? LIMIT 1",
+            (pid, graph, node.id, token.step_instance_id)).fetchone()
+        if competing:
+            raise SkillFlowError("Artifact candidate is owned by another active execution")
+        if existing_inputs.get("_artifact_candidate") == identity:
+            if owner != identity:
+                raise SkillFlowError("Artifact candidate ownership changed; restore the execution's candidate before retrying")
+            if candidate.is_symlink() or not candidate.is_dir():
+                raise SkillFlowError("Prepared artifact candidate is missing or unsafe; restore it before retrying")
+            return identity
+        prior = conn.execute(
+            "SELECT 1 FROM skillflow_steps WHERE run_id=? AND step_id=? "
+            "AND status='completed' AND loop_item IS ? LIMIT 1",
+            (token.run_id, node.id, item)).fetchone()
+        baseline = None
+        if prior:
+            latest = conn.execute(
+                "SELECT s.run_id FROM skillflow_steps s JOIN skillflow_runs r ON r.id=s.run_id "
+                "WHERE r.project_id=? AND r.graph_name=? AND s.step_id=? "
+                "AND s.status='completed' AND s.loop_item IS ? "
+                "ORDER BY s.completed_at DESC, s.id DESC LIMIT 1",
+                (pid, graph, node.id, item)).fetchone()
+            if latest and latest["run_id"] != token.run_id:
+                raise SkillFlowError("Artifact baseline was replaced by another run; use an isolated project")
+            baseline = self._workspace.get_step_dir(pid, graph, node.id, item=item)
+            if baseline.is_symlink() or not baseline.is_dir():
+                raise SkillFlowError("Published artifact baseline is missing or unsafe; restore it before revising")
+        # A pre-upgrade/recovered claim may already contain partial current output.
+        # A fresh instance cannot adopt unowned files left in the shared directory.
+        preserve = (token.claim_epoch > 1 and
+                    existing_inputs.get("_output_dir") == str(candidate))
+        if candidate.is_symlink():
+            raise SkillFlowError("Artifact candidate must not be a symlink")
+        if candidate.exists() and not preserve:
+            import shutil
+            shutil.rmtree(candidate)
+        merge_candidate(candidate, baseline)
+        atomic_json(owner_path, identity)
+        return identity
 
     def _code_output(self, run_id: str, step_id: str):
         from skillflow.output_targets import CodeOutput
@@ -3730,7 +3785,7 @@ class SkillFlow:
                 return code_result
         tmp_dir = self._workspace.get_step_tmp_dir(pid, gname, token.step_id)
 
-        if not tmp_dir.exists() or not any(tmp_dir.iterdir()):
+        if (not tmp_dir.exists() or not any(tmp_dir.iterdir())) and not node.output_carry_forward:
             return code_result or {"passed": True, "files": []}
 
         import shutil
@@ -7157,6 +7212,7 @@ class SkillFlow:
 
         from skillflow.output_targets import target_for, code_path
         fixed = node.output_fixed if node else {}
+        revision = bool(node is not None and node.output_carry_forward)
         if node is not None and target_for(node) == "code":
             project_root = str(self._code_output(run_id, step_id).root)
 
@@ -7189,8 +7245,8 @@ class SkillFlow:
                 # For outputs that never reach the repo, the step's own promoted
                 # dir is the baseline — same-run gated (see helper).
                 res = execute_edit(slot, fixed, params, str(tmp_dir),
-                                   source_dir="" if direct else project_root or "",
-                                   fallback_source_dir="" if direct else self._edit_fallback_dir(
+                                   source_dir="" if direct or revision else project_root or "",
+                                   fallback_source_dir="" if direct or revision else self._edit_fallback_dir(
                                        run_id, pid, gname, step_id), strict_paths=direct)
             else:
                 res = execute_write(slot, fixed, params, str(tmp_dir), strict_paths=direct)
@@ -7214,11 +7270,11 @@ class SkillFlow:
                                                execute_generic_write)
             if name == "create":
                 res = execute_generic_create(params, str(tmp_dir),
-                                             source_dir="" if direct else project_root or "", strict_paths=direct)
+                                             source_dir="" if direct or revision else project_root or "", strict_paths=direct)
             elif name == "edit":
                 res = execute_generic_edit(params, str(tmp_dir),
-                                           source_dir="" if direct else project_root or "",
-                                           fallback_source_dir="" if direct else self._edit_fallback_dir(
+                                           source_dir="" if direct or revision else project_root or "",
+                                           fallback_source_dir="" if direct or revision else self._edit_fallback_dir(
                                                run_id, pid, gname, step_id), strict_paths=direct)
             else:
                 res = execute_generic_write(params, str(tmp_dir), strict_paths=direct)
@@ -7376,6 +7432,7 @@ class SkillFlow:
                     # Host-owned destinations: never let a caller inject an output root.
                     kwargs["output_dir"] = str(self.output_directory(run_id, step_id))
                     kwargs["output_target"] = target_for(node)
+                    kwargs["artifact_revision"] = bool(node.output_carry_forward)
                     if tool_output_target:
                         if tool_output_target == "artifact":
                             dest = (self._workspace.get_step_tmp_dir(pid, gname, step_id)

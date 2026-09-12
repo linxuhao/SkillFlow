@@ -110,15 +110,10 @@ class StepNode:
         agent_config: For agent nodes: key into agent config YAML.
         context: List of context source specs for prompt assembly.
         output_mode: ``"content"`` (constrained write) or ``"write"`` (free).
-    output_carry_forward: seed this step's staging from its own previously
-        promoted output when it re-runs. Promotion REPLACES the step directory
-        (rmtree + rename), so without this a re-run that writes only the files
-        it changed silently deletes the rest — while the agent's workspace
-        briefing describes staging and step output as LAYERED for reading and
-        says nothing about the destructive write. With carry_forward the two
-        models agree: what you do not touch survives, what you write is
-        replaced, and DROPPING a file becomes an explicit ``delete_{slot}``
-        call instead of an accident of omission.
+        output_carry_forward: preserve unchanged artifacts in the complete candidate.
+            Revisions inherit this run's published step/item output. Additions and
+            edits replace individual files; delete_{slot} explicitly removes them.
+            Retries retain the candidate and validation failures block publication.
         output_fixed: Fixed output filename mapping (content mode).
         validation: List of validation specs (files + tool + params).
                     By default, a spec that still fails once the retry budget is

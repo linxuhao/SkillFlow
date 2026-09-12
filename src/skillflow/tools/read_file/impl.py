@@ -10,7 +10,8 @@ from pathlib import Path
 
 def read_file(path: str, start_line: int = 0, end_line: int | None = None,
               *, workspace_root: str = "",
-              step_tmp_dir: str = "", step_dir: str = "") -> dict:
+              step_tmp_dir: str = "", step_dir: str = "",
+              artifact_revision: bool = False, output_target: str = "artifact") -> dict:
     # Build search path list: workspace → tmp → step final
     search_roots: list[tuple[str, str]] = []  # (label, dir)
     if workspace_root:
@@ -20,12 +21,15 @@ def read_file(path: str, start_line: int = 0, end_line: int | None = None,
     if step_dir:
         search_roots.append(("step output", step_dir))
 
+    if artifact_revision and output_target == "artifact":
+        search_roots = [("artifact candidate", step_tmp_dir)] if step_tmp_dir else []
+
     full = None
     found_label = ""
     for label, root in search_roots:
         candidate = (Path(root) / path).resolve()
         ws = Path(root).resolve()
-        if not str(candidate).startswith(str(ws)):
+        if not candidate.is_relative_to(ws):
             continue  # traversal denied for this root
         if candidate.is_file():
             full = candidate

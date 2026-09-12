@@ -7,6 +7,7 @@ description: >
   Returns the file content with line numbers, and indicates which
   directory the file was found in ("found_in"). Returns the WHOLE file
   unless start_line/end_line are given; no size cap, no truncation flag.
+  During an artifact revision, reads use the complete current candidate.
 parameters:
   path:
     type: string
