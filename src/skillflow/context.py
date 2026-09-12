@@ -20,6 +20,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from skillflow.source_visibility import iter_visible_source_files
+
 # ── Checkpoint-feedback log (written by core.reject_checkpoint) ─────────────
 # One file per step at {config}/_feedback/{step}.md, appended round by round.
 # The read contract below exists because of two observed failure modes, both
@@ -413,7 +415,7 @@ class ContextResolver:
             parts: list[str] = []
             entries: list[tuple[str, int, int]] = []
             skipped: list[str] = []
-            for f in sorted(step_dir.rglob("*")):
+            for f in iter_visible_source_files(step_dir):
                 if f.is_file() and f.name != ".gitkeep":
                     if _is_binary(f):
                         # A step's output dir is not all prose. One Godot
@@ -547,8 +549,8 @@ class ContextResolver:
                 return "", ""
         elif abs_path.is_dir():
             # Directory: concatenate all files (like step dir)
-            files = [f for f in sorted(abs_path.rglob("*"))
-                     if f.is_file() and f.name != ".gitkeep"]
+            files = [f for f in iter_visible_source_files(abs_path)
+                     if f.name != ".gitkeep"]
             files = _apply_order(files, abs_path, source.get("order") or [])
             parts: list[str] = []
             for f in files:
@@ -613,8 +615,8 @@ class ContextResolver:
             except Exception:
                 return "", ""
         elif abs_path.is_dir():
-            files = [f for f in sorted(abs_path.rglob("*"))
-                     if f.is_file() and f.name != ".gitkeep"
+            files = [f for f in iter_visible_source_files(abs_path)
+                     if f.name != ".gitkeep"
                      and f.suffix not in (".pyc", ".pyo", ".so", ".o", ".bin")]
             files = _apply_order(files, abs_path, source.get("order") or [])
             if source.get("mode") == "index":

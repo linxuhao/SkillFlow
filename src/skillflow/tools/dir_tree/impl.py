@@ -1,8 +1,9 @@
 """Generate a directory tree summary for context injection."""
 
 from pathlib import Path
+from skillflow.source_visibility import iter_visible_source_paths
 
-BLOCKED = {".git", "__pycache__", ".venv", "node_modules", ".gitkeep", "_snapshot.json"}
+BLOCKED = {".git", ".zvec-grep", "__pycache__", ".venv", "node_modules", ".gitkeep", "_snapshot.json"}
 
 
 def dir_tree(config_name: str = "", *, workspace_root: str = "",
@@ -31,7 +32,7 @@ def dir_tree(config_name: str = "", *, workspace_root: str = "",
     if proj is not None and proj.exists():
         parts.append("# repo root (write paths are relative to here, e.g. ./pkg/mod.py):")
         parts.append("./")
-        for item in sorted(proj.rglob("*"))[:100]:
+        for item in list(iter_visible_source_paths(proj))[:100]:
             rel = item.relative_to(proj)
             if len(rel.parts) > 3:
                 continue

@@ -21,6 +21,7 @@ import os
 import re
 from pathlib import Path
 
+from skillflow.source_visibility import iter_visible_source_files
 from skillflow.workspace import route_step_read_dir
 
 
@@ -39,7 +40,7 @@ _MAX_READ_CHARS = 24_000
 # build/dependency caches. Mirrors dir_tree/list_tree's BLOCKED set: without it
 # a single `list`/`search` over a real repo would dump the whole .git tree
 # (~64% of files) into the agent's context.
-_BLOCKED_DIR_PARTS = {".git", "__pycache__", ".venv", "node_modules",
+_BLOCKED_DIR_PARTS = {".git", ".zvec-grep", "__pycache__", ".venv", "node_modules",
                       ".mypy_cache", ".pytest_cache", ".ruff_cache"}
 # Hard cap on entries returned by a directory listing so one call can't flood
 # the context with thousands of paths.
@@ -609,7 +610,7 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
             d = Path(root)
             if not d.is_dir():
                 continue
-            for f in sorted(d.rglob(base)):
+            for f in iter_visible_source_files(d, base):
                 if not (f.is_file() and f.name == base):
                     continue
                 rel = str(f.relative_to(d))
@@ -643,7 +644,7 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
         if not d.is_dir():
             continue
         names = []
-        for f in sorted(d.rglob("*")):
+        for f in iter_visible_source_files(d):
             if f.is_file() and f.name != ".gitkeep" \
                     and not _is_blocked_path(str(f.relative_to(d))):
                 names.append(str(f.relative_to(d)))
@@ -685,8 +686,7 @@ def unified_search(smap, pattern, source=None, glob=None, context_lines=0,
         if search_root.is_file():
             candidates = [search_root]
         else:
-            candidates = sorted(search_root.rglob(glob) if glob
-                                else search_root.rglob("*"))
+            candidates = iter_visible_source_files(search_root, glob)
         for f in candidates:
             if not f.is_file() or f.name == ".gitkeep":
                 continue
@@ -753,7 +753,7 @@ def unified_list(smap, source=None, glob=None):
         d = Path(root)
         if not d.is_dir():
             continue
-        for f in sorted(d.rglob(glob) if glob else d.rglob("*")):
+        for f in iter_visible_source_files(d, glob):
             if not (f.is_file() and f.name != ".gitkeep"):
                 continue
             rel = str(f.relative_to(d))

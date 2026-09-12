@@ -7,8 +7,9 @@ Searches the same multi-directory order as read_file:
 """
 
 from pathlib import Path
+from skillflow.source_visibility import iter_visible_source_paths
 
-BLOCKED = {".git", "__pycache__", ".venv", "node_modules", ".gitkeep", "_snapshot.json"}
+BLOCKED = {".git", ".zvec-grep", "__pycache__", ".venv", "node_modules", ".gitkeep", "_snapshot.json"}
 
 
 def list_tree(path: str = ".", depth: int = 3, *,
@@ -53,7 +54,7 @@ def list_tree(path: str = ".", depth: int = 3, *,
     entries: list[str] = []
     count = 0
 
-    for item in sorted(target.rglob("*")):
+    for item in iter_visible_source_paths(target):
         if count >= max_entries:
             entries.append(f"... [truncated at {max_entries} entries]")
             break
