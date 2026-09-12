@@ -200,5 +200,6 @@ An artifact `edit` success updates only the staged candidate; reread it with
 `source='self'` and `raw=true` after a mismatch. A direct-code edit or granted
 `apply_patch` changes the uncommitted run worktree immediately, while validation,
 commit, review, and delivery are still pending. `old_str` and patch context are
-strict and exact; reread and retry with current unique context rather than asking
-for whitespace-fuzzy replacement.
+strict and exact. If context is stale or not found, reread with `raw=true` and
+copy the current text exactly. If it is ambiguous, add unchanged surrounding
+lines until the match is unique. Never ask for whitespace-fuzzy replacement.

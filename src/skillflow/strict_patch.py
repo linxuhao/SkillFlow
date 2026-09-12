@@ -146,9 +146,16 @@ def updated_bytes(before: bytes, op: Operation) -> bytes:
             positions = [] if first < 0 else [framed.count("\n", 0, first)]
             if first >= 0 and framed.find(needle, first + 1) >= 0:
                 positions.append(-1)  # ambiguity, never used as a location
+        if not positions:
+            raise PatchError(
+                f"{op.path} hunk {number}: stale (no exact match); "
+                "reread the current range with raw=true and copy it exactly"
+            )
         if len(positions) != 1:
-            reason = "stale (no exact match)" if not positions else "ambiguous (multiple exact matches)"
-            raise PatchError(f"{op.path} hunk {number}: {reason}; read current text and include unique context")
+            raise PatchError(
+                f"{op.path} hunk {number}: ambiguous (multiple exact matches); "
+                "add unchanged surrounding lines until the context is unique"
+            )
         start = positions[0]
         if start < cursor:
             raise PatchError(f"{op.path}: hunks overlap or are out of order; combine them")

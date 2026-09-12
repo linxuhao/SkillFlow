@@ -24,6 +24,9 @@ description: |
   Each hunk line starts with space (unchanged), - (remove) or + (add).
   Include unique unchanged context for insertion into a nonempty file. Add refuses
   existing files; Delete requires an existing regular file and takes no body.
+  If update context is stale or not found, reread the current range with raw=true
+  and copy it exactly. If context is ambiguous, add unchanged surrounding lines
+  until the match is unique. Never shrink an ambiguous context.
   UTF-8 updates preserve LF/CRLF and the existing EOF newline; Add uses LF with a
   final newline (no content lines creates an empty file). Mixed line endings,
   move/rename, numbered/anchored @@ and EOF markers are unsupported and refused.
@@ -31,4 +34,4 @@ parameters:
   patch:
     type: string
     required: true
-    description: Complete Begin/End Patch text containing file operations and hunks.
+    description: Complete Begin/End Patch text containing file operations and exact, unique hunks.

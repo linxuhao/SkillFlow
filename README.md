@@ -804,9 +804,10 @@ outputs, success means the new bytes exist only in the step's staged candidate;
 read them with `read(..., source='self', raw=true)` and do not claim publication
 until confirmation succeeds. For direct code outputs, success changes the
 uncommitted run worktree immediately, while validation, commit, review, and
-delivery remain pending. On `old_str` failure, reread the current destination
-with `raw=true`, copy tabs/spaces/newlines exactly, and add context until the
-match is unique. The engine does not normalize or fuzz the match.
+delivery remain pending. When exact context is stale or not found, reread the current destination with
+`raw=true` and copy its tabs, spaces, and newlines exactly. When the copied
+context matches more than once, add unchanged surrounding lines until it is
+unique. The engine does not normalize or fuzz either case.
 
 A host can seed a failed-code recovery with artifact metadata
 `.code-output-relay.json` (`base_commit`, `recovery_commit`, `steps` mapping step

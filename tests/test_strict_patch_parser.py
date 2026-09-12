@@ -41,6 +41,18 @@ def test_strict_matching(old, reason):
         updated_bytes(old, op)
 
 
+def test_failure_guidance_distinguishes_stale_from_ambiguous_context():
+    (op,) = parse_patch(patch("*** Update File: x\n@@\n-x\n+y"))
+    with pytest.raises(PatchError) as stale:
+        updated_bytes(b"z\n", op)
+    assert "raw=true" in str(stale.value) and "copy it exactly" in str(stale.value)
+
+    with pytest.raises(PatchError) as ambiguous:
+        updated_bytes(b"x\nx\n", op)
+    assert "add unchanged surrounding lines" in str(ambiguous.value)
+    assert "shrink" not in str(ambiguous.value)
+
+
 @pytest.mark.parametrize(
     "path",
     [
