@@ -794,7 +794,7 @@ ids to inherited paths). The engine verifies Git ancestry and subjects the
 inherited paths to normal validation; recovery is not approval. Hosts must
 quiesce the old run and preserve provenance before producing that recovery commit.
 
-The private local-version build `1.5.72+aitelier.output1` is for the coordinated
+Private local-version builds `1.5.72+aitelier.outputN` are for the coordinated
 AItelier migration; no public package publication is implied.
 
 Direct code outputs are accepted only with a clean, matching candidate receipt.
