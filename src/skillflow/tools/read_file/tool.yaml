@@ -7,7 +7,7 @@ description: >
   Returns the file content with line numbers, and indicates which
   directory the file was found in ("found_in"). Returns the WHOLE file
   unless start_line/end_line are given; no size cap, no truncation flag.
-  During an artifact revision, reads use the complete current candidate.
+  On an artifact step's first pass, the current candidate overlays the repo; during a true revision, reads use only the complete candidate so deletions remain absent.
 parameters:
   path:
     type: string

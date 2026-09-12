@@ -2406,7 +2406,7 @@ class SkillFlow:
                 claim_epoch=(step_row["claim_epoch"] or 0) if step_row else 0,
             )
 
-            artifact_candidate = self._prepare_artifact_candidate(
+            artifact_candidate, artifact_revision = self._prepare_artifact_candidate(
                 conn, run, node, token, existing_inputs)
 
             # Drop whatever the PREVIOUS claim of this step left behind, before
@@ -2502,6 +2502,9 @@ class SkillFlow:
 
             if artifact_candidate is not None:
                 inputs_with_tools["_artifact_candidate"] = artifact_candidate
+                # A carry-forward step has a candidate even on its first pass.
+                # Only a candidate seeded from a promoted baseline is a revision.
+                inputs_with_tools["_artifact_revision"] = artifact_revision
             inputs_with_tools["_output_carry_forward"] = bool(node.output_carry_forward)
 
             # Resolve context specs from the graph step node (loop vars available as $var)
@@ -2636,7 +2639,8 @@ class SkillFlow:
                         loop_context=loop_context if loop_context else None,
                         step_tmp_dir=_step_tmp,
                         step_dir=_step_dir,
-                        artifact_revision=artifact_candidate is not None,
+                        artifact_candidate=artifact_candidate is not None,
+                        artifact_revision=artifact_revision,
                         current_step=node.id,
                         output_target=target_for(node),
                     )
@@ -3281,7 +3285,7 @@ class SkillFlow:
         from skillflow.output_targets import has_target, atomic_json
         from skillflow.workspace import _sanitize_item
         if not (self._workspace and node.output_carry_forward and has_target(node, "artifact")):
-            return None
+            return None, False
         pid, graph = run["project_id"], run["graph_name"]
         item = self._loop_item_for_step(token.run_id, self._get_resolver_for_run(token.run_id), node.id)
         identity = {"run_id": token.run_id, "step_instance_id": token.step_instance_id,
@@ -3311,7 +3315,7 @@ class SkillFlow:
                 raise SkillFlowError("Artifact candidate ownership changed; restore the execution's candidate before retrying")
             if candidate.is_symlink() or not candidate.is_dir():
                 raise SkillFlowError("Prepared artifact candidate is missing or unsafe; restore it before retrying")
-            return identity
+            return identity, bool(existing_inputs.get("_artifact_revision", False))
         prior = conn.execute(
             "SELECT 1 FROM skillflow_steps WHERE run_id=? AND step_id=? "
             "AND status='completed' AND loop_item IS ? LIMIT 1",
@@ -3340,7 +3344,27 @@ class SkillFlow:
             shutil.rmtree(candidate)
         merge_candidate(candidate, baseline)
         atomic_json(owner_path, identity)
-        return identity
+        return identity, prior is not None
+
+    def _claimed_artifact_revision(self, run_id: str, step_id: str) -> bool:
+        """Whether the current claim revises an existing artifact baseline."""
+        if not run_id or not step_id:
+            return False
+        try:
+            with self._ro() as conn:
+                row = conn.execute(
+                    "SELECT inputs_json FROM skillflow_steps WHERE run_id = ? "
+                    "AND step_id = ? ORDER BY id DESC LIMIT 1",
+                    (run_id, step_id)).fetchone()
+            if not row:
+                return False
+            return bool((self._deserialize(row["inputs_json"]) or {}).get(
+                "_artifact_revision", False))
+        except Exception:
+            logging.getLogger("skillflow").warning(
+                "could not read artifact revision state for %s/%s",
+                run_id, step_id, exc_info=True)
+            return False
 
     def _code_output(self, run_id: str, step_id: str):
         from skillflow.output_targets import CodeOutput
@@ -7432,7 +7456,11 @@ class SkillFlow:
                     # Host-owned destinations: never let a caller inject an output root.
                     kwargs["output_dir"] = str(self.output_directory(run_id, step_id))
                     kwargs["output_target"] = target_for(node)
-                    kwargs["artifact_revision"] = bool(node.output_carry_forward)
+                    kwargs["artifact_candidate"] = bool(
+                        node.output_carry_forward and has_target(node, "artifact"))
+                    kwargs["artifact_revision"] = (
+                        self._claimed_artifact_revision(run_id, step_id)
+                        if name in ("read_file", "list_tree") else False)
                     if tool_output_target:
                         if tool_output_target == "artifact":
                             dest = (self._workspace.get_step_tmp_dir(pid, gname, step_id)

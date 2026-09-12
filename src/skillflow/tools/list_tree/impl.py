@@ -14,18 +14,22 @@ BLOCKED = {".git", "__pycache__", ".venv", "node_modules", ".gitkeep", "_snapsho
 def list_tree(path: str = ".", depth: int = 3, *,
               workspace_root: str = "",
               step_tmp_dir: str = "", step_dir: str = "",
+              artifact_candidate: bool = False,
               artifact_revision: bool = False, output_target: str = "artifact") -> dict:
-    # Build search path list
-    search_roots: list[tuple[str, str]] = []
-    if workspace_root:
-        search_roots.append(("project", workspace_root))
-    if step_tmp_dir:
-        search_roots.append(("step staging", step_tmp_dir))
-    if step_dir:
-        search_roots.append(("step output", step_dir))
-
-    if artifact_revision and output_target == "artifact":
-        search_roots = [("artifact candidate", step_tmp_dir)] if step_tmp_dir else []
+    # Build search path list: candidate first for carry-forward artifacts.
+    if (artifact_candidate or artifact_revision) and output_target == "artifact":
+        search_roots = ([("artifact candidate", step_tmp_dir)]
+                        if step_tmp_dir else [])
+        if not artifact_revision and workspace_root:
+            search_roots.append(("project", workspace_root))
+    else:
+        search_roots = []
+        if workspace_root:
+            search_roots.append(("project", workspace_root))
+        if step_tmp_dir:
+            search_roots.append(("step staging", step_tmp_dir))
+        if step_dir:
+            search_roots.append(("step output", step_dir))
 
     target = None
     found_root = ""

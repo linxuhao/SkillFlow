@@ -161,6 +161,57 @@ def test_mixed_outputs_keep_artifact_siblings_and_code_destination(tmp_path):
     assert not (artifacts/"README.md").exists() and not (repo/"report.json").exists()
 
 
+def test_first_pass_carry_forward_reads_repo_without_explicit_source(tmp_path):
+    sf, rid, claim = engine(tmp_path)
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "cultivation.gd").write_text("monthly practice")
+    assert claim.inputs["_artifact_revision"] is False
+
+    read = call(sf, rid, claim, "read", path="scripts/cultivation.gd")
+    assert read["source"] == "repo"
+    search = call(sf, rid, claim, "search", pattern="monthly",
+                  path="scripts/cultivation.gd")
+    assert search["matches"][0]["source"] == "repo"
+
+    sf.release_claim(claim.token, "first-pass retry")
+    claim = sf.claim_next_step(rid)
+    assert claim.inputs["_artifact_revision"] is False
+    assert call(sf, rid, claim, "read",
+                path="scripts/cultivation.gd")["source"] == "repo"
+
+
+def test_reopened_carry_forward_keeps_candidate_only_default(tmp_path):
+    sf, rid, claim = engine(tmp_path)
+    repo = tmp_path / "repo"
+    (repo / "deleted.txt").write_text("unrelated repo file")
+    write_set(sf, rid, claim)
+    claim = revise(sf, rid, claim)
+    assert claim.inputs["_artifact_revision"] is True
+
+    assert "error" in call(sf, rid, claim, "read", path="deleted.txt")
+
+
+def test_legacy_read_tools_first_pass_candidate_overlays_repo_and_falls_back(
+        tmp_path):
+    from skillflow.tools.read_file.impl import read_file
+    from skillflow.tools.list_tree.impl import list_tree
+    candidate = tmp_path / "candidate"
+    repo = tmp_path / "repo"
+    candidate.mkdir()
+    repo.mkdir()
+    (candidate / "shared.txt").write_text("candidate")
+    (repo / "shared.txt").write_text("repo")
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "cultivation.gd").write_text("monthly practice")
+    kw = dict(workspace_root=str(repo), step_tmp_dir=str(candidate),
+              artifact_candidate=True, artifact_revision=False)
+
+    assert "candidate" in read_file("shared.txt", **kw)["content"]
+    assert read_file("scripts/cultivation.gd", **kw)["found_in"] == "project"
+    assert list_tree("scripts", **kw)["found_in"] == "project"
+
+
 def test_legacy_read_tools_use_candidate_instead_of_old_output(tmp_path):
     from skillflow.tools.read_file.impl import read_file
     from skillflow.tools.list_tree.impl import list_tree

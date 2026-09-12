@@ -258,12 +258,16 @@ def generate_read_tool_schemas(
 
     allowed = sorted(smap["allowed"])
     src_list = ", ".join(f"'{s}'" for s in allowed) or "(none)"
+    default_layers = ", ".join(tag for tag, _ in smap["working_tree"])
     src_param = {
         "type": "string",
         "description": (
-            "Optional. Omit to read the current files for this step, including "
-            "your edits. Use repo for the code worktree, self for this step's "
-            f"artifacts, or another declared source. Available: {src_list}."),
+            "Optional. Omit to read this step's current overlay in order "
+            f"({default_layers or 'no default layers'}). A first-pass artifact "
+            "candidate overlays the repo; a true artifact revision is candidate-only "
+            "so deleted artifacts stay deleted. Use repo for the code worktree, "
+            f"self for this step's artifacts, or another declared source. "
+            f"Available: {src_list}."),
     }
 
     return [
@@ -299,8 +303,10 @@ def generate_read_tool_schemas(
         {
             "name": "search",
             "description": (
-                "Grep file contents. Omit `source` to search your working tree; "
-                "or pass a declared source. Returns {file, line, text, source}; "
+                "Grep file contents. Omit `source` to search the current overlay "
+                "shown in the source parameter; or pass a declared source. "
+                "A path miss reports any named source that contains that path. "
+                "Returns {file, line, text, source}; "
                 "pass files_with_matches=true for just the file list. Each "
                 "`text` is clipped to 200 chars; `truncated` is true when "
                 "max_results was hit (max_results<=0 means 50). Skips .git/"
@@ -327,7 +333,8 @@ def generate_read_tool_schemas(
         {
             "name": "list",
             "description": (
-                "List files. Omit `source` for your working tree; or pass a "
+                "List files in the current overlay. Omit `source` to use the "
+                "ordered default layers shown in the source parameter; or pass a "
                 "declared source. Returns a JSON string "
                 "{\"files\": [{name, size, source}, ...], \"truncated\": bool}, "
                 "capped at 1000 entries; blocked dirs (.git, node_modules, "
@@ -411,6 +418,7 @@ def build_source_map(specs: list[dict], workspace_root: str,
                      current_config: str = "", code_root: str = "",
                      loop_context: dict | None = None,
                      step_tmp_dir: str = "", step_dir: str = "",
+                     artifact_candidate: bool = False,
                      artifact_revision: bool = False, current_step: str = "",
                      output_target: str = "artifact") -> dict:
     """Resolve a step's readable sources.
@@ -441,20 +449,24 @@ def build_source_map(specs: list[dict], workspace_root: str,
         (tag, d) for tag, d in
         (("staging", step_tmp_dir), ("promoted", step_dir)) if d]
 
-    if artifact_revision:
+    candidate_mode = artifact_candidate or artifact_revision
+    if candidate_mode:
         self_layers = [("candidate", step_tmp_dir)] if step_tmp_dir else []
 
     working_tree: list[tuple[str, str]] = []
-    if step_tmp_dir and not (artifact_revision and output_target == "code"):
-        working_tree.append(("candidate" if artifact_revision else "staging", step_tmp_dir))
-    if code_root and Path(code_root).is_dir() and not (artifact_revision and output_target == "artifact"):
+    if step_tmp_dir and not (candidate_mode and output_target == "code"):
+        working_tree.append(
+            ("candidate" if candidate_mode else "staging", step_tmp_dir))
+    if (code_root and Path(code_root).is_dir()
+            and not (artifact_revision and output_target == "artifact")):
         working_tree.append(("repo", code_root))
 
     named: dict[str, list[tuple[str, str]]] = {}
     if self_layers:
         named["self"] = self_layers
     if step_tmp_dir:
-        named["candidate" if artifact_revision else "staging"] = [("candidate" if artifact_revision else "staging", step_tmp_dir)]
+        layer = "candidate" if candidate_mode else "staging"
+        named[layer] = [(layer, step_tmp_dir)]
     if code_root and Path(code_root).is_dir():
         named["repo"] = [("repo", code_root)]
 
@@ -468,7 +480,7 @@ def build_source_map(specs: list[dict], workspace_root: str,
             continue
         roots = _source_roots(spec, workspace_root, current_config, code_root,
                               loop_context)
-        if (artifact_revision and spec.get("source_type") == "step"
+        if (candidate_mode and spec.get("source_type") == "step"
                 and spec.get("step_id") == current_step
                 and spec.get("config_name", "") in ("", current_config)
                 and spec.get("scope", "task") != "all"):
@@ -505,6 +517,33 @@ def _within(base: Path, rel: str):
     if cand != b and b not in cand.parents:
         return None
     return cand
+
+
+def _sources_containing_path(
+        smap: dict, path: str, *, directory: bool = False) -> list[str]:
+    """Named, already-authorized sources containing the exact relative path."""
+    found = []
+    for source, layers in sorted(smap["named"].items()):
+        for _, root in layers:
+            candidate = _within(Path(root), path)
+            exists = (candidate.is_dir() if directory
+                      else candidate.is_file()) if candidate is not None else False
+            if exists:
+                found.append(source)
+                break
+    return found
+
+
+def _source_miss(path: str, sources: list[str]) -> dict:
+    if not sources:
+        return {}
+    quoted = ", ".join(repr(source) for source in sources)
+    retry = (f"retry with source={sources[0]!r}" if len(sources) == 1
+             else f"retry with one explicit source from: {quoted}")
+    return {
+        "available_sources": sources,
+        "hint": f"{path!r} exists in source(s) {quoted}; {retry}",
+    }
 
 
 def _deleted_this_step(step_tmp_dir: str) -> set:
@@ -614,7 +653,8 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
             available.append({"source": tag, "files": names})
     return {"error": f"File not found: {path}",
             "searched": [t for t, _ in layers],
-            "available": available}
+            "available": available,
+            **_source_miss(path, _sources_containing_path(smap, path))}
 
 
 def unified_search(smap, pattern, source=None, glob=None, context_lines=0,
@@ -694,7 +734,10 @@ def unified_search(smap, pattern, source=None, glob=None, context_lines=0,
 
     if not path_found:
         return {"error": f"search: path not found: {path}",
-                "searched": [t for t, _ in layers]}
+                "searched": [t for t, _ in layers],
+                **_source_miss(path, _sources_containing_path(
+                    smap, path, directory=False) or
+                    _sources_containing_path(smap, path, directory=True))}
     if files_with_matches:
         return {"files": files_hit, "truncated": truncated}
     return {"matches": matches, "truncated": truncated}

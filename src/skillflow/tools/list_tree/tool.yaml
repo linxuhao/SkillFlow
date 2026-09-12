@@ -1,8 +1,9 @@
 name: list_tree
 description: >
   List files and directories at the selected relative path, up to depth four
-  and 200 entries. During an artifact revision, list the complete current
-  candidate. Otherwise search the project, current outputs and published outputs.
+  and 200 entries. On an artifact step's first pass, the current candidate overlays the project.
+  During a true revision, list only the complete candidate so deletions remain absent.
+  Otherwise search the project, current outputs and published outputs.
   Returns tree, entry_count and found_in.
 
 parameters:

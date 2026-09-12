@@ -8,8 +8,8 @@ import json
 
 import pytest
 
-from skillflow.read_tools import (make_read_tool_fns, generate_read_tool_schemas,
-                                  get_read_tool_names)
+from skillflow.read_tools import (build_source_map, make_read_tool_fns,
+                                  generate_read_tool_schemas, get_read_tool_names)
 
 
 def _mk_step(tmp_path, files):
@@ -184,6 +184,60 @@ class TestWorkingTreeStagingFirst:
         fns = make_read_tool_fns([{"source_type": "repository", "mode": "tool"}],
                                  str(tmp_path), code_root=str(repo))
         assert "def old()" in fns["read"]("a.py")["content"]
+
+
+class TestArtifactCandidateSourceSelection:
+    def _map(self, tmp_path, *, revision):
+        repo = tmp_path / "repo"
+        candidate = tmp_path / "candidate"
+        repo.mkdir()
+        candidate.mkdir()
+        (repo / "shared.txt").write_text("repo")
+        (repo / "repo_only.txt").write_text("repo-only")
+        (repo / "nested").mkdir()
+        (repo / "nested" / "target.py").write_text("needle")
+        (candidate / "shared.txt").write_text("candidate")
+        return build_source_map(
+            [{"source_type": "repository", "mode": "tool"}],
+            str(tmp_path), code_root=str(repo), step_tmp_dir=str(candidate),
+            artifact_candidate=True, artifact_revision=revision,
+            output_target="artifact")
+
+    def test_first_pass_candidate_overlays_repo_without_hiding_repo_only_files(
+            self, tmp_path):
+        fns = make_read_tool_fns([], _smap=self._map(tmp_path, revision=False))
+        assert "candidate" in fns["read"]("shared.txt")["content"]
+        assert fns["read"]("repo_only.txt")["source"] == "repo"
+        result = fns["search"]("needle", path="nested/target.py")
+        assert result["matches"][0]["source"] == "repo"
+        files = {entry["name"]: entry["source"]
+                 for entry in json.loads(fns["list"]())["files"]}
+        assert files["shared.txt"] == "candidate"
+        assert files["repo_only.txt"] == "repo"
+
+    def test_true_revision_is_candidate_only_and_does_not_resurrect_deletions(
+            self, tmp_path):
+        smap = self._map(tmp_path, revision=True)
+        fns = make_read_tool_fns([], _smap=smap)
+        assert [tag for tag, _ in smap["working_tree"]] == ["candidate"]
+        miss = fns["read"]("repo_only.txt")
+        assert "error" in miss
+        assert miss["available_sources"] == ["repo"]
+        assert "source='repo'" in miss["hint"]
+
+    def test_explicit_wrong_source_search_names_the_source_holding_the_path(
+            self, tmp_path):
+        fns = make_read_tool_fns([], _smap=self._map(tmp_path, revision=True))
+        miss = fns["search"]("needle", source="self", path="nested")
+        assert miss["available_sources"] == ["repo"]
+        assert "source='repo'" in miss["hint"]
+
+    def test_schema_names_the_actual_default_layer_order(self, tmp_path):
+        smap = self._map(tmp_path, revision=False)
+        schemas = generate_read_tool_schemas([], _smap=smap)
+        source_help = schemas[0]["parameters"]["source"]["description"]
+        assert "(candidate, repo)" in source_help
+        assert "candidate overlays the repo" in source_help
 
 
 class TestAccessGate:
