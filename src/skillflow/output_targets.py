@@ -242,7 +242,7 @@ class CodeOutput:
                              data["base_commit"], data["head_commit"], "--", *paths).split("\0"))) if paths else []
         report = {"target": "code", "run_id": data["run_id"], "step_instance_id": data["instance"],
                   "base_commit": data["base_commit"], "commit": data["head_commit"],
-                  "files": all_changed, "note": "Source files live in the run worktree, not this artifact folder."}
+                  "files": all_changed, "note": "Source files live in the run worktree."}
         atomic_json(receipt, report)
         return {"passed": True, "files": all_changed, "committed": bool(changed),
                 "commit": data["head_commit"]}

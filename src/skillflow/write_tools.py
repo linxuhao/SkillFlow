@@ -177,7 +177,7 @@ def _archive_old_file(directory: Path, base_name: str) -> str | None:
 
 
 def _describe_output_targets(tools: list[dict], fixed: dict, default: str) -> list[dict]:
-    """Descriptions derived from explicit targets, never tool/role heuristics."""
+    """Attach the declared destination to each output operation."""
     for schema in tools:
         name = schema["name"]
         if name == "finish_step":
@@ -186,25 +186,22 @@ def _describe_output_targets(tools: list[dict], fixed: dict, default: str) -> li
         entry = fixed.get(slot, {}) if slot else {}
         target = entry.get("target", default) if isinstance(entry, dict) else default
         schema["output_target"] = target
-        if target != "code":
-            continue
-        pattern = _get_pattern(slot, fixed) if slot else "the specified repo-relative file"
-        verb = name.split("_", 1)[0]
-        operation = {
-            "edit": "Replace old_str exactly once in the CURRENT file with new_str. Preserve all other bytes. "
-                    "Use read(raw=true) for exact text; repeated edits build on the previous edit. ",
-            "create": ("Write the declared code file. " if slot else
-                       "Create a NEW file; an existing nonempty file must be changed with edit. "),
-            "write": "Replace the whole file; prefer edit for an existing file. ",
-            "delete": "Delete the specified file immediately. ",
-        }.get(verb, "Write the declared code output. ")
-        fmt = entry.get("format") if isinstance(entry, dict) else None
-        schema["description"] = (operation + f"Destination: code, {pattern}, directly in this run's worktree. "
-            "No code staging, promotion, path-prefix stripping, or copying to artifacts. "
-            "Read/search/tests see the change immediately; validation and review still apply. "
-            "Do not supply absolute paths, '..', '.git' or a symlink. "
-            "If id is requested it replaces '*' in the declared filename."
-            + (f" Expected format: {fmt}" if fmt else ""))
+        if target == "code":
+            destination = (
+                " Destination: code in this run's worktree. Use repo-relative paths. "
+                "Read, search and tests use the current file, including your edits. "
+                "Paths must stay within the worktree and name regular files; "
+                "absolute paths, '..', '.git' and symlinks are rejected. "
+                "The candidate requires validation and review."
+            )
+        else:
+            destination = (
+                " Destination: artifact in this step's output folder. "
+                "Use paths relative to that folder. To read the current artifact, "
+                "use its relative path with source='self'. "
+                "The required artifact set is validated before publication."
+            )
+        schema["description"] += destination
     return tools
 
 
@@ -234,18 +231,9 @@ def generate_write_tool_schemas(output_mode: str,
     mechanism exists to remove. A non-glob slot is a required output of the step
     and is never droppable.
     """
-    staging_hint = (
-        " Writes go to this step's staging, not directly to the repo. "
-        "To verify with read, use the output's relative path and omit source: "
-        "the latest staged content is visible; the result's source field names "
-        "the layer read. Explicit source='repo' reads the repo baseline, when "
-        "available. finish_step signals delivery through configured promotion "
-        "and apply hooks; do not manually call repo_apply. Repo application "
-        "depends on the pipeline configuration."
-    )
     edit_hint = (
-        " Each successive old_str must match the latest staged content. "
-        "Re-read with raw=true and omit source for exact snippets without "
+        " Each successive old_str must match the current file. "
+        "Use read(raw=true) with the destination described below for exact snippets without "
         "display line numbers; preserve indentation and line endings. "
         "new_str is required and must be a string; use an explicit empty "
         "string only for intentional deletion."
@@ -254,14 +242,10 @@ def generate_write_tool_schemas(output_mode: str,
         tools = [{
             "name": "create",
             "description": (
-                "Create a NEW file with the given content. The 'file' param is a "
-                "repo-relative path (e.g. 'core/db_manager.py'; 'filename'/'path' "
-                "are accepted aliases; a leading 'project/' and any '.'/'..' "
-                "components are stripped). Fails if the file already exists — "
-                "use 'edit' to change an existing file — except that an existing "
-                "0-byte file is overwritten. Empty 'content' is refused. "
-                "Keep the same repo-relative file path; do not prepend a step "
-                "name such as implement/ or a .tmp directory." + staging_hint
+                "Create a NEW file with nonempty content. The 'file' parameter is "
+                "relative to the declared output destination. 'filename' and 'path' "
+                "are accepted aliases. An existing nonempty file must be changed "
+                "with edit; an empty file may be filled with create."
             ),
             "parameters": {
                 "file": {"type": "string", "required": True},
@@ -270,29 +254,22 @@ def generate_write_tool_schemas(output_mode: str,
         }, {
             "name": "edit",
             "description": (
-                "Surgically change an EXISTING file by replacing an exact, unique "
-                "snippet — use this to fix or update part of a file without "
-                "rewriting the whole thing (the rest is preserved verbatim). "
-                "'old_str' must appear exactly once; include surrounding context "
-                "to make it unique. Fails if the file is absent or 'old_str' isn't "
-                "found exactly once. For multiple changes, call edit repeatedly. "
-                "Pass exactly one repo-relative path argument: 'file' or "
-                "'file_path' (legacy 'filename'/'path' are also accepted). A "
-                "leading 'project/' is stripped. Baseline is your "
-                "staging, then the repo; on a revision loop it may be this "
-                "step's own promoted output. Keep the same repo-relative file "
-                "path; do not prepend a step name such as implement/ or a .tmp "
-                "directory." + staging_hint + edit_hint
+                "Change an EXISTING file by replacing an exact, unique old_str "
+                "with new_str, preserving all other text. Include enough surrounding "
+                "context to make old_str match exactly once. For multiple changes, "
+                "call edit repeatedly; each call uses the current file. "
+                "Pass exactly one relative path argument: file, file_path, filename "
+                "or path." + edit_hint
             ),
             "parameters": {
                 "file": {"type": "string", "required": False,
-                         "description": "Repo-relative path; use either file or file_path."},
+                         "description": "Path relative to the output destination; use either file or file_path."},
                 "file_path": {"type": "string", "required": False,
                               "description": "Alias for file; do not pass both."},
                 "filename": {"type": "string", "required": False,
-                             "description": "Legacy alias for file; do not combine aliases."},
+                             "description": "Alias for file; pass exactly one path argument."},
                 "path": {"type": "string", "required": False,
-                         "description": "Legacy alias for file; do not combine aliases."},
+                         "description": "Alias for file; pass exactly one path argument."},
                 "old_str": {"type": "string", "required": True,
                             "description": "Exact text to find (must appear exactly once)."},
                 "new_str": {"type": "string", "required": True,
@@ -303,8 +280,8 @@ def generate_write_tool_schemas(output_mode: str,
             tools.append({
                 "name": "write",
                 "description": ("Write a whole file, replacing it entirely if it "
-                                "exists. Prefer 'edit' for existing files. A leading "
-                                "'project/' in 'file' is stripped."),
+                                "exists. Prefer 'edit' for existing files. Use a path "
+                                "relative to the declared output destination."),
                 "parameters": {
                     "file": {"type": "string", "required": True},
                     "content": {"type": "string", "required": True},
@@ -313,8 +290,8 @@ def generate_write_tool_schemas(output_mode: str,
         tools.append({
             "name": "finish_step",
             "description": (
-                "Signal that all required output files have been written and "
-                "the step is complete. Call this ONLY after all create/edit/write "
+                "Submit the required output files for validation and delivery. "
+                "Call this after the required checks and all create/edit/write "
                 "tool calls in the current turn have been made — it must be the "
                 "last call."
             ),
@@ -329,6 +306,7 @@ def generate_write_tool_schemas(output_mode: str,
         tools = []
         for slot, entry in fixed.items():
             normalized = _normalize_fixed_entry(entry)
+            target = entry.get("target", output_target) if isinstance(entry, dict) else output_target
             pattern = normalized["file"]
             format_spec = normalized.get("format")
             fmt_hint = f"\nExpected format: {format_spec.strip()}" if format_spec else ""
@@ -418,10 +396,11 @@ def generate_write_tool_schemas(output_mode: str,
             tools.append({
                 "name": f"create_{slot}",
                 "description": (
-                    f"Create {pattern} with initial content. "
-                    f"If file already exists, it is archived with a numeric suffix, "
-                    f"so {pattern} always holds the latest version.{write_hint}"
-                    + staging_hint
+                    (f"Write {pattern}, replacing its current content.{write_hint}"
+                     if target == "code" else
+                     f"Create {pattern} with initial content. An existing file is "
+                     f"archived with a numeric suffix; {pattern} holds the latest "
+                     f"version.{write_hint}")
                 ),
                 "parameters": create_params,
             })
@@ -439,13 +418,11 @@ def generate_write_tool_schemas(output_mode: str,
                 tools.append({
                     "name": f"delete_{slot}",
                     "description": (
-                        f"DROP one {pattern} that a previous run produced. Your "
-                        f"staging starts as a copy of that run's output, so a "
-                        f"file you simply do not rewrite SURVIVES unchanged — "
-                        f"this is the only way to remove one. Use it when a task "
-                        f"is genuinely dropped from the plan; if you also keep it "
-                        f"out of the manifest, the two stay consistent. Also deletes "
-                        f"a file written THIS run. 'id' may not contain '/' or "
+                        f"Delete one {pattern} from the current output set. "
+                        f"carry_forward preserves unchanged artifacts automatically. "
+                        f"When removing a task, update its manifest entry as well. "
+                        f"The file may be carried forward or written in this attempt. "
+                        f"'id' may not contain '/' or "
                         f"'\\' or start with '.'."
                     ),
                     "parameters": {
@@ -465,8 +442,8 @@ def generate_write_tool_schemas(output_mode: str,
                     f"rewrite from memory silently corrupts unflagged parts. "
                     f"Fails if the file is absent or old_str isn't found exactly once.{fmt_hint}"
                     f" The output path is fixed by {pattern}; if an id is requested, "
-                    f"it replaces * in that pattern, not a staging path."
-                    + staging_hint + edit_hint
+                    f"it replaces * in that pattern."
+                    + edit_hint
                 ),
                 "parameters": edit_params,
             })
@@ -474,8 +451,8 @@ def generate_write_tool_schemas(output_mode: str,
         tools.append({
             "name": "finish_step",
             "description": (
-                "Signal that all required output files have been written and "
-                "the step is complete. Call this ONLY after all write_*/create_*/"
+                "Submit the required output files for validation and delivery. "
+                "Call this after the required checks and all write_*/create_*/"
                 "edit_* tool calls in the current turn have been made — it must "
                 "be the last tool call in your response."
             ),
@@ -511,7 +488,7 @@ def execute_delete(slot: str, fixed: dict, params: dict,
 
     target = _Path(output_dir) / pattern.replace("*", ident)
     if not target.is_file():
-        return {"error": f"{target.name} is not in this step's staging — nothing "
+        return {"error": f"{target.name} is not in the current output set — nothing "
                          f"to delete. (Only files carried forward from a previous "
                          f"run, or written this run, can be deleted.)"}
     target.unlink()
@@ -672,7 +649,7 @@ def _unique_replace(content: str, old_str: str, new_str: str, *,
     if occurrences == 0:
         return None, {"error": f"{tool}: 'old_str' not found in '{name}'",
                       "hint": "Re-read the file with raw=true, omitting source for "
-                              "the working tree (latest staging), or source='self' "
+                              "the current worktree, or source='self' "
                               "for this step's own output. Copy exact original text, "
                               "including tabs, spaces and line endings, without "
                               "display line-number prefixes. No whitespace-fuzzy "
@@ -737,8 +714,7 @@ def execute_edit(slot: str, fixed: dict, params: dict,
         src = prior
     else:
         return {"error": (f"edit_{slot}: cannot edit '{base_name}' — no "
-                          "existing version to edit (nothing in the repo, "
-                          "staging, or this run's prior output). Use "
+                          "existing version to edit at this output path. Use "
                           f"create_{slot}/write_{slot} to author it first.")}
 
     with src.open(encoding="utf-8", newline="") as stream:
@@ -918,8 +894,7 @@ def execute_generic_edit(params: dict, output_dir: str,
         src = prior
     else:
         return {"error": (f"edit: cannot edit '{rel}' — no existing version to "
-                          "edit (nothing in the repo, staging, or this run's "
-                          "prior output). Use 'create' for a new file.")}
+                          "edit at this output path. Use 'create' for a new file.")}
 
     with src.open(encoding="utf-8", newline="") as stream:
         content = stream.read()

@@ -261,18 +261,18 @@ def generate_read_tool_schemas(
     src_param = {
         "type": "string",
         "description": (
-            "Optional. Omit to read your WORKING TREE (your own pending "
-            "create/edit output shadows the repo baseline — reads reflect what "
-            f"you just wrote). Or one of: {src_list}."),
+            "Optional. Omit to read the current files for this step, including "
+            "your edits. Use repo for the code worktree, self for this step's "
+            f"artifacts, or another declared source. Available: {src_list}."),
     }
 
     return [
         {
             "name": "read",
             "description": (
-                "Read a file by repo-relative path. Omit `source` to read your "
-                "working tree (your pending edits are visible). The result's "
-                "`source` field names the layer that served the file. A window "
+                "Read a file by a path relative to the selected source. Omit "
+                "`source` for this step's current files, including your edits. "
+                "The result's `source` field identifies the source used. A window "
                 "is capped at 2000 lines or ~24K characters, whichever comes "
                 "first; when `truncated` is true the file continues past "
                 "`start_line + returned_lines` — page with start_line/end_line "

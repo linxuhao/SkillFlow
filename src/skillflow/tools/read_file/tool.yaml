@@ -1,9 +1,9 @@
 name: read_file
 description: >
   Read a file from the project workspace. Searches in order:
-  1) project root (committed/delivered files),
-  2) step staging dir (files the agent just wrote via write_* tools),
-  3) step output dir (files from previous retries of this step).
+  1) the current run worktree, including uncommitted edits,
+  2) this step's current artifact files,
+  3) this step's published artifacts from prior attempts.
   Returns the file content with line numbers, and indicates which
   directory the file was found in ("found_in"). Returns the WHOLE file
   unless start_line/end_line are given; no size cap, no truncation flag.

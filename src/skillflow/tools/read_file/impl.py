@@ -1,9 +1,9 @@
 """Read a file from the project workspace.
 
 Searches multiple directories in order:
-  1. ``workspace_root`` — project code repo (committed / delivered files)
-  2. ``step_tmp_dir``   — current step's .tmp staging (files the agent just wrote)
-  3. ``step_dir``       — current step's final dir (outputs from previous retries)
+  1. ``workspace_root`` — current run worktree, including uncommitted edits
+  2. ``step_tmp_dir``   — current step's artifact files
+  3. ``step_dir``       — current step's published artifacts
 """
 from pathlib import Path
 

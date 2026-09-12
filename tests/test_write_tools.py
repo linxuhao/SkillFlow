@@ -268,7 +268,8 @@ class TestWriteTools:
         # First tool is write_sota
         desc = schemas[0]["description"]
         assert "Expected format:" not in desc
-        assert desc == "Replace step1_sota.md with new content."
+        assert desc.startswith("Replace step1_sota.md with new content.")
+        assert "Destination: artifact" in desc
 
     def test_format_with_glob(self):
         schemas = generate_write_tool_schemas("content", {
@@ -591,25 +592,24 @@ def test_edit_explicit_deletion_then_successive_edit(tmp_path, mode):
     ("content", {"plan": "plan.md"}, "edit_plan"),
     ("content", {"task": "tasks/*.md"}, "edit_task"),
 ])
-def test_edit_schema_explains_staging_contract(mode, fixed, edit_name):
+def test_edit_schema_explains_artifact_contract(mode, fixed, edit_name):
     schemas = generate_write_tool_schemas(mode, fixed)
     edit = next(tool for tool in schemas if tool["name"] == edit_name)
     description = edit["description"]
-    for instruction in ("not directly to the repo", "omit source",
-                        "source field", "source='repo'", "latest staged content",
-                        "explicit empty", "do not manually call repo_apply",
-                        "depends on the pipeline configuration"):
+    for instruction in ("Destination: artifact", "source='self'", "current file",
+                        "explicit empty", "validated before publication"):
         assert instruction in description
+    for obsolete in ("staging", "repo baseline", "repo_apply", "promotion"):
+        assert obsolete not in description
     assert edit["parameters"]["new_str"]["required"] is True
     assert edit["parameters"]["new_str"]["type"] == "string"
     if mode == "write":
-        assert "repo-relative file" in description
-        assert "implement/" in description
+        assert "relative path argument" in description
     else:
         assert "output path is fixed" in description
         assert "file" not in edit["parameters"]
     create = next(tool for tool in schemas if tool["name"].startswith("create"))
-    assert "not directly to the repo" in create["description"]
+    assert "Destination: artifact" in create["description"]
 
 
 @pytest.mark.parametrize('mode', ['generic', 'slot'])
