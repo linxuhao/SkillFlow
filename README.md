@@ -379,6 +379,19 @@ lifecycle:
 
 Steps declare `max_retries` and an `_error` transition. See `tests/fixtures/error_handler.yaml`.
 
+### Frozen launch prerequisites
+
+Hosts that need to bind execution to previously inspected inputs can call
+`materialize_frozen_prerequisites()` before admitting a run. The versioned
+descriptor is validated in full before any read-only probe runs; probes execute
+in order, compare canonical JSON identities exactly, trace required and actual
+values, and stop at the first mismatch. Optional per-probe validators can impose
+semantic validity without transforming the observed identity. In particular,
+`SkillFlow.capability_identity()` plus
+`require_available_capability_identity()` binds a capability to the SHA-256 of
+every resolved tool schema and rejects absent, unavailable, or malformed
+capabilities even when a caller mirrors the invalid value as its expectation.
+
 ## Feedback Loopback
 
 Tool failures can inject output into the next step's inputs (`feedback: true`). See `plugins/skill_converter/skill_converter.yaml` — the `validate_design` step feeds lint errors into `fix_issues`.
