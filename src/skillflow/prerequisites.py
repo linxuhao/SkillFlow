@@ -14,6 +14,7 @@ from typing import Any
 from skillflow.exceptions import SkillFlowError
 
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class FrozenPrerequisiteError(SkillFlowError):
@@ -22,6 +23,39 @@ class FrozenPrerequisiteError(SkillFlowError):
     def __init__(self, message: str, report: dict | None = None):
         super().__init__(message)
         self.report = report or {"version": 1, "checks": [], "passed": False}
+
+
+def require_available_capability_identity(identity: Any, requested_name: str) -> dict:
+    """Reject absent, unavailable, or non-canonical capability observations."""
+    fields = {"name", "tools", "briefing", "owner", "available",
+              "tool_schema_sha256"}
+    if not isinstance(identity, dict) or set(identity) != fields:
+        raise FrozenPrerequisiteError(
+            "runtime capability identity has an unknown or malformed shape")
+    if (not isinstance(requested_name, str) or not _NAME.fullmatch(requested_name)
+            or identity["name"] != requested_name):
+        raise FrozenPrerequisiteError("runtime capability identity has the wrong name")
+    tools = identity["tools"]
+    schemas = identity["tool_schema_sha256"]
+    if (not isinstance(tools, list)
+            or any(not isinstance(tool, str) or not _NAME.fullmatch(tool)
+                   for tool in tools)
+            or len(set(tools)) != len(tools)
+            or not isinstance(schemas, dict)
+            or set(schemas) != set(tools)):
+        raise FrozenPrerequisiteError(
+            "runtime capability tools or schema identity are malformed")
+    if (identity["available"] is not True
+            or any(not isinstance(value, str) or not _SHA256.fullmatch(value)
+                   for value in schemas.values())):
+        raise FrozenPrerequisiteError(
+            "runtime capability is unavailable or has unresolved tool schemas")
+    if (not isinstance(identity["briefing"], str)
+            or not isinstance(identity["owner"], str) or not identity["owner"]):
+        raise FrozenPrerequisiteError(
+            "runtime capability metadata are malformed")
+    _json_value(identity, "runtime capability identity")
+    return identity
 
 
 def _json_value(value: Any, label: str) -> Any:
@@ -70,6 +104,7 @@ def materialize_frozen_prerequisites(
     spec: dict,
     probes: Mapping[str, Callable[[dict], Any]],
     *,
+    validators: Mapping[str, Callable[[Any, dict], Any]] | None = None,
     trace: Callable[[dict], None] | None = None,
 ) -> dict:
     """Materialize and compare exact identities, stopping at first failure.
@@ -82,6 +117,9 @@ def materialize_frozen_prerequisites(
     checks = _shape(spec)
     if not isinstance(probes, Mapping):
         raise FrozenPrerequisiteError("prerequisite probes must be a mapping")
+    if validators is not None and not isinstance(validators, Mapping):
+        raise FrozenPrerequisiteError("prerequisite validators must be a mapping")
+    validators = validators or {}
     report = {"version": 1, "checks": [], "passed": False}
     for check in checks:
         event = {
@@ -94,9 +132,20 @@ def materialize_frozen_prerequisites(
             event.update(actual=None, passed=False,
                          error="runtime probe is unavailable")
         else:
+            observed = False
+            actual = None
             try:
                 actual = _json_value(fn(dict(check["arguments"])),
                                      f"check {check['id']!r} actual identity")
+                observed = True
+                validator = validators.get(check["probe"])
+                if validator is not None:
+                    if not callable(validator):
+                        raise FrozenPrerequisiteError("runtime identity validator is unavailable")
+                    validated = validator(actual, dict(check["arguments"]))
+                    if validated != actual:
+                        raise FrozenPrerequisiteError(
+                            "runtime identity validator may not transform the observation")
                 event.update(actual=actual,
                              passed=actual == check["expected"])
                 if not event["passed"]:
@@ -106,7 +155,8 @@ def materialize_frozen_prerequisites(
                     message = str(exc)
                 else:
                     message = f"probe failed: {type(exc).__name__}: {exc}"
-                event.update(actual=None, passed=False, error=message[:1000])
+                event.update(actual=actual if observed else None,
+                             passed=False, error=message[:1000])
         report["checks"].append(event)
         if trace is not None:
             try:

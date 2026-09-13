@@ -4,6 +4,7 @@ from skillflow.core import SkillFlow
 from skillflow.prerequisites import (
     FrozenPrerequisiteError,
     materialize_frozen_prerequisites,
+    require_available_capability_identity,
 )
 
 
@@ -94,3 +95,46 @@ def test_runtime_capability_identity_includes_resolved_tool_schema(tmp_path):
         "available": False, "tool_schema_sha256": {"missing": None},
     }
     assert sf.capability_identity("absent") is None
+
+
+@pytest.mark.parametrize("identity", [
+    None,
+    {"name": "review", "tools": ["inspect"], "briefing": "", "owner": "host",
+     "available": False, "tool_schema_sha256": {"inspect": None}},
+    "review",
+    {"name": "review", "available": True},
+    {"name": "wrong", "tools": [], "briefing": "", "owner": "host",
+     "available": True, "tool_schema_sha256": {}},
+    {"name": "review", "tools": ["inspect"], "briefing": "", "owner": "host",
+     "available": True, "tool_schema_sha256": {"inspect": "not-a-digest"}},
+    {"name": "review", "tools": ["inspect", "inspect"], "briefing": "", "owner": "host",
+     "available": True, "tool_schema_sha256": {"inspect": "a" * 64}},
+])
+def test_invalid_capability_identity_is_never_made_valid_by_mirroring(identity):
+    with pytest.raises(FrozenPrerequisiteError):
+        require_available_capability_identity(identity, "review")
+
+
+def test_available_capability_identity_is_canonical_and_accepted():
+    identity = {"name": "review", "tools": ["inspect"], "briefing": "read only",
+                "owner": "host", "available": True,
+                "tool_schema_sha256": {"inspect": "a" * 64}}
+    assert require_available_capability_identity(identity, "review") is identity
+
+
+def test_semantic_validator_retains_mirrored_invalid_actual_in_refusal_trace():
+    invalid = {"name": "review", "tools": ["inspect"], "briefing": "",
+               "owner": "host", "available": False,
+               "tool_schema_sha256": {"inspect": None}}
+    trace = []
+    with pytest.raises(FrozenPrerequisiteError):
+        materialize_frozen_prerequisites(
+            spec(check("runtime", "capability", invalid, name="review")),
+            {"capability": lambda arguments: invalid},
+            validators={"capability": lambda actual, arguments:
+                        require_available_capability_identity(actual, arguments["name"])},
+            trace=trace.append,
+        )
+    assert trace[0]["required"] == invalid
+    assert trace[0]["actual"] == invalid
+    assert trace[0]["passed"] is False
