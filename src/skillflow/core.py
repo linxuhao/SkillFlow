@@ -5579,9 +5579,15 @@ class SkillFlow:
         # mutually starve (the step-5 rampage). Losers return None and back off;
         # a crashed tool reopens to pending; a dead driver's claim is reclaimed
         # via recover_stale_claims once the node's timeout_seconds elapses.
-        run_row = self._conn.execute(
-            "SELECT * FROM skillflow_runs WHERE id = ?", (run_id,)
-        ).fetchone()
+        # The persistent connection is shared by every host thread.  All other
+        # reads use _ro(); leaving this fast-path SELECT bare made concurrent
+        # advances of different runs intermittently return no row or raise
+        # sqlite3.InterfaceError before either tool could claim its step.
+        # Release the lock before executing the tool, as before.
+        with self._ro() as conn:
+            run_row = conn.execute(
+                "SELECT * FROM skillflow_runs WHERE id = ?", (run_id,)
+            ).fetchone()
         if (run_row and run_row["status"] == "running"
                 and not run_row["cancel_requested_at"]
                 and run_row["current_node"]):

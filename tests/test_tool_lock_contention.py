@@ -37,6 +37,27 @@ from skillflow.graph import (
 from tests.mocks import MockToolLoader
 
 
+class _FastPathReadLockProbe:
+    """Fail deterministically if advance_run reads its shared DB unlocked."""
+
+    def __init__(self, connection, lock):
+        self._connection = connection
+        self._lock = lock
+        self.armed = False
+
+    def execute(self, sql, params=()):
+        normalized = " ".join(sql.lower().split())
+        if (self.armed
+                and normalized.startswith(
+                    "select * from skillflow_runs where id = ?")
+                and not self._lock._is_owned()):
+            raise AssertionError("advance_run fast-path read bypassed self._lock")
+        return self._connection.execute(sql, params)
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+
 def test_inline_tool_does_not_hold_serialisation_lock(tmp_path):
     db_path = str(tmp_path / "locktest.db")
     observed: list[str] = []
@@ -183,3 +204,92 @@ def test_inline_tool_is_claim_guarded_against_concurrent_drivers(tmp_path):
     a.join(timeout=5)
 
     assert runs == [1], f"tool executed {len(runs)}x under concurrency, expected 1"
+
+
+def test_parallel_runs_share_one_connection_without_unlocked_reads(tmp_path):
+    """Different runs may advance concurrently on one host connection.
+
+    The host deliberately schedules different projects in parallel.  Before
+    1.5.77, the inline-tool fast path was the one connection read that bypassed
+    ``_ro()``/``self._lock``. Under a real race that intermittently returned no
+    row, stranded a run at its pending tool, or raised sqlite3.InterfaceError.
+
+    The connection probe makes that interleaving deterministic: thread
+    scheduling is still real, while any unlocked fast-path read fails at the
+    exact boundary instead of relying on SQLite to lose the race by chance.
+    """
+    effects: list[str] = []
+    entered = threading.Barrier(3)
+    release = threading.Event()
+
+    def effect(**kwargs):
+        entered.wait(timeout=5)
+        release.wait(timeout=5)
+        effects.append(threading.current_thread().name)
+        return {"passed": True}
+
+    tools = MockToolLoader()
+    tools.register("parallel_effect", effect)
+    sf = SkillFlow(str(tmp_path / "parallel.db"), tool_loader=tools)
+    graph = PipelineGraph(
+        name="parallel_fast_path",
+        begin="effect",
+        steps=[StepNode(
+            id="effect", step_type="tool", tool_name="parallel_effect",
+            transitions=[Transition(to=None)],
+        )],
+        end_conditions=EndConditions(conditions=[EndCondition(
+            type="node_reached", node="effect", result="completed",
+            require_completed=True,
+        )]),
+    )
+    sf.register_graph(graph)
+    run_ids = {
+        label: sf.create_run(
+            "parallel_fast_path", {"project_id": label}, project_id=label)
+        for label in ("a", "b")
+    }
+    for run_id in run_ids.values():
+        sf.start_run(run_id)
+
+    probe = _FastPathReadLockProbe(sf._conn, sf._lock)
+    sf._conn = probe
+    start = threading.Barrier(2)
+    outcomes: dict[str, dict] = {}
+
+    def advance(label):
+        try:
+            start.wait(timeout=5)
+            outcomes[label] = {"returned": sf.advance_run(run_ids[label])}
+        except BaseException as exc:  # preserve every controller outcome
+            outcomes[label] = {
+                "exception": type(exc).__name__, "detail": str(exc)}
+
+    probe.armed = True
+    threads = [threading.Thread(
+                   target=advance, args=(label,), name=label, daemon=True)
+               for label in run_ids]
+    for thread in threads:
+        thread.start()
+    try:
+        entered.wait(timeout=5)
+        with sf._ro() as conn:
+            active = [dict(row) for row in conn.execute(
+                "SELECT * FROM skillflow_active_ops ORDER BY run_id")]
+        assert sorted(row["run_id"] for row in active) == sorted(run_ids.values())
+        assert all(row["id"] > 0 and row["owner"] for row in active)
+        assert all(row["kind"] == "tool_step"
+                   and row["detail"] == "parallel_effect" for row in active)
+    finally:
+        release.set()
+        for thread in threads:
+            thread.join(timeout=10)
+            assert not thread.is_alive()
+        probe.armed = False
+
+    assert all("exception" not in result for result in outcomes.values()), outcomes
+    assert sorted(effects) == ["a", "b"]
+    for run_id in run_ids.values():
+        assert sf.get_run(run_id)["status"] == "completed"
+    assert sf._conn.execute(
+        "SELECT COUNT(*) FROM skillflow_active_ops").fetchone()[0] == 0
