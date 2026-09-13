@@ -1176,6 +1176,34 @@ class SkillFlow:
                        "owner": cap.get("owner", "host")}
                 for name, cap in self._capabilities.items()}
 
+    def capability_identity(self, name: str) -> dict | None:
+        """Exact, read-only identity of one capability on this runtime.
+
+        Declarations alone are insufficient for a launch preflight: a named
+        capability whose tool schemas do not resolve still cannot execute. The
+        schema digests bind the tools actually installed without returning a
+        callable or mutating the unresolved-tool registry.
+        """
+        cap = self.capabilities().get(name)
+        if cap is None:
+            return None
+        schemas: dict[str, str | None] = {}
+        for tool_name in cap["tools"]:
+            schema = None
+            if self._tool_loader is not None:
+                try:
+                    schema = self._tool_loader.load_schema(tool_name)
+                except Exception:  # noqa: BLE001 - loaders are host plugins
+                    pass
+            if schema is None:
+                schemas[tool_name] = None
+            else:
+                payload = json.dumps(schema, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":"), allow_nan=False)
+                schemas[tool_name] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return {"name": name, **cap, "available": all(schemas.values()),
+                "tool_schema_sha256": schemas}
+
     def graph_capabilities(self, graph_name: str) -> list[str]:
         """What a registered graph OFFERS, or [] if it is not registered."""
         graph = self._graphs.get(graph_name)
