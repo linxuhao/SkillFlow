@@ -76,6 +76,53 @@ def test_code_writes_reads_searches_same_tree_without_tmp(tmp_path, monkeypatch)
     assert not tmp.exists()
 
 
+def test_reference_mode_runs_end_to_end_through_the_engine(tmp_path):
+    """read issues the digest, apply_patch consumes it, same claim, same run.
+
+    Both halves only meet if the engine injects `run_id` into apply_patch and
+    into the step's read closure. Proving the halves separately would leave the
+    join untested, and the join is where reference mode lives or dies.
+    """
+    node = StepNode(
+        id='implement', output_mode='write', output_target='code',
+        config={'extra_tools': ['apply_patch']},
+        context=[{'from': 'repository', 'mode': 'tool'}],
+        transitions=[Transition(to=None)],
+    )
+    root = init_repo(tmp_path / 'repo')
+    (root / 'original.py').write_text('answer = 1\nother = 2\nlast = 3\n')
+    git(root, 'add', '--', 'original.py')
+    git(root, 'commit', '-qm', 'three lines')
+    sf, rid, claim, root = engine(tmp_path, node, root=root)
+    schema = claim.inputs['_tool_schemas']['apply_patch']
+    assert 'references' in schema['parameters']
+    assert 'citation' in claim.inputs['_tool_schemas']['read']['description']
+
+    served = call(sf, rid, claim, 'read', path='original.py')
+    cite = served['citation']
+    assert cite['citable'] is True and cite['start_line'] == 1 and cite['end_line'] == 3
+
+    # Given out of order on purpose, and the second range's coordinates come
+    # from BEFORE the first edit changes its line's length.
+    result = call(sf, rid, claim, 'apply_patch', references=[
+        {'file': 'original.py', 'sha': cite['sha'], 'from_line': 3,
+         'from_col': 7, 'to_line': 3, 'to_col': 8, 'new_text': '33'},
+        {'file': 'original.py', 'sha': cite['sha'], 'from_line': 1,
+         'from_col': 9, 'to_line': 1, 'to_col': 10, 'new_text': '11111'},
+    ])
+    assert result['applied'] is True, result
+    assert result['written'] == ['original.py']
+    assert (root / 'original.py').read_text() == 'answer = 11111\nother = 2\nlast = 33\n'
+    # Nothing of the original was retyped: the call carried two new fragments.
+
+    stale = call(sf, rid, claim, 'apply_patch', references=[
+        {'file': 'original.py', 'sha': cite['sha'], 'from_line': 2,
+         'from_col': 8, 'to_line': 2, 'to_col': 9, 'new_text': '22'}])
+    assert stale['applied'] is False
+    assert 'changed since the digest was issued' in stale['error']
+    assert (root / 'original.py').read_text() == 'answer = 11111\nother = 2\nlast = 33\n'
+
+
 def test_native_apply_patch_multiline_is_strict_and_readable(tmp_path):
     node = StepNode(
         id='implement', output_mode='write', output_target='code',
@@ -86,7 +133,7 @@ def test_native_apply_patch_multiline_is_strict_and_readable(tmp_path):
     sf, rid, claim, root = engine(tmp_path, node)
     schema = claim.inputs['_tool_schemas']['apply_patch']
     assert 'no fuzzy matching' in schema['description']
-    assert set(schema['parameters']) == {'patch'}
+    assert set(schema['parameters']) == {'patch', 'references'}
 
     patch = '''*** Begin Patch
 *** Update File: original.py

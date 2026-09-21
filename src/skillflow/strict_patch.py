@@ -1,15 +1,24 @@
 """Strict code patches: complete preflight and atomic per-file publication."""
 from __future__ import annotations
 
+import json
 import os
 import stat
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from skillflow import citations
+
 MAX_PATCH_BYTES = 2 * 1024 * 1024
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_BATCH_BYTES = 64 * 1024 * 1024
+# Reference hunks are the same unit of work as V4A hunks, addressed
+# differently, so they carry the same ceilings.
+MAX_REFS_PER_FILE = 1024
+MAX_FILES = 128
+_REFERENCE_KEYS = frozenset(
+    {"file", "sha", "from_line", "from_col", "to_line", "to_col", "new_text"})
 
 
 class PatchError(ValueError):
@@ -23,11 +32,31 @@ class Hunk:
 
 
 @dataclass(frozen=True)
+class Reference:
+    """One edit addressed by a digest the READ issued, not by copied text.
+
+    The caller supplies `new_text` and nothing else: there is no field here
+    that could hold the original, which is the whole point. `sha` is the
+    citation the read handed back for the window this range sits in; the
+    coordinates are 1-based lines with 0-based character columns, `to_col`
+    exclusive, so (from_line, 0) .. (to_line, len(line)) is "replace these
+    whole lines" and from == to is an insertion point.
+    """
+    sha: str
+    from_line: int
+    from_col: int
+    to_line: int
+    to_col: int
+    new_text: str
+
+
+@dataclass(frozen=True)
 class Operation:
     kind: str
     path: str
     hunks: tuple[Hunk, ...] = ()
     content: str = ""
+    refs: tuple[Reference, ...] = ()
 
 
 def patch_path(raw: str) -> str:
@@ -114,6 +143,163 @@ def parse_patch(patch: str) -> tuple[Operation, ...]:
     return tuple(ops)
 
 
+def _int_field(raw: dict, key: str, index: int) -> int:
+    value = raw.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise PatchError(f"reference {index}: {key} must be a non-negative integer")
+    return value
+
+
+def parse_references(references) -> tuple[Operation, ...]:
+    """Validate reference hunks and group them per file.
+
+    Order is NOT the caller's problem: references may arrive in any order and
+    are sorted against one snapshot at apply time. Requiring descending line
+    numbers would move a mechanical discipline back into the prompt, which is
+    exactly the kind of rule this mode exists to retire.
+    """
+    if references in (None, (), []):
+        return ()
+    if not isinstance(references, list):
+        raise PatchError("references must be a list of reference hunks")
+    try:
+        size = len(json.dumps(references).encode("utf-8"))
+    except (TypeError, ValueError) as exc:
+        raise PatchError(f"references must be JSON-serialisable: {exc}") from exc
+    if size > MAX_PATCH_BYTES:
+        raise PatchError("references exceed 2 MiB; split them into smaller batches")
+    grouped: dict[str, list[Reference]] = {}
+    for index, raw in enumerate(references, 1):
+        if not isinstance(raw, dict):
+            raise PatchError(f"reference {index}: expected an object")
+        unknown = sorted(set(raw) - _REFERENCE_KEYS)
+        if unknown:
+            raise PatchError(
+                f"reference {index}: unsupported field(s) {unknown}; a reference "
+                "hunk carries only the NEW text")
+        missing = sorted(_REFERENCE_KEYS - set(raw))
+        if missing:
+            raise PatchError(f"reference {index}: missing field(s) {missing}")
+        path = raw["file"]
+        if not isinstance(path, str):
+            raise PatchError(f"reference {index}: file must be a string")
+        path = patch_path(path)
+        sha = raw["sha"]
+        if not isinstance(sha, str) or not sha.strip():
+            raise PatchError(f"reference {index}: sha must be the digest the read issued")
+        new_text = raw["new_text"]
+        if not isinstance(new_text, str):
+            raise PatchError(f"reference {index}: new_text must be a string")
+        if "\x00" in new_text:
+            raise PatchError(f"reference {index}: new_text must not contain NUL")
+        from_line = _int_field(raw, "from_line", index)
+        to_line = _int_field(raw, "to_line", index)
+        if from_line < 1 or to_line < from_line:
+            raise PatchError(
+                f"reference {index}: require 1 <= from_line <= to_line")
+        ref = Reference(sha.strip(), from_line, _int_field(raw, "from_col", index),
+                        to_line, _int_field(raw, "to_col", index), new_text)
+        bucket = grouped.setdefault(path, [])
+        if len(bucket) >= MAX_REFS_PER_FILE:
+            raise PatchError(f"{path}: at most {MAX_REFS_PER_FILE} reference hunks per file")
+        bucket.append(ref)
+    if len(grouped) > MAX_FILES:
+        raise PatchError(f"At most {MAX_FILES} files per patch")
+    return tuple(Operation("Cite", path, refs=tuple(refs))
+                 for path, refs in grouped.items())
+
+
+def _framed(before: bytes, path: str) -> tuple[list[str], str, bool]:
+    """The file as normalised lines plus how to write them back."""
+    try:
+        text = before.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PatchError(f"{path}: editing requires UTF-8 text") from exc
+    if "\x00" in text:
+        raise PatchError(f"{path}: binary/NUL content is not editable")
+    eol = "\r\n" if "\r\n" in text else "\n"
+    normalized = text.replace("\r\n", "\n")
+    if "\r" in normalized or (eol == "\r\n" and "\n" in text.replace("\r\n", "")):
+        raise PatchError(f"{path}: mixed or lone-CR line endings are not supported")
+    final_newline = not text or text.endswith("\n")
+    original = normalized.split("\n") if text else []
+    if text.endswith("\n"):
+        original.pop()
+    return original, eol, final_newline
+
+
+def cited_bytes(before: bytes, op: Operation, run_id: str) -> bytes:
+    """Apply this file's reference hunks against ONE snapshot of its text.
+
+    Every range is resolved against the same `original`, so the caller never
+    compensates for line drift inside a batch and never has to order its
+    edits; the engine sorts them and refuses any overlap. A citation that this
+    run did not issue, or whose window no longer reads the same, is refused
+    outright — there is no fuzzy match and no partial write.
+    """
+    original, eol, final_newline = _framed(before, op.path)
+    joined = "\n".join(original)
+    starts: list[int] = []
+    run = 0
+    for line in original:
+        starts.append(run)
+        run += len(line) + 1
+
+    def _offset(line_no: int, col: int, which: str) -> int:
+        if line_no > len(original):
+            raise PatchError(
+                f"{op.path}: {which} line {line_no} is past the end of the file "
+                f"({len(original)} lines); reread the range")
+        line = original[line_no - 1]
+        if col > len(line):
+            raise PatchError(
+                f"{op.path}: {which} column {col} is past the end of line "
+                f"{line_no} ({len(line)} characters); reread the range")
+        return starts[line_no - 1] + col
+
+    resolved: list[tuple[int, int, str, Reference]] = []
+    for number, ref in enumerate(op.refs, 1):
+        record = citations.lookup(run_id, ref.sha)
+        if record is None:
+            raise PatchError(
+                f"{op.path} reference {number}: sha {ref.sha[:12]}… was never issued "
+                "by a read in this run; cite a digest a read handed you")
+        if record["path"] != op.path:
+            raise PatchError(
+                f"{op.path} reference {number}: that digest was issued for "
+                f"{record['path']!r}")
+        if ref.from_line < record["start_line"] or ref.to_line > record["end_line"]:
+            raise PatchError(
+                f"{op.path} reference {number}: lines {ref.from_line}-{ref.to_line} "
+                f"fall outside the cited window {record['start_line']}-"
+                f"{record['end_line']}; cite the window that contains them")
+        window = "\n".join(original[record["start_line"] - 1:record["end_line"]])
+        if not citations.matches(record, run_id, window):
+            raise PatchError(
+                f"{op.path} reference {number}: lines {record['start_line']}-"
+                f"{record['end_line']} changed since the digest was issued; "
+                "reread the range and cite the new digest")
+        start = _offset(ref.from_line, ref.from_col, "from")
+        end = _offset(ref.to_line, ref.to_col, "to")
+        if end < start:
+            raise PatchError(f"{op.path} reference {number}: end precedes start")
+        resolved.append((start, end, ref.new_text.replace("\r\n", "\n"), ref))
+    resolved.sort(key=lambda item: (item[0], item[1]))
+    cursor = 0
+    pieces: list[str] = []
+    for number, (start, end, new_text, _ref) in enumerate(resolved, 1):
+        if start < cursor:
+            raise PatchError(
+                f"{op.path} reference {number}: overlaps an earlier reference; "
+                "cite disjoint ranges")
+        pieces.append(joined[cursor:start])
+        pieces.append(new_text)
+        cursor = end
+    pieces.append(joined[cursor:])
+    result = "".join(pieces).split("\n")
+    return (eol.join(result) + (eol if result and final_newline else "")).encode("utf-8")
+
+
 def updated_bytes(before: bytes, op: Operation) -> bytes:
     try:
         text = before.decode("utf-8")
@@ -149,12 +335,14 @@ def updated_bytes(before: bytes, op: Operation) -> bytes:
         if not positions:
             raise PatchError(
                 f"{op.path} hunk {number}: stale (no exact match); "
-                "reread the current range with raw=true and copy it exactly"
+                "reread that range and cite its sha in references — do not "
+                "retype the original"
             )
         if len(positions) != 1:
             raise PatchError(
                 f"{op.path} hunk {number}: ambiguous (multiple exact matches); "
-                "add unchanged surrounding lines until the context is unique"
+                "cite the range you mean in references instead of widening "
+                "the copied context"
             )
         start = positions[0]
         if start < cursor:
@@ -220,7 +408,8 @@ def _snapshot(root_fd: int, name: str) -> Snapshot | None:
         return None
 
 
-def apply_code_patch(patch: str, root: Path) -> dict:
+def apply_code_patch(patch: str, root: Path, references=None,
+                     run_id: str = "") -> dict:
     """Preflight a patch, then use the existing direct-code mutation backend.
 
     Validation and matching failures are atomic for the complete batch: all
@@ -236,7 +425,16 @@ def apply_code_patch(patch: str, root: Path) -> dict:
     phase = "preflight"
     root_fd = None
     try:
-        ops = parse_patch(patch)
+        ops = (parse_patch(patch) if patch else ()) + parse_references(references)
+        if not ops:
+            raise PatchError("nothing to apply: pass a patch, references, or both")
+        seen: set[str] = set()
+        for op in ops:
+            if op.path in seen:
+                raise PatchError(f"Duplicate operation for {op.path!r}; combine its hunks")
+            seen.add(op.path)
+        if len(ops) > MAX_FILES:
+            raise PatchError(f"At most {MAX_FILES} files per patch")
         if not root.is_absolute() or not root.is_dir():
             raise PatchError("Require an existing injected absolute code root")
         root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -251,7 +449,12 @@ def apply_code_patch(patch: str, root: Path) -> dict:
             else:
                 if before is None:
                     raise PatchError(f"{op.path}: {op.kind} File requires an existing file")
-                after = updated_bytes(before.data, op) if op.kind == "Update" else None
+                if op.kind == "Update":
+                    after = updated_bytes(before.data, op)
+                elif op.kind == "Cite":
+                    after = cited_bytes(before.data, op, run_id)
+                else:
+                    after = None
             if after is not None and len(after) > MAX_FILE_BYTES:
                 raise PatchError(f"{op.path}: updated file exceeds 16 MiB")
             size += (len(before.data) if before else 0) + (len(after) if after else 0)

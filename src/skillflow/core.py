@@ -2688,6 +2688,10 @@ class SkillFlow:
                             step_tmp_dir=_step_tmp,
                             step_dir=_step_dir,
                             _smap=_smap,
+                            # Citations are scoped to the run that issued them:
+                            # a digest from another run is not a digest this
+                            # run may edit against.
+                            run_id=run_id,
                         )
                         # Legacy per-label dynamic read tools (`read_step_2`, …)
                         # that a host may have registered. Guarded on the private

@@ -22,6 +22,7 @@ import re
 from pathlib import Path
 
 from skillflow.source_visibility import iter_visible_source_files
+from skillflow import citations
 from skillflow.workspace import route_step_read_dir
 
 
@@ -82,12 +83,28 @@ def _page_lines(text: str, start_line: int = 0, end_line: int | None = None, raw
     if kept < len(numbered):
         numbered = numbered[:kept]
         end = start + kept
+    # Byte offsets and the exact served text, for the citation the caller will
+    # quote back instead of copying this window into a patch. `plain` is built
+    # the way skillflow.strict_patch frames a file, so a citation addresses the
+    # same lines the editor will resolve. When the two framings disagree — an
+    # exotic line separator that str.splitlines() breaks on and "\n" does not —
+    # the window is served UNCITABLE rather than citable against text the reader
+    # never saw.
+    keepends = text.splitlines(keepends=True)
+    start_byte = len("".join(keepends[:start]).encode("utf-8"))
+    end_byte = start_byte + len("".join(keepends[start:end]).encode("utf-8"))
+    plain = text.replace("\r\n", "\n").split("\n") if text else []
+    if text.endswith("\n"):
+        plain.pop()
     return {
         "content": ("" if raw else "\n").join(numbered),
         "start_line": start,
         "returned_lines": len(numbered),
         "total_lines": total,
         "truncated": end < total,
+        "_served": ("\n".join(plain[start:end]) if len(plain) == total else None),
+        "_start_byte": start_byte,
+        "_end_byte": end_byte,
     }
 
 
@@ -288,7 +305,11 @@ def generate_read_tool_schemas(
                 "and preserves original indentation and line endings. If "
                 "`path` does not exist at that location but its basename is "
                 "unique across layers, that file is served instead and "
-                "`resolved_from` names it."),
+                "`resolved_from` names it. Every window comes back with a "
+                "`citation` — the path, the 1-based inclusive line range, the "
+                "byte offsets and a `sha` this engine issued for exactly that "
+                "text. Quote that sha to apply_patch's `references` to edit "
+                "inside this window without copying any of it back."),
             "parameters": {
                 "path": {"type": "string", "required": True,
                          "description": "Repo-relative file path (e.g. 'core/db.py')."},
@@ -569,8 +590,35 @@ def _deleted_this_step(step_tmp_dir: str) -> set:
     return out
 
 
+def _attach_citation(out: dict, run_id: str) -> dict:
+    """Move the private paging extras into the citation the caller may quote.
+
+    The digest is computed HERE, over the text this call is about to send, and
+    is recorded per run. A caller holding the original text still cannot
+    produce an acceptable one (the key is process-private and never emitted),
+    which is what keeps reference mode from degrading into editing coordinates
+    the agent never actually read.
+    """
+    served = out.pop("_served", None)
+    start_byte = out.pop("_start_byte", 0)
+    end_byte = out.pop("_end_byte", 0)
+    if served is None or not out.get("returned_lines"):
+        return out
+    out["citation"] = citations.issue(
+        run_id,
+        path=out.get("path", ""),
+        source=out.get("source", ""),
+        start_line=out["start_line"] + 1,
+        end_line=out["start_line"] + out["returned_lines"],
+        start_byte=start_byte,
+        end_byte=end_byte,
+        text=served,
+    )
+    return out
+
+
 def unified_read(smap, path, source=None, start_line=0, end_line=None,
-                 deleted=None, raw=False):
+                 deleted=None, raw=False, run_id=""):
     layers, err = _layers_for(smap, source)
     if err:
         return err
@@ -591,7 +639,7 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
             out = _page_lines(text, start_line, end_line, raw=raw)
             out["source"] = tag
             out["path"] = path
-            return out
+            return _attach_citation(out, run_id)
 
     # ── Forgiving resolution. A live agent glued a repo-ledger path onto a
     # step source — read(path="novel/chapters/ch0003/chapter_draft.md",
@@ -631,7 +679,7 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
         out["source"] = tag
         out["path"] = rel
         out["resolved_from"] = path  # the requested path was wrong; this is where it really lives
-        return out
+        return _attach_citation(out, run_id)
     if matches:
         return {"error": f"File not found: {path}",
                 "candidates": [{"path": rel, "source": tag}
@@ -776,7 +824,7 @@ def make_read_tool_fns(specs: list[dict], workspace_root: str = "",
                        current_config: str = "", code_root: str = "",
                        loop_context: dict | None = None,
                        step_tmp_dir: str = "", step_dir: str = "",
-                       _smap: dict | None = None,
+                       _smap: dict | None = None, run_id: str = "",
                        ) -> dict[str, callable]:
     """Build the unified read/search/list callables for a step.
 
@@ -794,7 +842,8 @@ def make_read_tool_fns(specs: list[dict], workspace_root: str = "",
 
     def _read(path: str, source: str = None, start_line: int = 0,
               end_line: int | None = None, raw: bool = False) -> dict:
-        return unified_read(smap, path, source, start_line, end_line, deleted, raw=raw)
+        return unified_read(smap, path, source, start_line, end_line, deleted,
+                            raw=raw, run_id=run_id)
 
     def _search(pattern: str, source: str = None, glob: str = None,
                 context_lines: int = 0, files_with_matches: bool = False,

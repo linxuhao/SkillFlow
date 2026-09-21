@@ -200,6 +200,11 @@ An artifact `edit` success updates only the staged candidate; reread it with
 `source='self'` and `raw=true` after a mismatch. A direct-code edit or granted
 `apply_patch` changes the uncommitted run worktree immediately, while validation,
 commit, review, and delivery are still pending. `old_str` and patch context are
-strict and exact. If context is stale or not found, reread with `raw=true` and
-copy the current text exactly. If it is ambiguous, add unchanged surrounding
-lines until the match is unique. Never ask for whitespace-fuzzy replacement.
+strict and exact, which is why `apply_patch` also accepts `references`: every
+`read` returns a `citation` whose `sha` the engine issued over the text it
+just sent you, and a reference hunk quotes that sha and supplies only the new
+text. Prefer it for edits to existing files — the engine does the copying, so
+"is my copy of this file still accurate?" stops being a question you have to
+answer by reading again. If a V4A hunk comes back stale or ambiguous, reread
+that range and cite its sha rather than retyping or widening the context.
+Never ask for whitespace-fuzzy replacement.

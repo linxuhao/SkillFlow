@@ -41,15 +41,24 @@ def test_strict_matching(old, reason):
         updated_bytes(old, op)
 
 
-def test_failure_guidance_distinguishes_stale_from_ambiguous_context():
+def test_failure_guidance_sends_the_caller_to_a_citation_not_to_more_copying():
+    """Both dead ends used to be answered with "copy more of the original".
+
+    That is the instruction that produced 13 reads and 0 writes: a caller told
+    to widen its copied context must first go and re-read enough of the file to
+    widen it. Reference mode is the answer to both failures, so the guidance
+    has to point there — an agent does what the message tells it to do.
+    """
     (op,) = parse_patch(patch("*** Update File: x\n@@\n-x\n+y"))
     with pytest.raises(PatchError) as stale:
         updated_bytes(b"z\n", op)
-    assert "raw=true" in str(stale.value) and "copy it exactly" in str(stale.value)
+    assert "cite its sha in references" in str(stale.value)
+    assert "copy it exactly" not in str(stale.value)
 
     with pytest.raises(PatchError) as ambiguous:
         updated_bytes(b"x\nx\n", op)
-    assert "add unchanged surrounding lines" in str(ambiguous.value)
+    assert "cite the range you mean in references" in str(ambiguous.value)
+    assert "add unchanged surrounding lines" not in str(ambiguous.value)
     assert "shrink" not in str(ambiguous.value)
 
 

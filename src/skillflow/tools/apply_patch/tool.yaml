@@ -2,14 +2,34 @@ name: apply_patch
 output:
   target: code
 description: |
-  Apply a strict multi-file text patch directly in this run's code worktree.
-  Read current text first. Updates require exactly one matching context and
-  ordered, non-overlapping hunks against the ORIGINAL file; no fuzzy matching.
-  All paths and hunks are checked before any write. On an I/O failure, inspect
-  partial/written/deleted and reread those files; do not blindly replay the batch.
-  Validation and review still gate delivery. Repo-relative paths only; no .git,
-  symlinks, traversal or caller-selected roots. Maximum 128 files / 2 MiB patch,
-  16 MiB per file and 64 MiB combined preflight content.
+  Apply strict text edits directly in this run's code worktree. Two ways to
+  address an edit; use either, or both in one call. Everything is checked
+  before anything is written.
+
+  REFERENCE MODE (`references`) — PREFER THIS FOR EXISTING FILES.
+  Every `read` hands back a `citation`: {path, start_line, end_line, start_byte,
+  end_byte, sha}. The sha is issued by the engine over exactly the text that
+  read sent you. Quote it back and supply ONLY the new text; the engine does
+  the copying. You never retype the original, so you never have to wonder
+  whether your copy of it is still accurate.
+    references: [{"file": "src/a.py", "sha": "<the sha that read returned>",
+                  "from_line": 120, "from_col": 0,
+                  "to_line": 123, "to_col": 18,
+                  "new_text": "    return 2"}]
+  Lines are 1-based and must lie inside the cited window; columns are 0-based
+  character offsets and `to_col` is exclusive, so (L,0)..(M,len(line M)) means
+  "replace lines L..M" and from == to inserts at a point. Order does not
+  matter and you never compensate for line drift: every range in one call is
+  resolved against the same snapshot and the engine applies them. Ranges must
+  not overlap. Change one word by citing one line — a reference is a hunk, not
+  a file rewrite.
+  A sha this run's `read` did not issue is refused, and so is a cited window
+  whose text has changed since: reread the range and cite the new sha. There
+  is no fuzzy matching and no partial write.
+
+  V4A MODE (`patch`) — for Add and Delete, and for edits you would rather
+  express as a diff. Updates match exactly one occurrence of their context
+  against the ORIGINAL file, with ordered, non-overlapping hunks.
   Format (literal prefixes, bare @@ only):
   *** Begin Patch
   *** Update File: src/example.py
@@ -22,16 +42,32 @@ description: |
   *** Delete File: obsolete.txt
   *** End Patch
   Each hunk line starts with space (unchanged), - (remove) or + (add).
-  Include unique unchanged context for insertion into a nonempty file. Add refuses
-  existing files; Delete requires an existing regular file and takes no body.
-  If update context is stale or not found, reread the current range with raw=true
-  and copy it exactly. If context is ambiguous, add unchanged surrounding lines
-  until the match is unique. Never shrink an ambiguous context.
-  UTF-8 updates preserve LF/CRLF and the existing EOF newline; Add uses LF with a
-  final newline (no content lines creates an empty file). Mixed line endings,
-  move/rename, numbered/anchored @@ and EOF markers are unsupported and refused.
+  Include unique unchanged context for insertion into a nonempty file. Add
+  refuses existing files; Delete requires an existing regular file and takes
+  no body. If a hunk comes back stale or ambiguous, switch that edit to
+  reference mode — read the range, cite its sha — rather than widening the
+  copied context.
+
+  Common to both: repo-relative paths only; no .git, symlinks, traversal or
+  caller-selected roots. A file may appear in `patch` or in `references`, not
+  both. Maximum 128 files, 1024 hunks or references per file, 2 MiB of patch
+  text and 2 MiB of references, 16 MiB per file and 64 MiB combined preflight
+  content. Validation and review still gate delivery. On an I/O failure,
+  inspect partial/written/deleted and reread those files; do not blindly
+  replay the batch. UTF-8 updates preserve LF/CRLF and the existing EOF
+  newline; Add uses LF with a final newline (no content lines creates an empty
+  file). Mixed line endings, move/rename, numbered/anchored @@ and EOF markers
+  are unsupported and refused.
 parameters:
   patch:
     type: string
-    required: true
-    description: Complete Begin/End Patch text containing file operations and exact, unique hunks.
+    required: false
+    description: Begin/End Patch text for Add/Delete operations and diff-shaped updates. Omit when every edit is a reference.
+  references:
+    type: array
+    required: false
+    description: >
+      Reference hunks. Each is
+      {file, sha, from_line, from_col, to_line, to_col, new_text} and carries
+      no original text — the sha, issued by this run's read, is what identifies
+      it. Any order; the engine resolves them against one snapshot.
