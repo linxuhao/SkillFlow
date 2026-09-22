@@ -115,12 +115,28 @@ def test_reference_mode_runs_end_to_end_through_the_engine(tmp_path):
     assert (root / 'original.py').read_text() == 'answer = 11111\nother = 2\nlast = 33\n'
     # Nothing of the original was retyped: the call carried two new fragments.
 
-    stale = call(sf, rid, claim, 'apply_patch', references=[
+    # A third edit, from the SAME citation, after two writes have already
+    # landed and moved line 1's length. This used to be refused as stale, and
+    # the refusal was the defect: it made every successful write cost a reread
+    # before the next one. The coordinates are the ones the read issued and
+    # the engine translates them through its own journal.
+    third = call(sf, rid, claim, 'apply_patch', references=[
         {'file': 'original.py', 'sha': cite['sha'], 'from_line': 2,
          'from_col': 8, 'to_line': 2, 'to_col': 9, 'new_text': '22'}])
-    assert stale['applied'] is False
-    assert 'changed since the digest was issued' in stale['error']
-    assert (root / 'original.py').read_text() == 'answer = 11111\nother = 2\nlast = 33\n'
+    assert third['applied'] is True, third
+    assert (root / 'original.py').read_text() == 'answer = 11111\nother = 22\nlast = 33\n'
+    assert third['replaced'] == [{'file': 'original.py', 'from_line': 2,
+                                  'to_line': 2, 'replaced_chars': 1,
+                                  'replaced': '2'}]
+
+    # The opposite pole, through the same engine path: a range this run
+    # already replaced is still refused, and nothing is written.
+    gone = call(sf, rid, claim, 'apply_patch', references=[
+        {'file': 'original.py', 'sha': cite['sha'], 'from_line': 2,
+         'from_col': 8, 'to_line': 2, 'to_col': 9, 'new_text': '222'}])
+    assert gone['applied'] is False
+    assert 'changed since the digest was issued' in gone['error']
+    assert (root / 'original.py').read_text() == 'answer = 11111\nother = 22\nlast = 33\n'
 
 
 def test_native_apply_patch_multiline_is_strict_and_readable(tmp_path):
