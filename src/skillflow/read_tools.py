@@ -22,7 +22,7 @@ import re
 from pathlib import Path
 
 from skillflow.source_visibility import iter_visible_source_files
-from skillflow import citations
+from skillflow import citations, read_accounting
 from skillflow.workspace import route_step_read_dir
 
 
@@ -72,6 +72,7 @@ def _page_lines(text: str, start_line: int = 0, end_line: int | None = None, raw
     selected = lines[start:end]
     numbered = selected if raw else [f"{start + i + 1}\t{ln}" for i, ln in enumerate(selected)]
     # Cut to whole lines under the character cap (always keep at least one).
+    wanted = len(numbered)
     budget = _MAX_READ_CHARS
     kept = 0
     for ln in numbered:
@@ -96,16 +97,113 @@ def _page_lines(text: str, start_line: int = 0, end_line: int | None = None, raw
     plain = text.replace("\r\n", "\n").split("\n") if text else []
     if text.endswith("\n"):
         plain.pop()
-    return {
+    citable = len(plain) == total
+    out = {
         "content": ("" if raw else "\n").join(numbered),
         "start_line": start,
         "returned_lines": len(numbered),
         "total_lines": total,
         "truncated": end < total,
-        "_served": ("\n".join(plain[start:end]) if len(plain) == total else None),
+        "_served": ("\n".join(plain[start:end]) if citable else None),
         "_start_byte": start_byte,
         "_end_byte": end_byte,
+        "_start_char": (sum(len(ln) + 1 for ln in plain[:start])
+                        if citable else None),
+        "_file_sha": (citations.text_sha("\n".join(plain)) if citable else ""),
     }
+    if out["truncated"]:
+        # What it costs to page the REST, said before the caller has spent a
+        # turn finding out. A truncated window used to report only that there
+        # was more; a round then discovered the price one page at a time, which
+        # is how one 33 KB file came to be read 12 times in 100 turns.
+        out["truncated_by"] = "characters" if kept < wanted else "lines"
+        out["next_start_line"] = end
+        out["pages_remaining"] = _pages(text, end, raw=raw)
+        out["hint"] = (
+            f"{total - end} more lines; about {out['pages_remaining']} more "
+            f"read(s) at this window size. read(outline=true) maps the whole "
+            f"file's definitions in one call, and search finds a region "
+            f"without paging to it.")
+    return out
+
+
+def _pages(text: str, start: int = 0, raw: bool = False) -> int:
+    """Windows this reader would need to serve lines ``start``..end.
+
+    Counted by walking the same budget `_page_lines` spends, so the number is
+    the reader's own arithmetic rather than a second estimate of it that can
+    drift away from the first.
+    """
+    lines = text.splitlines()
+    total = len(lines)
+    pages = 0
+    at = min(max(start, 0), total)
+    while at < total:
+        budget = _MAX_READ_CHARS
+        kept = 0
+        for i in range(at, min(at + _MAX_READ_LINES, total)):
+            cost = len(lines[i]) if raw else len(f"{i + 1}\t{lines[i]}") + 1
+            if kept and budget - cost < 0:
+                break
+            budget -= cost
+            kept += 1
+        at += max(kept, 1)
+        pages += 1
+    return pages
+
+
+def outline(text: str) -> dict:
+    """Every definition in a file and the lines it spans, in ONE call.
+
+    This is the answer to "a file over the read window costs a turn per page".
+    Learning WHERE things are stops depending on the file's size: one call,
+    whatever the size, and then a read of the range that matters. Python goes
+    through `ast` so nesting and decorators are exact; anything else through a
+    line scan for the shapes that open a block, which is approximate and says
+    so in `method`.
+    """
+    lines = text.splitlines()
+    total = len(lines)
+    try:
+        import ast
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        tree = None
+    items: list[dict] = []
+    if tree is not None:
+        def _walk(node, depth):
+            for child in ast.iter_child_nodes(node):
+                kinds = {ast.FunctionDef: "def", ast.AsyncFunctionDef: "async def",
+                         ast.ClassDef: "class"}
+                kind = kinds.get(type(child))
+                if kind:
+                    items.append({
+                        "kind": kind, "name": child.name, "depth": depth,
+                        "start_line": child.lineno,
+                        "end_line": getattr(child, "end_lineno", child.lineno),
+                    })
+                    _walk(child, depth + 1)
+        _walk(tree, 0)
+        method = "python-ast"
+    else:
+        pattern = re.compile(
+            r"^(?P<indent>\s*)(?:export\s+|public\s+|private\s+|static\s+|async\s+)*"
+            r"(?P<kind>def|class|func|function|fn|struct|impl|interface|type)\s+"
+            r"(?P<name>[A-Za-z_][\w.]*)")
+        for number, line in enumerate(lines, 1):
+            hit = pattern.match(line)
+            if hit:
+                items.append({"kind": hit.group("kind"), "name": hit.group("name"),
+                              "depth": len(hit.group("indent")) // 4,
+                              "start_line": number, "end_line": number})
+        for index, item in enumerate(items):
+            following = next((o for o in items[index + 1:]
+                              if o["depth"] <= item["depth"]), None)
+            item["end_line"] = (following["start_line"] - 1) if following else total
+        method = "line-scan"
+    return {"outline": items, "outline_method": method, "total_lines": total,
+            "definitions": len(items),
+            "pages_if_read_whole": _pages(text, 0)}
 
 
 # ── Path resolution ──────────────────────────────────────────────────
@@ -309,7 +407,14 @@ def generate_read_tool_schemas(
                 "`citation` — the path, the 1-based inclusive line range, the "
                 "byte offsets and a `sha` this engine issued for exactly that "
                 "text. Quote that sha to apply_patch's `references` to edit "
-                "inside this window without copying any of it back."),
+                "inside this window without copying any of it back. A "
+                "citation's line and column numbers stay valid AFTER your own "
+                "writes land: the engine translates them through the edits it "
+                "published, so do not reread a file just because you edited "
+                "it. A truncated window also reports `pages_remaining` and "
+                "`next_start_line`, so the cost of seeing the rest is known "
+                "before you spend it. `repaid: true` means this window was "
+                "already served to this run."),
             "parameters": {
                 "path": {"type": "string", "required": True,
                          "description": "Repo-relative file path (e.g. 'core/db.py')."},
@@ -320,6 +425,15 @@ def generate_read_tool_schemas(
                                "description": "0-based first line (optional)"},
                 "end_line": {"type": "integer",
                              "description": "Exclusive end line (optional)"},
+                "outline": {
+                    "type": "boolean",
+                    "description": (
+                        "Return every definition in the file with the lines it "
+                        "spans, in ONE call whatever the file's size, instead "
+                        "of a window of text. Use it first on a file larger "
+                        "than the read window, then read only the range you "
+                        "need."),
+                },
             },
         },
         {
@@ -360,7 +474,10 @@ def generate_read_tool_schemas(
                 "declared source. Returns a JSON string "
                 "{\"files\": [{name, size, source}, ...], \"truncated\": bool}, "
                 "capped at 1000 entries; blocked dirs (.git, node_modules, "
-                "__pycache__, ...) are omitted without note."),
+                "__pycache__, ...) are omitted without note. A file bigger "
+                "than one read window also carries `read_pages` — what reading "
+                "all of it would cost in calls — so you can pick "
+                "read(outline=true) or search before spending them."),
             "parameters": {
                 "source": src_param,
                 "glob": {"type": "string",
@@ -602,23 +719,55 @@ def _attach_citation(out: dict, run_id: str) -> dict:
     served = out.pop("_served", None)
     start_byte = out.pop("_start_byte", 0)
     end_byte = out.pop("_end_byte", 0)
+    start_char = out.pop("_start_char", None)
+    file_sha = out.pop("_file_sha", "")
     if served is None or not out.get("returned_lines"):
         return out
+    first_line = out["start_line"] + 1
+    last_line = out["start_line"] + out["returned_lines"]
     out["citation"] = citations.issue(
         run_id,
         path=out.get("path", ""),
         source=out.get("source", ""),
-        start_line=out["start_line"] + 1,
-        end_line=out["start_line"] + out["returned_lines"],
+        start_line=first_line,
+        end_line=last_line,
         start_byte=start_byte,
         end_byte=end_byte,
         text=served,
+        start_char=start_char,
+        file_sha=file_sha,
     )
+    # Charge the run for the window, and tell it when the window is one it has
+    # already been served. Reporting it HERE, in the result of the call that
+    # spent the turn, is the difference between a number somebody can compute
+    # from the trace afterwards and a number the round itself can act on.
+    paid = read_accounting.record(
+        run_id, path=out.get("path", ""), source=out.get("source", ""),
+        start_line=first_line, end_line=last_line)
+    if paid["repaid"]:
+        out["repaid"] = True
+        out["already_served"] = paid["previously_served"]
+        out["lines_already_served"] = paid["lines_already_served"]
+        out["repaid_note"] = (
+            f"{paid['lines_already_served']} of these {paid['lines']} lines "
+            f"were already served to this run for {out.get('path', '')}. If "
+            "your coordinates went stale after a write, they did not: cite the "
+            "sha you already hold with the line numbers you already read.")
+    return out
+
+
+def _outline_result(text, tag, path, run_id, requested=None):
+    out = outline(text)
+    out["source"] = tag
+    out["path"] = path
+    if requested is not None:
+        out["resolved_from"] = requested
+    read_accounting.record(run_id, path=path, source=tag, spans_lines=False)
     return out
 
 
 def unified_read(smap, path, source=None, start_line=0, end_line=None,
-                 deleted=None, raw=False, run_id=""):
+                 deleted=None, raw=False, run_id="", outline=False):
     layers, err = _layers_for(smap, source)
     if err:
         return err
@@ -636,6 +785,8 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
                     text = stream.read()
             except Exception as e:
                 return {"error": str(e)}
+            if outline:
+                return _outline_result(text, tag, path, run_id)
             out = _page_lines(text, start_line, end_line, raw=raw)
             out["source"] = tag
             out["path"] = path
@@ -675,6 +826,8 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
                 text = stream.read()
         except Exception as e:
             return {"error": str(e)}
+        if outline:
+            return _outline_result(text, tag, rel, run_id, requested=path)
         out = _page_lines(text, start_line, end_line, raw=raw)
         out["source"] = tag
         out["path"] = rel
@@ -810,7 +963,18 @@ def unified_list(smap, source=None, glob=None):
             if rel in seen:
                 continue  # shadowing layer already listed it
             seen.add(rel)
-            entries.append({"name": rel, "size": f.stat().st_size, "source": tag})
+            size = f.stat().st_size
+            entry = {"name": rel, "size": size, "source": tag}
+            # What this file will cost to read, BEFORE the first read of it.
+            # A round that learns the price only by paying it cannot choose
+            # outline or search instead, which is how a 33 KB file was read
+            # twelve times in a 100-turn budget. Estimated from size for
+            # anything over the window, so listing a tree stays one stat per
+            # file rather than one full read per file.
+            if size > _MAX_READ_CHARS:
+                entry["read_pages"] = max(2, -(-size // _MAX_READ_CHARS))
+                entry["over_read_window"] = True
+            entries.append(entry)
             if len(entries) >= _MAX_LIST_ENTRIES:
                 truncated = True
                 break
@@ -841,9 +1005,10 @@ def make_read_tool_fns(specs: list[dict], workspace_root: str = "",
     deleted = _deleted_this_step(step_tmp_dir)
 
     def _read(path: str, source: str = None, start_line: int = 0,
-              end_line: int | None = None, raw: bool = False) -> dict:
+              end_line: int | None = None, raw: bool = False,
+              outline: bool = False) -> dict:
         return unified_read(smap, path, source, start_line, end_line, deleted,
-                            raw=raw, run_id=run_id)
+                            raw=raw, run_id=run_id, outline=outline)
 
     def _search(pattern: str, source: str = None, glob: str = None,
                 context_lines: int = 0, files_with_matches: bool = False,
