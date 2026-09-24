@@ -1,0 +1,1228 @@
+TREE_HEAD= DIRTY_PATHS=0
+5ab4c889712bcd0db965bf969b0cbe22ab6fc985601fba8b575694d0233a22d6  src/skillflow/strict_patch.py
+284ebb516541b1940e0ba0ba82eb16611c01dce83138bd438d86777d25478f6d  src/skillflow/citations.py
+ae3f970353da500ad552fe63325c7b839eb9f67cc8a318df940c0c12e65714b2  src/skillflow/read_tools.py
+bedc01e2a8d4d2354c69b7197e7b034dbf433b2844691259bcfbaa86b50610bc  src/skillflow/tools/apply_patch/tool.yaml
+IMPORT_PROOF /home/linxuhao/coords-r4-scratch/mut_collapse/src/skillflow/__init__.py
+PYTEST 9.1.1 ASYNCIO 1.4.0
+..................s......ss............................................. [  4%]
+........................................................................ [  9%]
+........................................................................ [ 13%]
+........................................................................ [ 18%]
+........................................................................ [ 22%]
+........................................................................ [ 27%]
+........................................................................ [ 32%]
+........................................................................ [ 36%]
+........................................................................ [ 41%]
+........................................................................ [ 45%]
+........................................................................ [ 50%]
+........................................................................ [ 55%]
+........................................................................ [ 59%]
+............................................FFF.FF..FF.FF............... [ 64%]
+.....F..F............F.....F..............F...F.....F........F.......... [ 68%]
+....F.F....F........F.....F.......................F......F...........F.. [ 73%]
+.......F........F.........................F.......F.....F..FF.......F.F. [ 78%]
+.FF....FF.......FFF.F....F..FF.....................FF....FF............. [ 82%]
+.FF..................................................................... [ 87%]
+........................................................................ [ 91%]
+........................................................................ [ 96%]
+........................................................                 [100%]
+=================================== FAILURES ===================================
+_ test_H1_a_span_on_the_shown_line_after_v4a_inserted_an_identical_line_above __
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_H1_a_span_on_the_shown_li0')
+
+    def test_H1_a_span_on_the_shown_line_after_v4a_inserted_an_identical_line_above(root):
+        """probe4.py H1."""
+        put(root, b"a\nx\nb\n")
+        w = rd(root, 0, 3)["citation"]["sha"]
+        sx = span(root, w, 2, 0, 2, 1)
+        assert own(root, ap(root, patch=v4a(" a\n+x\n x\n b\n"))) == b"a\nx\nx\nb\n"
+        res = ap(root, [{"file": REL, "sha": sx, "new_text": "Y"}])
+        assert res["applied"] is True, res
+>       assert (root / REL).read_bytes() == b"a\nx\nY\nb\n"
+E       AssertionError: assert b'a\nY\nx\nb\n' == b'a\nx\nY\nb\n'
+E         
+E         At index 2 diff: b'Y' != b'x'
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:123: AssertionError
+_____ test_H2_a_sha_only_window_on_the_shown_line_after_the_same_insertion _____
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_H2_a_sha_only_window_on_t0')
+
+    def test_H2_a_sha_only_window_on_the_shown_line_after_the_same_insertion(root):
+        """probe4.py H2."""
+        put(root, b"a\nx\nb\n")
+        wx = rd(root, 1, 2)["citation"]["sha"]
+        own(root, ap(root, patch=v4a(" a\n+x\n x\n b\n")))
+        res = ap(root, [{"file": REL, "sha": wx, "new_text": "Y"}])
+        assert res["applied"] is True, res
+>       assert (root / REL).read_bytes() == b"a\nx\nY\nb\n"
+E       AssertionError: assert b'a\nY\nx\nb\n' == b'a\nx\nY\nb\n'
+E         
+E         At index 2 diff: b'Y' != b'x'
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:133: AssertionError
+__________ test_H3_a_point_on_this_run_s_insertion_offset_is_refused ___________
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_H3_a_point_on_this_run_s_0')
+
+    def test_H3_a_point_on_this_run_s_insertion_offset_is_refused(root):
+        """probe4.py H3, intended bytes retracted by the goal's rev 5: the point
+        2:0 was previewed before blank line 2, and the run's V4A then inserted a
+        blank line exactly there. Before or after that line is a guess."""
+        put(root, b"a\n\nb\n")
+        w = rd(root, 0, 3)["citation"]["sha"]
+        ins = span(root, w, 2, 0, 2, 0)
+        before = own(root, ap(root, patch=v4a(" a\n+\n \n b\n")))
+        assert before == b"a\n\n\nb\n"
+        res = ap(root, [{"file": REL, "sha": ins, "new_text": "# note\n"}])
+>       refused(root, res, before, point(2, 0))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:146: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_H3_a_point_on_this_run_s_0')
+res = {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+before = b'a\n\n\nb\n'
+error = 'apply_patch preflight: f.py reference 1: span 2:0..2:0 is an insertion point and an earlier edit in this run inserted... it meant cannot be told; reread the range and resend the reference with the new digest to be shown where it lands now'
+
+    def refused(root, res, before, error):
+>       assert res["applied"] is False, res
+E       AssertionError: {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+E       assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:106: AssertionError
+_ test_H5_explicit_lines_on_the_shown_line_after_v4a_inserted_an_identical_line_above _
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_H5_explicit_lines_on_the_0')
+
+    def test_H5_explicit_lines_on_the_shown_line_after_v4a_inserted_an_identical_line_above(root):
+        """probe5.py H5."""
+        put(root, b"a\nx\nb\n")
+        wx = rd(root, 1, 2)["citation"]["sha"]
+        assert own(root, ap(root, patch=v4a(" a\n+x\n x\n b\n"))) == b"a\nx\nx\nb\n"
+        res = ap(root, [{"file": REL, "sha": wx, "from_line": 2, "to_line": 2,
+                         "new_text": "Y"}])
+        assert res["applied"] is True, res
+>       assert (root / REL).read_bytes() == b"a\nx\nY\nb\n"
+E       AssertionError: assert b'a\nY\nx\nb\n' == b'a\nx\nY\nb\n'
+E         
+E         At index 2 diff: b'Y' != b'x'
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:168: AssertionError
+_________ test_H6_a_window_on_a_line_this_run_s_v4a_deleted_is_refused _________
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_H6_a_window_on_a_line_thi0')
+
+    def test_H6_a_window_on_a_line_this_run_s_v4a_deleted_is_refused(root):
+        """probe5.py H6. The hunk deletes line 2 and keeps line 3."""
+        put(root, b"a\nx\nx\nb\n")
+        w2 = rd(root, 1, 2)["citation"]["sha"]
+        before = own(root, ap(root, patch=v4a(" a\n-x\n x\n b\n")))
+        assert before == b"a\nx\nb\n"
+        res = ap(root, [{"file": REL, "sha": w2, "from_line": 2, "to_line": 2,
+                         "new_text": "Y"}])
+>       refused(root, res, before, removed(2, 2))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:179: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_H6_a_window_on_a_line_thi0')
+res = {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+before = b'a\nx\nb\n'
+error = 'apply_patch preflight: f.py reference 1: lines 2-2 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest'
+
+    def refused(root, res, before, error):
+>       assert res["applied"] is False, res
+E       AssertionError: {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+E       assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:106: AssertionError
+_ test_C1_a_window_over_a_blank_line_this_run_s_v4a_replaced_is_refused[C1-def g():\n] _
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C1_a_window_over_a_blank_0')
+case = 'C1', new_text = 'def g():\n'
+
+    @pytest.mark.parametrize("case,new_text", [("C1", "def g():\n"), ("C1b", "def g():")])
+    def test_C1_a_window_over_a_blank_line_this_run_s_v4a_replaced_is_refused(root, case, new_text):
+        """probe8.py C1 and C1b. C1b used to write `def g():    x = 1`."""
+        put(root, C_SRC)
+        w = rd(root, 0, 3)["citation"]["sha"]
+        before = own(root, ap(root, patch=v4a(C_HUNK)))
+        assert before == b"def f():\n    x = 1\n    return 1\n"
+        res = ap(root, [{"file": REL, "sha": w, "from_line": 1, "to_line": 2,
+                         "new_text": new_text}])
+>       refused(root, res, before, removed(1, 2))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:237: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C1_a_window_over_a_blank_0')
+res = {'error': 'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: an earlier edit in ...d text inside them; reread the range and cite the new digest', 'phase': 'preflight', 'written': [], 'deleted': [], ...}
+before = b'def f():\n    x = 1\n    return 1\n'
+error = 'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest'
+
+    def refused(root, res, before, error):
+        assert res["applied"] is False, res
+>       assert res["error"] == error
+E       AssertionError: assert 'apply_patch ...he new digest' == 'apply_patch ...he new digest'
+E         
+E         Skipping 78 identical leading characters in diff, use -v to show
+E         - s issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest
+E         + s issued: an earlier edit in this run inserted text inside them; reread the range and cite the new digest
+
+tests/test_the_journal_records_what_the_applier_wrote.py:107: AssertionError
+_ test_C1_a_window_over_a_blank_line_this_run_s_v4a_replaced_is_refused[C1b-def g():] _
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C1_a_window_over_a_blank_1')
+case = 'C1b', new_text = 'def g():'
+
+    @pytest.mark.parametrize("case,new_text", [("C1", "def g():\n"), ("C1b", "def g():")])
+    def test_C1_a_window_over_a_blank_line_this_run_s_v4a_replaced_is_refused(root, case, new_text):
+        """probe8.py C1 and C1b. C1b used to write `def g():    x = 1`."""
+        put(root, C_SRC)
+        w = rd(root, 0, 3)["citation"]["sha"]
+        before = own(root, ap(root, patch=v4a(C_HUNK)))
+        assert before == b"def f():\n    x = 1\n    return 1\n"
+        res = ap(root, [{"file": REL, "sha": w, "from_line": 1, "to_line": 2,
+                         "new_text": new_text}])
+>       refused(root, res, before, removed(1, 2))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:237: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C1_a_window_over_a_blank_1')
+res = {'error': 'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: an earlier edit in ...d text inside them; reread the range and cite the new digest', 'phase': 'preflight', 'written': [], 'deleted': [], ...}
+before = b'def f():\n    x = 1\n    return 1\n'
+error = 'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest'
+
+    def refused(root, res, before, error):
+        assert res["applied"] is False, res
+>       assert res["error"] == error
+E       AssertionError: assert 'apply_patch ...he new digest' == 'apply_patch ...he new digest'
+E         
+E         Skipping 78 identical leading characters in diff, use -v to show
+E         - s issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest
+E         + s issued: an earlier edit in this run inserted text inside them; reread the range and cite the new digest
+
+tests/test_the_journal_records_what_the_applier_wrote.py:107: AssertionError
+______ test_C1s_a_sha_only_window_over_the_replaced_blank_line_is_refused ______
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C1s_a_sha_only_window_ove0')
+
+    def test_C1s_a_sha_only_window_over_the_replaced_blank_line_is_refused(root):
+        """probe8.py C1s."""
+        put(root, C_SRC)
+        w12 = rd(root, 0, 2)["citation"]["sha"]
+        before = own(root, ap(root, patch=v4a(C_HUNK)))
+        res = ap(root, [{"file": REL, "sha": w12, "new_text": "def g():\n"}])
+>       refused(root, res, before, removed(1, 2))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:258: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C1s_a_sha_only_window_ove0')
+res = {'error': 'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: an earlier edit in ...d text inside them; reread the range and cite the new digest', 'phase': 'preflight', 'written': [], 'deleted': [], ...}
+before = b'def f():\n    x = 1\n    return 1\n'
+error = 'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest'
+
+    def refused(root, res, before, error):
+        assert res["applied"] is False, res
+>       assert res["error"] == error
+E       AssertionError: assert 'apply_patch ...he new digest' == 'apply_patch ...he new digest'
+E         
+E         Skipping 78 identical leading characters in diff, use -v to show
+E         - s issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest
+E         + s issued: an earlier edit in this run inserted text inside them; reread the range and cite the new digest
+
+tests/test_the_journal_records_what_the_applier_wrote.py:107: AssertionError
+_______ test_C2_a_window_across_a_blank_line_this_run_deleted_is_refused _______
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C2_a_window_across_a_blan0')
+
+    def test_C2_a_window_across_a_blank_line_this_run_deleted_is_refused(root):
+        """probe8.py C2. It used to write `b\\nY\\nc\\n`, eating old line 4."""
+        put(root, b"b\n\n\n\nc\n")
+        w = rd(root, 0, 5)["citation"]["sha"]
+        before = own(root, ap(root, patch=v4a(" b\n \n-\n \n c\n")))
+        assert before == b"b\n\n\nc\n"
+        res = ap(root, [{"file": REL, "sha": w, "from_line": 2, "to_line": 3,
+                         "new_text": "Y"}])
+>       refused(root, res, before, removed(2, 3))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:269: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C2_a_window_across_a_blan0')
+res = {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+before = b'b\n\n\nc\n'
+error = 'apply_patch preflight: f.py reference 1: lines 2-3 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest'
+
+    def refused(root, res, before, error):
+>       assert res["applied"] is False, res
+E       AssertionError: {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+E       assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:106: AssertionError
+_______ test_a_window_on_a_blank_line_this_run_s_v4a_deleted_is_refused ________
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_window_on_a_blank_line_0')
+
+    def test_a_window_on_a_blank_line_this_run_s_v4a_deleted_is_refused(root):
+        """H6 with the identical lines blank: the deletion removes the blank
+        line's newline, which the window owns."""
+        put(root, b"a\n\n\nb\n")
+        w2 = rd(root, 1, 2)["citation"]["sha"]
+        before = own(root, ap(root, patch=v4a(" a\n-\n \n b\n")))
+        assert before == b"a\n\nb\n"
+        res = ap(root, [{"file": REL, "sha": w2, "from_line": 2, "to_line": 2,
+                         "new_text": "Y"}])
+>       refused(root, res, before, removed(2, 2))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:424: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_window_on_a_blank_line_0')
+res = {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+before = b'a\n\nb\n'
+error = 'apply_patch preflight: f.py reference 1: lines 2-2 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest'
+
+    def refused(root, res, before, error):
+>       assert res["applied"] is False, res
+E       AssertionError: {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+E       assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:106: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[one-insert0-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w0')
+shape = 'one', edit = ('insert', 0, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+                assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+            else:
+>               assert (applied, result) == (True, expected), (probe, error, result)
+E               AssertionError: (('window', 0), None, ['Y', 'x'])
+E               assert (True, ['Y', 'x']) == (True, ['x', 'Y'])
+E                 
+E                 At index 1 diff: ['Y', 'x'] != ['x', 'Y']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:638: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert0-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w13')
+shape = 'two', edit = ('insert', 0, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+                assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+            else:
+>               assert (applied, result) == (True, expected), (probe, error, result)
+E               AssertionError: (('window', 0), None, ['Y', 'x', 'x'])
+E               assert (True, ['Y', 'x', 'x']) == (True, ['x', 'Y', 'x'])
+E                 
+E                 At index 1 diff: ['Y', 'x', 'x'] != ['x', 'Y', 'x']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:638: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w19')
+shape = 'two', edit = ('insert', 1, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+                assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+            else:
+>               assert (applied, result) == (True, expected), (probe, error, result)
+E               AssertionError: (('window', 1), None, ['x', 'Y', 'x'])
+E               assert (True, ['x', 'Y', 'x']) == (True, ['x', 'x', 'Y'])
+E                 
+E                 At index 1 diff: ['x', 'Y', 'x'] != ['x', 'x', 'Y']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:638: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-delete0-None-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w34')
+shape = 'two', edit = ('delete', 0, None), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('window', 0), True, None, ['Y'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert0-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w38')
+shape = 'three', edit = ('insert', 0, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+                assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+            else:
+>               assert (applied, result) == (True, expected), (probe, error, result)
+E               AssertionError: (('window', 0), None, ['Y', 'x', 'x', 'x'])
+E               assert (True, ['Y', 'x', 'x', 'x']) == (True, ['x', 'Y', 'x', 'x'])
+E                 
+E                 At index 1 diff: ['Y', 'x', 'x', 'x'] != ['x', 'Y', 'x', 'x']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:638: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w44')
+shape = 'three', edit = ('insert', 1, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+                assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+            else:
+>               assert (applied, result) == (True, expected), (probe, error, result)
+E               AssertionError: (('window', 1), None, ['x', 'Y', 'x', 'x'])
+E               assert (True, ['x', 'Y', 'x', 'x']) == (True, ['x', 'x', 'Y', 'x'])
+E                 
+E                 At index 1 diff: ['x', 'Y', 'x', 'x'] != ['x', 'x', 'Y', 'x']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:638: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w53')
+shape = 'three', edit = ('insert', 2, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+                assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+            else:
+>               assert (applied, result) == (True, expected), (probe, error, result)
+E               AssertionError: (('window', 2), None, ['x', 'x', 'Y', 'x'])
+E               assert (True, ['x', 'x', 'Y', 'x']) == (True, ['x', 'x', 'x', 'Y'])
+E                 
+E                 At index 1 diff: ['x', 'x', 'Y', 'x'] != ['x', 'x', 'x', 'Y']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:638: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-delete0-None-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w68')
+shape = 'three', edit = ('delete', 0, None), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('window', 0), True, None, ['Y', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-delete1-None-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w70')
+shape = 'three', edit = ('delete', 1, None), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('window', 1), True, None, ['x', 'Y'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert0-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w75')
+shape = 'blank_between', edit = ('insert', 0, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+                assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+            else:
+>               assert (applied, result) == (True, expected), (probe, error, result)
+E               AssertionError: (('window', 0), None, ['Y', 'x', '', 'x'])
+E               assert (True, ['Y', 'x', '', 'x']) == (True, ['x', 'Y', '', 'x'])
+E                 
+E                 At index 1 diff: ['Y', 'x', '', 'x'] != ['x', 'Y', '', 'x']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:638: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w84')
+shape = 'blank_between', edit = ('insert', 1, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+                assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+            else:
+>               assert (applied, result) == (True, expected), (probe, error, result)
+E               AssertionError: (('window', 1), None, ['x', 'Y', '', 'x'])
+E               assert (True, ['x', 'Y', '', 'x']) == (True, ['x', '', 'Y', 'x'])
+E                 
+E                 At index 1 diff: ['x', 'Y', '', 'x'] != ['x', '', 'Y', 'x']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:638: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w90')
+shape = 'blank_between', edit = ('insert', 2, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+                assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+            else:
+>               assert (applied, result) == (True, expected), (probe, error, result)
+E               AssertionError: (('window', 2), None, ['x', '', 'Y', 'x'])
+E               assert (True, ['x', '', 'Y', 'x']) == (True, ['x', '', 'x', 'Y'])
+E                 
+E                 At index 1 diff: ['x', '', 'Y', 'x'] != ['x', '', 'x', 'Y']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:638: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert0-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w114')
+shape = 'two_blanks', edit = ('insert', 0, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+                assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+            else:
+>               assert (applied, result) == (True, expected), (probe, error, result)
+E               AssertionError: (('window', 0), None, ['Y', '', ''])
+E               assert (True, ['Y', '', '']) == (True, ['', 'Y', ''])
+E                 
+E                 At index 1 diff: ['Y', '', ''] != ['', 'Y', '']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:638: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w121')
+shape = 'two_blanks', edit = ('insert', 1, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+                assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+            else:
+>               assert (applied, result) == (True, expected), (probe, error, result)
+E               AssertionError: (('window', 1), None, ['', 'Y', ''])
+E               assert (True, ['', 'Y', '']) == (True, ['', '', 'Y'])
+E                 
+E                 At index 1 diff: ['', 'Y', ''] != ['', '', 'Y']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:638: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-delete0-None-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w133')
+shape = 'two_blanks', edit = ('delete', 0, None), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('window', 0), True, None, ['Y'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w143')
+shape = 'run_in_context', edit = ('insert', 1, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+                assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+            else:
+>               assert (applied, result) == (True, expected), (probe, error, result)
+E               AssertionError: (('window', 1), None, ['a', 'Y', 'x', 'x', 'b'])
+E               assert (True, ['a', ...x', 'x', 'b']) == (True, ['a', ...Y', 'x', 'b'])
+E                 
+E                 At index 1 diff: ['a', 'Y', 'x', 'x', 'b'] != ['a', 'x', 'Y', 'x', 'b']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:638: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w152')
+shape = 'run_in_context', edit = ('insert', 2, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+                assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+            else:
+>               assert (applied, result) == (True, expected), (probe, error, result)
+E               AssertionError: (('window', 2), None, ['a', 'x', 'Y', 'x', 'b'])
+E               assert (True, ['a', ...Y', 'x', 'b']) == (True, ['a', ...x', 'Y', 'b'])
+E                 
+E                 At index 1 diff: ['a', 'x', 'Y', 'x', 'b'] != ['a', 'x', 'x', 'Y', 'b']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:638: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-delete1-None-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w178')
+shape = 'run_in_context', edit = ('delete', 1, None), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('window', 1), True, None, ['a', 'Y', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[one-insert0-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh0')
+shape = 'one', edit = ('insert', 0, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(0, 0, 2)] == [(2, 2, 2)]
+E         
+E         At index 0 diff: (0, 0, 2) != (2, 2, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[two-insert0-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh6')
+shape = 'two', edit = ('insert', 0, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(0, 0, 2)] == [(4, 4, 2)]
+E         
+E         At index 0 diff: (0, 0, 2) != (4, 4, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[two-insert1-'x'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh9')
+shape = 'two', edit = ('insert', 1, 'x'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(2, 2, 2)] == [(4, 4, 2)]
+E         
+E         At index 0 diff: (2, 2, 2) != (4, 4, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[two-insert1-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh10')
+shape = 'two', edit = ('insert', 1, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(2, 2, 2)] == [(4, 4, 2)]
+E         
+E         At index 0 diff: (2, 2, 2) != (4, 4, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[two-delete0-None-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh18')
+shape = 'two', edit = ('delete', 0, None), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(0, 2, 0)] == [(2, 4, 0)]
+E         
+E         At index 0 diff: (0, 2, 0) != (2, 4, 0)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-insert0-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh20')
+shape = 'three', edit = ('insert', 0, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(0, 0, 2)] == [(6, 6, 2)]
+E         
+E         At index 0 diff: (0, 0, 2) != (6, 6, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-insert1-'x'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh23')
+shape = 'three', edit = ('insert', 1, 'x'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(2, 2, 2)] == [(6, 6, 2)]
+E         
+E         At index 0 diff: (2, 2, 2) != (6, 6, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-insert1-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh24')
+shape = 'three', edit = ('insert', 1, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(2, 2, 2)] == [(6, 6, 2)]
+E         
+E         At index 0 diff: (2, 2, 2) != (6, 6, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-insert2-'x'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh29')
+shape = 'three', edit = ('insert', 2, 'x'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(4, 4, 2)] == [(6, 6, 2)]
+E         
+E         At index 0 diff: (4, 4, 2) != (6, 6, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-insert2-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh30')
+shape = 'three', edit = ('insert', 2, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(4, 4, 2)] == [(6, 6, 2)]
+E         
+E         At index 0 diff: (4, 4, 2) != (6, 6, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-delete0-None-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh38')
+shape = 'three', edit = ('delete', 0, None), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(0, 2, 0)] == [(4, 6, 0)]
+E         
+E         At index 0 diff: (0, 2, 0) != (4, 6, 0)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-delete1-None-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh39')
+shape = 'three', edit = ('delete', 1, None), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(2, 4, 0)] == [(4, 6, 0)]
+E         
+E         At index 0 diff: (2, 4, 0) != (4, 6, 0)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-delete1-None-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh40')
+shape = 'three', edit = ('delete', 1, None), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(2, 4, 0)] == [(4, 6, 0)]
+E         
+E         At index 0 diff: (2, 4, 0) != (4, 6, 0)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[blank_between-insert0-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh42')
+shape = 'blank_between', edit = ('insert', 0, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(0, 0, 2)] == [(2, 2, 2)]
+E         
+E         At index 0 diff: (0, 0, 2) != (2, 2, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[blank_between-insert1-''-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh47')
+shape = 'blank_between', edit = ('insert', 1, ''), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(2, 2, 1)] == [(3, 3, 1)]
+E         
+E         At index 0 diff: (2, 2, 1) != (3, 3, 1)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[blank_between-insert2-'x'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh50')
+shape = 'blank_between', edit = ('insert', 2, 'x'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(3, 3, 2)] == [(5, 5, 2)]
+E         
+E         At index 0 diff: (3, 3, 2) != (5, 5, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[blank_between-insert2-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh51')
+shape = 'blank_between', edit = ('insert', 2, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(3, 3, 2)] == [(5, 5, 2)]
+E         
+E         At index 0 diff: (3, 3, 2) != (5, 5, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[run_in_context-insert1-'x'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh73')
+shape = 'run_in_context', edit = ('insert', 1, 'x'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(2, 2, 2)] == [(6, 6, 2)]
+E         
+E         At index 0 diff: (2, 2, 2) != (6, 6, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[run_in_context-insert1-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh74')
+shape = 'run_in_context', edit = ('insert', 1, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(2, 2, 2)] == [(6, 6, 2)]
+E         
+E         At index 0 diff: (2, 2, 2) != (6, 6, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[run_in_context-insert2-'x'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh79')
+shape = 'run_in_context', edit = ('insert', 2, 'x'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(4, 4, 2)] == [(6, 6, 2)]
+E         
+E         At index 0 diff: (4, 4, 2) != (6, 6, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[run_in_context-insert2-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh80')
+shape = 'run_in_context', edit = ('insert', 2, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(4, 4, 2)] == [(6, 6, 2)]
+E         
+E         At index 0 diff: (4, 4, 2) != (6, 6, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[run_in_context-delete1-None-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh95')
+shape = 'run_in_context', edit = ('delete', 1, None), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(2, 4, 0)] == [(4, 6, 0)]
+E         
+E         At index 0 diff: (2, 4, 0) != (4, 6, 0)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+_ test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[run_in_context-delete1-None-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_reference_journals_a_wh96')
+shape = 'run_in_context', edit = ('delete', 1, None), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", UNSHARED,
+                             ids=[f"{s}-{e[0]}{e[1]}-{e[2]!r}-{f}" for s, e, f in UNSHARED])
+    def test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does(
+            tmp_path, shape, edit, fmt):
+        """Both reference forms and V4A record one edit as the same spans, so an
+        older citation cannot land differently depending on how the edit was
+        written (the T1r / T1v split in review.md lines 152-156)."""
+        lines = SHAPES[shape]
+>       assert _journal(tmp_path, lines, edit, fmt) == _journal(tmp_path, lines, edit, "v4a")
+E       assert [(2, 4, 0)] == [(4, 6, 0)]
+E         
+E         At index 0 diff: (2, 4, 0) != (4, 6, 0)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:684: AssertionError
+=============================== warnings summary ===============================
+tests/test_integration_configs.py: 39 warnings
+tests/test_regression.py: 1 warning
+  /home/linxuhao/coords-r4-scratch/mut_collapse/src/skillflow/core.py:7633: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    elapsed = (dt.datetime.utcnow() - started_dt).total_seconds()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_H1_a_span_on_the_shown_line_after_v4a_inserted_an_identical_line_above
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_H2_a_sha_only_window_on_the_shown_line_after_the_same_insertion
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_H3_a_point_on_this_run_s_insertion_offset_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_H5_explicit_lines_on_the_shown_line_after_v4a_inserted_an_identical_line_above
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_H6_a_window_on_a_line_this_run_s_v4a_deleted_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_C1_a_window_over_a_blank_line_this_run_s_v4a_replaced_is_refused[C1-def g():\n]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_C1_a_window_over_a_blank_line_this_run_s_v4a_replaced_is_refused[C1b-def g():]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_C1s_a_sha_only_window_over_the_replaced_blank_line_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_C2_a_window_across_a_blank_line_this_run_deleted_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_window_on_a_blank_line_this_run_s_v4a_deleted_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[one-insert0-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert0-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-delete0-None-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert0-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-delete0-None-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-delete1-None-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert0-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert0-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-delete0-None-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-delete1-None-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[one-insert0-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[two-insert0-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[two-insert1-'x'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[two-insert1-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[two-delete0-None-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-insert0-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-insert1-'x'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-insert1-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-insert2-'x'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-insert2-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-delete0-None-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-delete1-None-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[three-delete1-None-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[blank_between-insert0-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[blank_between-insert1-''-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[blank_between-insert2-'x'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[blank_between-insert2-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[run_in_context-insert1-'x'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[run_in_context-insert1-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[run_in_context-insert2-'x'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[run_in_context-insert2-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[run_in_context-delete1-None-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_reference_journals_a_whole_line_edit_exactly_as_v4a_does[run_in_context-delete1-None-line-start]
+51 failed, 1514 passed, 3 skipped, 40 warnings in 24.37s
+PYTEST_RC=1
+DOCKER_RC=1

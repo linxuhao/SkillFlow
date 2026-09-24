@@ -1,0 +1,30 @@
+MUTATED m3b
+MUTATE_m3b_RC=0
+SUITE_m3b_RC=1
+IGNITIONS_m3b=3
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_a_span_from_before_an_outside_write_stays_refused_after_the_run_rebuilds_the_same_text
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_T2_a_span_after_an_outside_write_is_refused
+2 failed, 1563 passed, 3 skipped, 40 warnings in 23.81s
+MUTATED m5
+MUTATE_m5_RC=0
+SUITE_m5_RC=1
+IGNITIONS_m5=1
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_a_span_from_before_an_outside_write_stays_refused_after_the_run_rebuilds_the_same_text
+1 failed, 1564 passed, 3 skipped, 40 warnings in 23.73s
+MUTATED m6
+MUTATE_m6_RC=0
+SUITE_m6_RC=1
+IGNITIONS_m6=5
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_T2_a_window_after_an_outside_write_is_refused
+1 failed, 1564 passed, 3 skipped, 40 warnings in 23.80s
+MUTATED m7
+MUTATE_m7_RC=0
+SUITE_m7_RC=1
+IGNITIONS_m7=7
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_review_case_E_an_old_insertion_preview_writes_where_it_was_shown
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_review_case_S3_an_old_span_over_repeated_text_writes_where_it_was_shown
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_review_case_W_an_old_window_writes_where_it_was_read
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_review_case_S3w_an_old_window_cited_by_sha_alone_writes_where_it_was_read
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_the_same_range_in_the_same_version_is_one_sha_and_in_another_is_two
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_T1r_T1v_one_byte_change_two_formats_one_outcome[reference]
+6 failed, 1559 passed, 3 skipped, 40 warnings in 21.77s

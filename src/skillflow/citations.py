@@ -281,8 +281,10 @@ def journal_edit(run_id: str, path: str, *, edits, sha_before: str,
                  sha_after: str) -> bool:
     """Record what the engine just published for ``path``.
 
-    ``edits`` are disjoint ``(start, end, new_length)`` spans in the character
-    offsets of the text ``sha_before`` identifies. Returns True when the
+    ``edits`` are disjoint ``(start, end, new_length)`` spans: characters
+    ``[start, end)`` removed and ``new_length`` characters written there, in
+    the offsets of the text ``sha_before`` identifies with every line ending
+    in its newline, the last line too. Returns True when the
     generation was appended; False when the file was not at ``sha_before``, in
     which case the chain is discarded rather than extended — an unexplained
     version is not something to translate coordinates through.
@@ -350,57 +352,67 @@ def chain_intact(run_id: str, path: str, generation, file_sha: str,
                 and shas[-1] == current_sha)
 
 
-def remap(run_id: str, path: str, generation: int, offset: int):
-    """``offset`` in ``generation``'s coordinates, in the current text's.
+# Why `translate` refuses. Each names one row of the translation table.
+REMOVED = "removed"   # an edit removed bytes the citation covers
+SPLIT = "split"       # an insertion landed strictly inside the citation
+POINT = "point"       # an empty citation sits exactly where text was inserted
 
-    None when the offset falls strictly inside a span an edit replaced: that
-    text no longer exists and nobody has read what took its place, so there is
-    nothing honest to return. An offset exactly at a span's start stays put
-    (an insertion there lands before the earlier edit) and one at or past its
-    end moves by the accumulated length change.
+
+def translate(run_id: str, path: str, generation: int, start: int, end: int):
+    """``[start, end)`` in ``generation``'s coordinates, in the current text's.
+
+    Returns ``(start, end)``, or one of `REMOVED`, `SPLIT`, `POINT` naming why
+    the range cannot be placed. Each edit since ``generation`` is a removed
+    range ``[a, b)`` plus the length of the text written there (``b > a``
+    whenever any character was removed, a lone newline included), and is
+    applied in order by one table:
+
+    - the removed range overlaps the citation: `REMOVED` (for an empty
+      citation at ``p``: ``a <= p < b``);
+    - a pure insertion strictly inside a non-empty citation: `SPLIT`;
+    - a pure insertion at a non-empty citation's start or end: the citation
+      follows its own characters (it moves past text inserted at its start
+      and keeps text inserted at its end outside);
+    - an empty citation exactly at a pure insertion's offset: `POINT`. It has
+      no characters of its own, so either side of the inserted text is a
+      guess;
+    - anything else moves the citation by the length change of the edits
+      before it.
     """
     with _LOCK:
         entry = (_JOURNAL.get(run_id) or {}).get(path)
         if not entry or not (0 <= generation < len(entry["shas"])):
-            return None
+            return REMOVED
         generations = [list(g) for g in entry["edits"][generation:]]
-    position = offset
     for spans in generations:
-        delta = 0
-        for start, end, new_length in spans:
-            if position <= start:
-                break
-            if position < end:
-                return None
-            delta += new_length - (end - start)
-        position += delta
-    return position
-
-
-def touched(run_id: str, path: str, generation: int, offset: int) -> bool:
-    """True when an edit since ``generation`` covered ``offset`` or began or
-    ended exactly at it.
-
-    `remap` cannot place a zero-width range on either side of an edit that
-    touches it, and a blank line IS a zero-width range: its empty text matches
-    wherever it lands. A caller holding one asks this instead.
-    """
-    with _LOCK:
-        entry = (_JOURNAL.get(run_id) or {}).get(path)
-        if not entry or not (0 <= generation < len(entry["shas"])):
-            return True
-        generations = [list(g) for g in entry["edits"][generation:]]
-    position = offset
-    for spans in generations:
-        delta = 0
-        for start, end, new_length in spans:
-            if position < start:
-                break
-            if position <= end:
-                return True
-            delta += new_length - (end - start)
-        position += delta
-    return False
+        shift_start = shift_end = 0
+        for a, b, new_length in spans:
+            delta = new_length - (b - a)
+            if b > a:
+                if start == end:
+                    if a <= start < b:
+                        return REMOVED
+                elif start < b and a < end:
+                    return REMOVED
+                if b <= start:
+                    shift_start += delta
+                if b <= end:
+                    shift_end += delta
+            elif new_length:
+                if start == end:
+                    if a == start:
+                        return POINT
+                    if a < start:
+                        shift_start += delta
+                        shift_end += delta
+                elif start < a < end:
+                    return SPLIT
+                elif a <= start:
+                    shift_start += delta
+                    shift_end += delta
+        start += shift_start
+        end += shift_end
+    return start, end
 
 
 def journal_depth(run_id: str, path: str) -> int:

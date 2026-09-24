@@ -385,10 +385,17 @@ def _span_range(op: Operation, number: int, ref: Reference, record: dict,
                                   record.get("file_sha", ""), current_sha,
                                   epoch=record.get("epoch")):
         raise stale
-    start = citations.remap(run_id, op.path, record["generation"],
-                            record["start_char"])
-    end = citations.remap(run_id, op.path, record["generation"],
-                          record["start_char"] + len(record["text"]))
+    placed = citations.translate(run_id, op.path, record["generation"],
+                                 record["start_char"],
+                                 record["start_char"] + len(record["text"]))
+    if placed == citations.POINT:
+        raise PatchError(
+            f"{op.path} reference {number}: span {_coords(*span)} is an "
+            "insertion point and an earlier edit in this run inserted text "
+            "exactly there, so which side of that text it meant cannot be "
+            "told; reread the range and resend the reference with the new "
+            "digest to be shown where it lands now")
+    start, end = placed if isinstance(placed, tuple) else (None, None)
     if start is None or end is None or joined[start:end] != record["text"]:
         raise stale
     return start, end
@@ -405,7 +412,7 @@ def _refuse_uncorroborated(op: Operation, pending: list, run_id: str,
     """
     spans: list[dict] = []
     lines: list[str] = []
-    for start, end, _new, from_line, to_line, (number, ref, record) in pending:
+    for start, end, _new, from_line, to_line, (number, ref, record), _ in pending:
         text = joined[start:end]
         line_start = joined.rfind("\n", 0, start) + 1
         line_end = joined.find("\n", end)
@@ -440,6 +447,52 @@ def _refuse_uncorroborated(op: Operation, pending: list, run_id: str,
         spans)
 
 
+def _recorded(terminated: str, start: int, end: int, new_text: str,
+              whole_lines: bool) -> list[tuple[int, int, int]]:
+    """One reference's write as the journal records it: spans of
+    ``[start, end)`` removed and ``new_length`` characters written.
+
+    ``terminated`` is the text the write was applied to, every line ending in
+    its newline. A write of whole lines replaces them WITH their newlines, so
+    a blank line replaced by text is recorded as its newline removed and the
+    text plus a newline written, never as a pure insertion.
+
+    A column write that starts at a line's end, where the text it removes (or
+    writes) begins with that newline and it stops at another line's end, is a
+    whole-line edit: ``"\\n" + text`` after a line, or lines deleted from the
+    end of the line above. Inserting ``"\\n" + text`` before a newline and
+    ``text + "\\n"`` after it are one change, so it is recorded where a V4A
+    hunk records the same change, one character later, at the next line's
+    start; the same change then journals the same in every format.
+
+    When the line it starts at is blank, that position is also a line start,
+    and when the text it removes and the text it writes each end with a
+    newline (or are empty), the call reads as a whole-line edit on either side
+    of the blank line: the same coordinates and text are what a caller sends
+    to write before that line and to write after it. Which one was meant
+    cannot be told, so the blank line is recorded as rewritten, and a pure
+    insertion is recorded after it as well; every older citation that the two
+    readings would place differently then meets a removed range or an
+    insertion offset and is refused.
+    """
+    if whole_lines:
+        return [(start, end + 1, len(new_text) + 1)]
+    size = len(terminated)
+    if not (start < size and terminated[start] == "\n"
+            and end < size and terminated[end] == "\n"
+            and (new_text[:1] == "\n" or (not new_text and end > start))):
+        return [(start, end, len(new_text))]
+    blank = start == 0 or terminated[start - 1] == "\n"
+    removed = terminated[start:end]
+    if (blank and (not removed or removed.endswith("\n"))
+            and (not new_text or new_text.endswith("\n"))):
+        if not removed:
+            return [(start, start + 1, 1),
+                    (start + 1, start + 1, len(new_text))]
+        return [(start, end + 1, len(new_text) + 1)]
+    return [(start + 1, end + 1, len(new_text))]
+
+
 def cited_bytes(before: bytes, op: Operation, run_id: str,
                 edits: list | None = None, echo: list | None = None) -> bytes:
     """Apply this file's reference hunks against ONE snapshot of its text.
@@ -460,15 +513,16 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
     engine left there; otherwise the citation is refused. Only a citation
     issued without a frame is judged by the original strict window check.
 
-    ``edits`` is filled, when given, with the disjoint
-    ``(start, end, new_length)`` spans this call applied, in the offsets of the
-    text it applied them to — that is what the journal records. ``echo`` is
-    filled with what each reference actually replaced: a legal span is not
-    necessarily the intended one, and the only way that was ever visible was
-    to read the file back.
+    ``edits`` is filled, when given, with the `_recorded` spans of each
+    reference this call applied, in the offsets of the text it applied them
+    to with every line ending in its newline — that is what the journal
+    records. ``echo`` is filled with what each reference actually replaced:
+    a legal span is not necessarily the intended one, and the only way that
+    was ever visible was to read the file back.
     """
     original, eol, final_newline = _framed(before, op.path)
     joined = "\n".join(original)
+    terminated = joined + "\n" if original else ""
     current_sha = citations.text_sha(joined)
     starts: list[int] = []
     run = 0
@@ -505,7 +559,8 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
             start, end = _span_range(op, number, ref, record, run_id, joined,
                                      current_sha)
             resolved.append((start, end, ref.new_text.replace("\r\n", "\n"),
-                             record["start_line"], record["end_line"], None))
+                             record["start_line"], record["end_line"], None,
+                             False))
             continue
         if ref.from_line is None:
             from_line, to_line = record["start_line"], record["end_line"]
@@ -516,6 +571,7 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
                 f"{op.path} reference {number}: lines {from_line}-{to_line} "
                 f"fall outside the cited window {record['start_line']}-"
                 f"{record['end_line']}; cite the window that contains them")
+        whole_lines = ref.from_col is None and ref.to_col is None
         generation = record.get("generation")
         window_start = record.get("start_char")
         translatable = (
@@ -528,24 +584,32 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
                                         ref.from_col, "from")
             local_to = _window_offset(op, number, record, to_line,
                                       ref.to_col, "to")
-            start = citations.remap(run_id, op.path, generation,
-                                    window_start + local_from)
-            end = citations.remap(run_id, op.path, generation,
-                                  window_start + local_to)
-            if start is None or end is None:
+            # Whole lines own their newlines, so a blank line is one
+            # character wide and a range of lines is never empty.
+            own = 1 if whole_lines else 0
+            placed = citations.translate(run_id, op.path, generation,
+                                         window_start + local_from,
+                                         window_start + local_to + own)
+            if placed == citations.REMOVED:
                 raise PatchError(
                     f"{op.path} reference {number}: lines {from_line}-"
-                    f"{to_line} were themselves replaced by an earlier "
-                    "edit in this run; reread that range and cite the new digest")
-            if (local_from == local_to and ref.from_col is None
-                    and ref.to_col is None
-                    and citations.touched(run_id, op.path, generation,
-                                          window_start + local_from)):
+                    f"{to_line} changed since the digest was issued: they were "
+                    "removed or replaced by an earlier edit in this run; "
+                    "reread the range and cite the new digest")
+            if placed == citations.SPLIT:
                 raise PatchError(
-                    f"{op.path} reference {number}: line {from_line} is blank "
-                    "and an earlier edit in this run covered, began or ended "
-                    "exactly where it was, so an empty line now matches it "
-                    "wherever it went; reread that range and cite the new digest")
+                    f"{op.path} reference {number}: lines {from_line}-"
+                    f"{to_line} changed since the digest was issued: an "
+                    "earlier edit in this run inserted text inside them; "
+                    "reread the range and cite the new digest")
+            if placed == citations.POINT:
+                raise PatchError(
+                    f"{op.path} reference {number}: columns {ref.from_col}.."
+                    f"{ref.to_col} are an insertion point and an earlier edit "
+                    "in this run inserted text exactly there, so which side "
+                    "of that text they meant cannot be told; reread the range "
+                    "and cite the new digest")
+            start, end = placed[0], placed[1] - own
             if joined[start:end] != record["text"][local_from:local_to]:
                 raise PatchError(
                     f"{op.path} reference {number}: lines {from_line}-"
@@ -583,7 +647,7 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
                           if ref.from_col is not None or ref.to_col is not None
                           else None)
         resolved.append((start, end, ref.new_text.replace("\r\n", "\n"),
-                         from_line, to_line, uncorroborated))
+                         from_line, to_line, uncorroborated, whole_lines))
     resolved.sort(key=lambda item: (item[0], item[1]))
     cursor = 0
     for number, item in enumerate(resolved, 1):
@@ -597,12 +661,12 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
         _refuse_uncorroborated(op, pending, run_id, joined, current_sha)
     cursor = 0
     pieces: list[str] = []
-    for start, end, new_text, from_line, to_line, _ in resolved:
+    for start, end, new_text, from_line, to_line, _, whole in resolved:
         pieces.append(joined[cursor:start])
         pieces.append(new_text)
         cursor = end
         if edits is not None:
-            edits.append((start, end, len(new_text)))
+            edits.extend(_recorded(terminated, start, end, new_text, whole))
         if echo is not None:
             was = joined[start:end]
             said = {
@@ -668,41 +732,22 @@ def _line_blocks(placed) -> list[tuple[int, int, tuple[str, ...]]]:
 
 
 def _block_spans(original: list[str], blocks) -> list[tuple[int, int, int]]:
-    """The blocks as ``(start, end, new_length)`` in the joined old text.
+    """The blocks as ``(start, end, new_length)`` in the old text with every
+    line ending in its newline.
 
-    A line is its characters; the newline between two lines belongs to
-    neither. So an insertion between lines k-1 and k is written at the end of
-    line k-1 (``"\\n" + lines``), which leaves an offset at the start of line
-    k after it, and a deletion of lines k..k+m-1 takes each line with the
-    newline that follows it (or, at the end of the file, the one before).
+    Lines k..k+m-1 are removed with their newlines (``[start of line k,
+    start of line k+m)``) and the new lines are written there, each with its
+    newline. A block that removes nothing is a pure insertion at the start of
+    line k; a block that removes a blank line removes its newline.
     """
     starts = []
     run = 0
     for line in original:
         starts.append(run)
         run += len(line) + 1
-    total = max(run - 1, 0)
-
-    def end_of(i):
-        return starts[i] + len(original[i])
-
-    spans = []
-    for k, m, new in blocks:
-        text = "\n".join(new)
-        if m and new:
-            spans.append((starts[k], end_of(k + m - 1), len(text)))
-        elif new:
-            if k > 0:
-                spans.append((end_of(k - 1), end_of(k - 1), len(text) + 1))
-            else:
-                spans.append((0, 0, len(text) + (1 if original else 0)))
-        elif k + m < len(original):
-            spans.append((starts[k], starts[k + m], 0))
-        elif k > 0:
-            spans.append((end_of(k - 1), total, 0))
-        else:
-            spans.append((0, total, 0))
-    return spans
+    starts.append(run)
+    return [(starts[k], starts[k + m], sum(len(line) + 1 for line in new))
+            for k, m, new in blocks]
 
 
 def updated_bytes(before: bytes, op: Operation, edits: list | None = None) -> bytes:
@@ -784,11 +829,17 @@ def _normalised(data: bytes) -> str | None:
     return "\n".join(lines)
 
 
+def _terminated(text: str, data: bytes) -> str:
+    """``text`` (`_normalised` ``data``) with every line ending in a newline,
+    the last one too: the offsets the journal records in."""
+    return text + "\n" if data else ""
+
+
 def _spans_account_for(old: str, new: str, spans) -> bool:
     """True when ``spans`` turn ``old`` into ``new`` outside the spans' own text.
 
     Every character outside a span must reappear, in order, exactly where the
-    spans say it moved to; that is what `citations.remap` will assume. It
+    spans say it moved to; that is what `citations.translate` will assume. It
     cannot say WHICH of two valid readings an edit was — that comes from the
     applier — only that the recorded one is a reading of this edit at all.
     """
@@ -869,6 +920,9 @@ def _journal(run_id: str, op: Operation, before, after: bytes,
     taken afterwards: next to repeated lines a diff has two readings, and
     the wrong one moves older citations onto the wrong copy.
 
+    Offsets are those of the text with every line ending in its newline
+    (`_terminated`), so a removed blank line is a removed character.
+
     Recorded AFTER the write, so a citation is never translated through an
     edit that did not land. Anything the engine cannot describe as spans
     (an Add, a text it cannot frame, spans that do not account for the
@@ -877,7 +931,8 @@ def _journal(run_id: str, op: Operation, before, after: bytes,
     """
     old = _normalised(before.data) if before is not None else None
     new = _normalised(after)
-    if old is None or new is None or not _spans_account_for(old, new, spans):
+    if old is None or new is None or not _spans_account_for(
+            _terminated(old, before.data), _terminated(new, after), spans):
         citations.break_journal(run_id, op.path)
         return
     citations.journal_edit(run_id, op.path, edits=spans,

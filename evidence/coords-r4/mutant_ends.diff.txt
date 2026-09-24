@@ -1,0 +1,27 @@
+--- /home/linxuhao/stepflow-coords-r1/src/skillflow/citations.py	2026-09-24 15:36:42.375530031 +0000
++++ /home/linxuhao/coords-r4-scratch/mut_ends/src/skillflow/citations.py	2026-09-24 21:27:59.401384181 +0000
+@@ -99,6 +99,13 @@
+ _EPOCHS = itertools.count(1)
+ 
+ 
++def _ignite(name):
++    import os as _os
++    _p = _os.path.join(_os.path.dirname(__file__), '..', '..', 'IGNITIONS.log')
++    with open(_p, 'a') as _fh:
++        _fh.write('IGNITION ' + name + '\n')
++
++
+ def text_sha(text: str) -> str:
+     """The digest the journal identifies one version of a file's text by.
+ 
+@@ -405,7 +412,9 @@
+                     if a < start:
+                         shift_start += delta
+                         shift_end += delta
+-                elif start < a < end:
++                elif start <= a <= end:
++                    if a in (start, end):
++                        _ignite('ends')  # MUTANT ends: insertion at an end refused
+                     return SPLIT
+                 elif a <= start:
+                     shift_start += delta

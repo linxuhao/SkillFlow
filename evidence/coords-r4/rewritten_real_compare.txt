@@ -1,0 +1,24 @@
+test_a_digest_the_read_issued_0/src/a.py base==candidate True 32689e367fb7
+test_a_digest_the_read_issued_current/src/a.py base==candidate True 32689e367fb7
+test_citing_inside_a_span_this0/src/a.py base==candidate True 112556c5f2a9
+test_citing_inside_a_span_thiscurrent/src/a.py base==candidate True 112556c5f2a9
+test_one_word_cites_one_line_a0/src/a.py base==candidate True a2485f03d8e8
+test_one_word_cites_one_line_acurrent/src/a.py base==candidate True a2485f03d8e8
+test_reference_and_v4a_produce0/ref/src/a.py base==candidate True 4f2ec0122003
+test_reference_and_v4a_produce0/v4a/src/a.py base==candidate True 4f2ec0122003
+test_reference_and_v4a_producecurrent/ref/src/a.py base==candidate True 4f2ec0122003
+test_reference_and_v4a_producecurrent/v4a/src/a.py base==candidate True 4f2ec0122003
+test_reference_mode_runs_end_t0/repo/original.py base==candidate True 3abb78fa137b
+test_reference_mode_runs_end_tcurrent/repo/original.py base==candidate True 3abb78fa137b
+test_the_privacy_r2_corruption0/src/a.py base==candidate True 9307b5f197f4
+test_the_privacy_r2_corruptioncurrent/src/a.py base==candidate True 9307b5f197f4
+test_the_result_says_what_it_r0/src/a.py base==candidate True f61579521a78
+test_the_result_says_what_it_rcurrent/src/a.py base==candidate True f61579521a78
+test_unordered_references_matc0/asc/src/a.py base==candidate True bb622c35da37
+test_unordered_references_matc0/desc/src/a.py base==candidate True bb622c35da37
+test_unordered_references_matc0/mixed/src/a.py base==candidate True bb622c35da37
+test_unordered_references_matccurrent/asc/src/a.py base==candidate True bb622c35da37
+test_unordered_references_matccurrent/desc/src/a.py base==candidate True bb622c35da37
+test_unordered_references_matccurrent/mixed/src/a.py base==candidate True bb622c35da37
+IDENTICAL 22 / 22 (candidate keys 22)
+keysets equal True

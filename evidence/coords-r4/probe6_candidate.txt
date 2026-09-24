@@ -1,0 +1,274 @@
+284ebb516541b1940e0ba0ba82eb16611c01dce83138bd438d86777d25478f6d  /home/linxuhao/stepflow-coords-r1/src/skillflow/citations.py
+2a64a0aa35e643fc2b81375bdb0568586bd79116e726e1be28247ff21d75e14a  /home/linxuhao/stepflow-coords-r1/src/skillflow/strict_patch.py
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
+T1 preview: keeps_before='' keeps_after='import os'
+   own edit V4A top docstring applied=True -> b'"""Doc."""\nimport os\nx = 1\n'
+CASE T1 point before line 1 ('import os'), after V4A inserted a docstring above line 1
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: span 1:0..1:0 is an insertion point and an earlier edit in this run inserted text exactly there, so which side of that text it meant cannot be told; reread the range and resend the reference with the new digest to be shown where it lands now
+   intended: b'"""Doc."""\nimport sys\nimport os\nx = 1\n'
+   actual:   b'"""Doc."""\nimport os\nx = 1\n'
+   VERDICT=REFUSED
+T1k preview: keeps_before='' keeps_after='import os'
+   own edit V4A insert above line 2 applied=True -> b'a = 0\n"""Doc."""\nimport os\nx = 1\n'
+CASE T1k point before line 2 ('import os'), after V4A inserted a line above line 2
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: span 2:0..2:0 is an insertion point and an earlier edit in this run inserted text exactly there, so which side of that text it meant cannot be told; reread the range and resend the reference with the new digest to be shown where it lands now
+   intended: b'a = 0\n"""Doc."""\nimport sys\nimport os\nx = 1\n'
+   actual:   b'a = 0\n"""Doc."""\nimport os\nx = 1\n'
+   VERDICT=REFUSED
+   own edit reference line 4 applied=True -> b'a = 0\nimport os\nx = 1\nz = 3\n'
+T1r p != p1: True
+   own edit reference insertion at 2:0 applied=True -> b'a = 0\n"""Doc."""\nimport os\nx = 1\nz = 3\n'
+CASE T1r frame-0 point before 'import os', after a reference inserted a line at 2:0 (frame 1)
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: span 2:0..2:0 is an insertion point and an earlier edit in this run inserted text exactly there, so which side of that text it meant cannot be told; reread the range and resend the reference with the new digest to be shown where it lands now
+   intended: b'a = 0\n"""Doc."""\nimport sys\nimport os\nx = 1\nz = 3\n'
+   actual:   b'a = 0\n"""Doc."""\nimport os\nx = 1\nz = 3\n'
+   VERDICT=REFUSED
+   own edit reference line 4 applied=True -> b'a = 0\nimport os\nx = 1\nz = 3\n'
+   own edit V4A insertion above line 2 applied=True -> b'a = 0\n"""Doc."""\nimport os\nx = 1\nz = 3\n'
+CASE T1v the T1r sequence with the same insertion made by V4A
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: span 2:0..2:0 is an insertion point and an earlier edit in this run inserted text exactly there, so which side of that text it meant cannot be told; reread the range and resend the reference with the new digest to be shown where it lands now
+   intended: b'a = 0\n"""Doc."""\nimport sys\nimport os\nx = 1\nz = 3\n'
+   actual:   b'a = 0\n"""Doc."""\nimport os\nx = 1\nz = 3\n'
+   VERDICT=REFUSED
+   own edit V4A header applied=True -> b'# header\nimport os\nx = 1\ny = 2\n'
+CASE T2a window lines 1..1 (from a read of 1-3) after a v4a header insertion
+   WROTE=True applied=True
+   intended: b'# header\nimport sys\nx = 1\ny = 2\n'
+   actual:   b'# header\nimport sys\nx = 1\ny = 2\n'
+   VERDICT=CORRECT
+   own edit reference header applied=True -> b'# header\nimport os\nx = 1\ny = 2\n'
+CASE T2a window lines 1..1 (from a read of 1-3) after a ref header insertion
+   WROTE=True applied=True
+   intended: b'# header\nimport sys\nx = 1\ny = 2\n'
+   actual:   b'# header\nimport sys\nx = 1\ny = 2\n'
+   VERDICT=CORRECT
+   own edit V4A header applied=True -> b'# header\nimport os\nx = 1\ny = 2\n'
+CASE T2b window lines 2..2 (from a read of 1-3) after a v4a header insertion
+   WROTE=True applied=True
+   intended: b'# header\nimport os\nx = 9\ny = 2\n'
+   actual:   b'# header\nimport os\nx = 9\ny = 2\n'
+   VERDICT=CORRECT
+   own edit reference header applied=True -> b'# header\nimport os\nx = 1\ny = 2\n'
+CASE T2b window lines 2..2 (from a read of 1-3) after a ref header insertion
+   WROTE=True applied=True
+   intended: b'# header\nimport os\nx = 9\ny = 2\n'
+   actual:   b'# header\nimport os\nx = 9\ny = 2\n'
+   VERDICT=CORRECT
+   own edit V4A header applied=True -> b'# header\nimport os\nx = 1\ny = 2\n'
+CASE T2c window lines 1..2 (from a read of 1-3) after a v4a header insertion
+   WROTE=True applied=True
+   intended: b'# header\nimport sys\nx = 9\ny = 2\n'
+   actual:   b'# header\nimport sys\nx = 9\ny = 2\n'
+   VERDICT=CORRECT
+   own edit reference header applied=True -> b'# header\nimport os\nx = 1\ny = 2\n'
+CASE T2c window lines 1..2 (from a read of 1-3) after a ref header insertion
+   WROTE=True applied=True
+   intended: b'# header\nimport sys\nx = 9\ny = 2\n'
+   actual:   b'# header\nimport sys\nx = 9\ny = 2\n'
+   VERDICT=CORRECT
+   own edit V4A header applied=True -> b'# header\nimport os\nx = 1\ny = 2\n'
+CASE T2d sha-only window of line 1 alone (read 1-1) after a v4a header insertion
+   WROTE=True applied=True
+   intended: b'# header\nimport sys\nx = 1\ny = 2\n'
+   actual:   b'# header\nimport sys\nx = 1\ny = 2\n'
+   VERDICT=CORRECT
+   own edit reference header applied=True -> b'# header\nimport os\nx = 1\ny = 2\n'
+CASE T2d sha-only window of line 1 alone (read 1-1) after a ref header insertion
+   WROTE=True applied=True
+   intended: b'# header\nimport sys\nx = 1\ny = 2\n'
+   actual:   b'# header\nimport sys\nx = 1\ny = 2\n'
+   VERDICT=CORRECT
+   own edit V4A header applied=True -> b'# header\nimport os\nx = 1\n'
+CASE T2e span 1:0..1:9 ('import os') after a V4A header insertion
+   WROTE=True applied=True
+   intended: b'# header\nimport sys\nx = 1\n'
+   actual:   b'# header\nimport sys\nx = 1\n'
+   VERDICT=CORRECT
+   own edit V4A delete b applied=True -> b'a\nc\n'
+CASE T3a point before 'b' (the deleted line) after V4A deleted 'b'
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: span 2:0..2:0 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; reread the range and resend the reference with the new digest to be shown the text it covers now
+   intended: 'refusal'
+   actual:   b'a\nc\n'
+   VERDICT=REFUSED
+   own edit V4A delete b applied=True -> b'a\nc\n'
+CASE T3b point before 'c' (after the deleted line) after V4A deleted 'b'
+   WROTE=True applied=True
+   intended: b'a\nP\nc\n'
+   actual:   b'a\nP\nc\n'
+   VERDICT=CORRECT
+   own edit V4A delete b applied=True -> b'a\nc\n'
+CASE T3c point at end of 'a' (before the deleted line) after V4A deleted 'b'
+   WROTE=True applied=True
+   intended: b'a\nP\nc\n'
+   actual:   b'a\nP\nc\n'
+   VERDICT=CORRECT
+   own edit V4A delete first x applied=True -> b'a\nx\nb\n'
+CASE T3d point before old line 3 (the surviving x) after V4A deleted old line 2
+   WROTE=True applied=True
+   intended: b'a\nP\nx\nb\n'
+   actual:   b'a\nP\nx\nb\n'
+   VERDICT=CORRECT
+   own edit V4A delete first x applied=True -> b'a\nx\nb\n'
+CASE T3e point before old line 2 (the deleted x) after V4A deleted old line 2
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: span 2:0..2:0 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; reread the range and resend the reference with the new digest to be shown the text it covers now
+   intended: 'refusal'
+   actual:   b'a\nx\nb\n'
+   VERDICT=REFUSED
+   own edit V4A delete first x applied=True -> b'a\nx\nb\n'
+CASE T3f point at end of old line 3 (the surviving x) after V4A deleted old line 2
+   WROTE=True applied=True
+   intended: b'a\nx\nP\nb\n'
+   actual:   b'a\nx\nP\nb\n'
+   VERDICT=CORRECT
+   own edit V4A delete first x applied=True -> b'a\nx\nb\n'
+CASE T3g point at end of old line 2 (the deleted x) after V4A deleted old line 2
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: span 2:1..2:1 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; reread the range and resend the reference with the new digest to be shown the text it covers now
+   intended: 'refusal'
+   actual:   b'a\nx\nb\n'
+   VERDICT=REFUSED
+   own edit V4A two hunks applied=True -> b'a\nN\nx\nx\nb\nx\nc\n'
+CASE T4a line 2 (first x, below the insertion) after 2-hunk V4A (insert N after a; delete first x after b)
+   WROTE=True applied=True
+   intended: b'a\nN\nY\nx\nb\nx\nc\n'
+   actual:   b'a\nN\nY\nx\nb\nx\nc\n'
+   VERDICT=CORRECT
+   own edit V4A two hunks applied=True -> b'a\nN\nx\nx\nb\nx\nc\n'
+CASE T4b line 3 after 2-hunk V4A (insert N after a; delete first x after b)
+   WROTE=True applied=True
+   intended: b'a\nN\nx\nY\nb\nx\nc\n'
+   actual:   b'a\nN\nx\nY\nb\nx\nc\n'
+   VERDICT=CORRECT
+   own edit V4A two hunks applied=True -> b'a\nN\nx\nx\nb\nx\nc\n'
+CASE T4c line 5 (deleted by hunk 2) after 2-hunk V4A (insert N after a; delete first x after b)
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: lines 5-5 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest
+   intended: 'refusal'
+   actual:   b'a\nN\nx\nx\nb\nx\nc\n'
+   VERDICT=REFUSED
+   own edit V4A two hunks applied=True -> b'a\nN\nx\nx\nb\nx\nc\n'
+CASE T4d line 6 after 2-hunk V4A (insert N after a; delete first x after b)
+   WROTE=True applied=True
+   intended: b'a\nN\nx\nx\nb\nY\nc\n'
+   actual:   b'a\nN\nx\nx\nb\nY\nc\n'
+   VERDICT=CORRECT
+   own edit V4A adjacent hunks applied=True -> b'a\nB\nC\nd\n'
+CASE T4e line 1 (context of hunk 1) after adjacent hunks
+   WROTE=True applied=True
+   intended: b'Y\nB\nC\nd\n'
+   actual:   b'Y\nB\nC\nd\n'
+   VERDICT=CORRECT
+   own edit V4A adjacent hunks applied=True -> b'a\nB\nC\nd\n'
+CASE T4f line 2 (replaced by hunk 1) after adjacent hunks
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: lines 2-2 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest
+   intended: 'refusal'
+   actual:   b'a\nB\nC\nd\n'
+   VERDICT=REFUSED
+   own edit V4A adjacent hunks applied=True -> b'a\nB\nC\nd\n'
+CASE T4g line 3 (replaced by hunk 2) after adjacent hunks
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: lines 3-3 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest
+   intended: 'refusal'
+   actual:   b'a\nB\nC\nd\n'
+   VERDICT=REFUSED
+   own edit V4A adjacent hunks applied=True -> b'a\nB\nC\nd\n'
+CASE T4h line 4 (context of hunk 2) after adjacent hunks
+   WROTE=True applied=True
+   intended: b'a\nB\nC\nY\n'
+   actual:   b'a\nB\nC\nY\n'
+   VERDICT=CORRECT
+   own edit V4A delete middle x applied=True -> b'a\nx\nx\nb\n'
+CASE T4i line 3 (the middle x, deleted) after V4A deleted the middle of three x
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: lines 3-3 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest
+   intended: 'refusal'
+   actual:   b'a\nx\nx\nb\n'
+   VERDICT=REFUSED
+   own edit V4A delete middle x applied=True -> b'a\nx\nx\nb\n'
+CASE T4j line 2 after V4A deleted the middle of three x
+   WROTE=True applied=True
+   intended: b'a\nY\nx\nb\n'
+   actual:   b'a\nY\nx\nb\n'
+   VERDICT=CORRECT
+   own edit V4A delete middle x applied=True -> b'a\nx\nx\nb\n'
+CASE T4k line 4 after V4A deleted the middle of three x
+   WROTE=True applied=True
+   intended: b'a\nx\nY\nb\n'
+   actual:   b'a\nx\nY\nb\n'
+   VERDICT=CORRECT
+CASE T4l ambiguous context hunk: applied=False error=apply_patch preflight: f.py hunk 1: ambiguous (multiple exact matches); cite the range you mean in references instead of widening the copied context
+CASE R1 H5 shape rows-less: out=b'a\nx\nx\nb\n' spans=[(0, 6, 8)] accounts=False
+CASE R2 H6 shape rows-less: out=b'a\nx\nb\n' spans=[(0, 8, 6)] accounts=False
+CASE R3 top insertion rows-less: out=b'H\nl1\nl2\n' spans=[(0, 3, 5)] accounts=True
+   own edit rows-less V4A applied=True -> b'a\nx\nx\nb\n'
+CASE R4a H5 with rows stripped
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: lines 2-2 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest
+   intended: b'a\nx\nY\nb\n'
+   actual:   b'a\nx\nx\nb\n'
+   VERDICT=REFUSED
+   own edit rows-less V4A applied=True -> b'a\nx\nb\n'
+CASE R4b H6 with rows stripped
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: lines 2-2 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest
+   intended: 'refusal'
+   actual:   b'a\nx\nb\n'
+   VERDICT=REFUSED
+   own edit V4A CRLF applied=True -> b'a\r\nx\r\nx\r\nb\r\n'
+CASE T5a CRLF H5
+   WROTE=True applied=True
+   intended: b'a\r\nx\r\nY\r\nb\r\n'
+   actual:   b'a\r\nx\r\nY\r\nb\r\n'
+   VERDICT=CORRECT
+   own edit V4A delete last line (no final newline) applied=True -> b'a\nx'
+CASE T5b line 2 after V4A deleted the last line of a file without a final newline
+   WROTE=True applied=True
+   intended: b'a\nY'
+   actual:   b'a\nY'
+   VERDICT=CORRECT
+   own edit V4A unicode applied=True -> b'\xc3\xa9\n\xc3\xa9\nx\n\xc3\xa9\n'
+CASE T5c unicode line 3 after V4A inserted an identical 'é' above line 2
+   WROTE=True applied=True
+   intended: b'\xc3\xa9\n\xc3\xa9\nx\nY\n'
+   actual:   b'\xc3\xa9\n\xc3\xa9\nx\nY\n'
+   VERDICT=CORRECT
+   own edit V4A applied=True -> b'a\nN\n\nb\n'
+CASE B1 blank line 2 after V4A inserted a line right above it
+   WROTE=True applied=True
+   intended: b'a\nN\nY\nb\n'
+   actual:   b'a\nN\nY\nb\n'
+   VERDICT=CORRECT
+   own edit V4A applied=True -> b'a\n\nN\nb\n'
+CASE B2 blank line 2 after V4A inserted a line right below it
+   WROTE=True applied=True
+   intended: b'a\nY\nN\nb\n'
+   actual:   b'a\nY\nN\nb\n'
+   VERDICT=CORRECT
+   own edit V4A applied=True -> b'A\n\nb\n'
+CASE B3 blank line 2 after V4A replaced line 1
+   WROTE=True applied=True
+   intended: b'A\nY\nb\n'
+   actual:   b'A\nY\nb\n'
+   VERDICT=CORRECT
+   own edit V4A applied=True -> b'a\n\nB\n'
+CASE B4 blank line 2 after V4A replaced line 3
+   WROTE=True applied=True
+   intended: b'a\nY\nB\n'
+   actual:   b'a\nY\nB\n'
+   VERDICT=CORRECT
+   own edit V4A applied=True -> b'H\na\nb\n\nc\n'
+CASE B5 blank line 3 after V4A inserted a header at the top
+   WROTE=True applied=True
+   intended: b'H\na\nb\nY\nc\n'
+   actual:   b'H\na\nb\nY\nc\n'
+   VERDICT=CORRECT
+PROBE6_DONE
+DOCKER_RC=0

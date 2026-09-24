@@ -1,0 +1,70 @@
+TREE_HEAD= DIRTY_PATHS=0
+db1af1f0562a9242c857a2adcb3defbf0505c7498ad0f77e9b11dd60ce281d9d  src/skillflow/strict_patch.py
+284ebb516541b1940e0ba0ba82eb16611c01dce83138bd438d86777d25478f6d  src/skillflow/citations.py
+ae3f970353da500ad552fe63325c7b839eb9f67cc8a318df940c0c12e65714b2  src/skillflow/read_tools.py
+bedc01e2a8d4d2354c69b7197e7b034dbf433b2844691259bcfbaa86b50610bc  src/skillflow/tools/apply_patch/tool.yaml
+IMPORT_PROOF /home/linxuhao/coords-r4-scratch/mut_m3/src/skillflow/__init__.py
+PYTEST 9.1.1 ASYNCIO 1.4.0
+..................s......ss............................................. [  4%]
+........................................................................ [  9%]
+........................................................................ [ 13%]
+........................................................................ [ 18%]
+........................................................................ [ 22%]
+........................................................................ [ 27%]
+........................................................................ [ 32%]
+........................................................................ [ 36%]
+........................................................................ [ 41%]
+........................................................................ [ 45%]
+........................................................................ [ 50%]
+........................................................................ [ 55%]
+........................................................................ [ 59%]
+...................................................F.................... [ 64%]
+........................................................................ [ 68%]
+........................................................................ [ 73%]
+........................................................................ [ 78%]
+........................................................................ [ 82%]
+........................................................................ [ 87%]
+........................................................................ [ 91%]
+........................................................................ [ 96%]
+........................................................                 [100%]
+=================================== FAILURES ===================================
+_____ test_a_span_rechecks_its_text_when_the_journal_misdescribes_the_edit _____
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_span_rechecks_its_text_0')
+
+    def test_a_span_rechecks_its_text_when_the_journal_misdescribes_the_edit(root):
+        """The translation trusts the journal. A journal entry that describes a
+        different edit from the one made (here written directly, as anything
+        other than this run's applier would) must not move a write onto text the
+        caller was never shown: the span compares the text it lands on with the
+        text it showed. The r1 review's mutant M3 drops that comparison."""
+        body = b"import os\n\nDEFAULT_TIMEOUT_SECONDS = 30\n\nDEBUG = False\n"
+        put(root, body)
+        w = rd(root, 0, 5)["citation"]["sha"]
+        shown = span(root, w, 3, 8, 3, 15)
+        old = body.decode()[:-1]
+        new = old.replace("TIMEOUT", "LIMIT")
+        terminated = old + "\n"
+        elsewhere = [(len(terminated) - 3, len(terminated) - 1, 0)]
+        assert citations.journal_edit(RUN, REL, edits=elsewhere,
+                                      sha_before=citations.text_sha(old),
+                                      sha_after=citations.text_sha(new)) is True
+        put(root, (new + "\n").encode())
+        res = ap(root, [{"file": REL, "sha": shown, "new_text": "SPAN"}])
+>       assert res["applied"] is False, res
+E       AssertionError: {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+E       assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:213: AssertionError
+=============================== warnings summary ===============================
+tests/test_integration_configs.py: 39 warnings
+tests/test_regression.py: 1 warning
+  /home/linxuhao/coords-r4-scratch/mut_m3/src/skillflow/core.py:7633: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    elapsed = (dt.datetime.utcnow() - started_dt).total_seconds()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_span_rechecks_its_text_when_the_journal_misdescribes_the_edit
+1 failed, 1564 passed, 3 skipped, 40 warnings in 24.14s
+PYTEST_RC=1
+DOCKER_RC=1

@@ -1,0 +1,27 @@
+--- /home/linxuhao/stepflow-coords-r1/src/skillflow/strict_patch.py	2026-09-24 15:55:57.252053037 +0000
++++ /home/linxuhao/coords-r4-scratch/mut_m3/src/skillflow/strict_patch.py	2026-09-24 21:28:52.445977022 +0000
+@@ -337,6 +337,13 @@
+ MAX_ECHO_CHARS = 240
+ 
+ 
++def _ignite(name):
++    import os as _os
++    _p = _os.path.join(_os.path.dirname(__file__), '..', '..', 'IGNITIONS.log')
++    with open(_p, 'a') as _fh:
++        _fh.write('IGNITION ' + name + '\n')
++
++
+ def _coords(from_line, from_col, to_line, to_col) -> str:
+     def col(value):
+         return "-" if value is None else str(value)
+@@ -396,7 +403,9 @@
+             "told; reread the range and resend the reference with the new "
+             "digest to be shown where it lands now")
+     start, end = placed if isinstance(placed, tuple) else (None, None)
+-    if start is None or end is None or joined[start:end] != record["text"]:
++    if start is not None and end is not None and joined[start:end] != record["text"]:
++        _ignite('m3')
++    if start is None or end is None:  # MUTANT m3
+         raise stale
+     return start, end
+ 

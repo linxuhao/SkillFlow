@@ -1,0 +1,51 @@
+--- /home/linxuhao/stepflow-coords-r1/src/skillflow/strict_patch.py	2026-09-24 15:55:57.252053037 +0000
++++ /home/linxuhao/coords-r4-scratch/mut_collapse/src/skillflow/strict_patch.py	2026-09-24 21:28:26.178169059 +0000
+@@ -337,6 +337,13 @@
+ MAX_ECHO_CHARS = 240
+ 
+ 
++def _ignite(name):
++    import os as _os
++    _p = _os.path.join(_os.path.dirname(__file__), '..', '..', 'IGNITIONS.log')
++    with open(_p, 'a') as _fh:
++        _fh.write('IGNITION ' + name + '\n')
++
++
+ def _coords(from_line, from_col, to_line, to_col) -> str:
+     def col(value):
+         return "-" if value is None else str(value)
+@@ -910,6 +917,21 @@
+         return None
+ 
+ 
++def _collapsed_edit(before, after):
++    # MUTANT collapse: r2's content-derived journal span, restored verbatim
++    if before == after:
++        return []
++    head = 0
++    limit = min(len(before), len(after))
++    while head < limit and before[head] == after[head]:
++        head += 1
++    tail = 0
++    while (tail < limit - head
++           and before[len(before) - 1 - tail] == after[len(after) - 1 - tail]):
++        tail += 1
++    return [(head, len(before) - tail, len(after) - tail - head)]
++
++
+ def _journal(run_id: str, op: Operation, before, after: bytes,
+              spans: list[tuple[int, int, int]]) -> None:
+     """Tell the citation journal what this publication did to ``op.path``.
+@@ -931,6 +953,12 @@
+     """
+     old = _normalised(before.data) if before is not None else None
+     new = _normalised(after)
++    if op.kind != "Cite" and old is not None and new is not None:
++        _collapsed = _collapsed_edit(_terminated(old, before.data),
++                                     _terminated(new, after))
++        if _collapsed != [tuple(x) for x in spans]:
++            _ignite('collapse')
++        spans = _collapsed
+     if old is None or new is None or not _spans_account_for(
+             _terminated(old, before.data), _terminated(new, after), spans):
+         citations.break_journal(run_id, op.path)

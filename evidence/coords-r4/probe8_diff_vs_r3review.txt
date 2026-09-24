@@ -1,0 +1,56 @@
+3,5c3,5
+<    WROTE=True applied=True
+<    actual:   b'def g():\n    x = 1\n    return 1\n'
+<    VERDICT=WROTE_WHERE_REFUSAL_EXPECTED
+---
+>    WROTE=False applied=False
+>    actual:   b'def f():\n    x = 1\n    return 1\n'
+>    VERDICT=REFUSED
+8,10c8,10
+<    WROTE=True applied=True
+<    actual:   b'def g():    x = 1\n    return 1\n'
+<    VERDICT=WROTE_WHERE_REFUSAL_EXPECTED
+---
+>    WROTE=False applied=False
+>    actual:   b'def f():\n    x = 1\n    return 1\n'
+>    VERDICT=REFUSED
+13,15c13,15
+<    WROTE=True applied=True
+<    actual:   b'def g():\n    x = 1\n    return 1\n'
+<    VERDICT=WROTE_WHERE_REFUSAL_EXPECTED
+---
+>    WROTE=False applied=False
+>    actual:   b'def f():\n    x = 1\n    return 1\n'
+>    VERDICT=REFUSED
+18,20c18,20
+<    WROTE=True applied=True
+<    actual:   b'def g():\n    x = 1\n    return 1\n'
+<    VERDICT=WROTE_WHERE_REFUSAL_EXPECTED
+---
+>    WROTE=False applied=False
+>    actual:   b'def f():\n    x = 1\n    return 1\n'
+>    VERDICT=REFUSED
+23,25c23,25
+<    WROTE=True applied=True
+<    actual:   b'b\nY\nc\n'
+<    VERDICT=WROTE_WHERE_REFUSAL_EXPECTED
+---
+>    WROTE=False applied=False
+>    actual:   b'b\n\n\nc\n'
+>    VERDICT=REFUSED
+28,30c28,30
+<    WROTE=True applied=True
+<    actual:   b'\nP# header\n\nimport os\n'
+<    VERDICT=WRONG_WRITE
+---
+>    WROTE=False applied=False
+>    actual:   b'# header\n\nimport os\n'
+>    VERDICT=REFUSED
+33,35c33,35
+<    WROTE=True applied=True
+<    actual:   b'\nPN\n\n\n'
+<    VERDICT=WRONG_WRITE
+---
+>    WROTE=False applied=False
+>    actual:   b'N\n\n\n'
+>    VERDICT=REFUSED

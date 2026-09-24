@@ -1,0 +1,25 @@
+CHANGED A1
+  review: WROTE=True applied=True | actual:   b'l1\nl2\n# note\nL3NEW\nl4\nl5\n' | CORRECT=True
+  here:   WROTE=False applied=False | actual:   b'l1\nl2\nL3NEW\nl4\nl5\n' | CORRECT=False
+CHANGED A2
+  review: WROTE=True applied=True | actual:   b'l1\nl2\n# note\nl4\nl5\n' | CORRECT=False (refusal expected or acceptable)
+  here:   WROTE=False applied=False | actual:   b'l1\nl2\nl4\nl5\n' | CORRECT=True (refusal expected or acceptable)
+CHANGED A5
+  review: WROTE=True applied=True | actual:   b'l1\nl2\nSECOND\nFIRST\nl3\nl4\nl5\n' | CORRECT=True
+  here:   WROTE=False applied=False | actual:   b'l1\nl2\nFIRST\nl3\nl4\nl5\n' | CORRECT=False
+CHANGED B3
+  review: WROTE=True applied=True | actual:   b'import os\n\nDEFAULT_LIMIT_SECONDS = 30\n\nDEBUG = False\n' | CORRECT=True
+  here:   WROTE=False applied=False | actual:   b'import os\n\nDEFAULT_TIMEOUT_SECONDS = 30\n\nDEBUG = False\n' | CORRECT=False
+CHANGED B4
+  review: WROTE=False applied=False | actual:   b'import os\n\nDEFAULT_ZTIMEOUT_SECONDS = 30\n\nDEBUG = False\n' | CORRECT=True (refusal expected or acceptable)
+  here:   WROTE=True applied=True | actual:   b'import os\n\nDEFAULT_ZLIMIT_SECONDS = 30\n\nDEBUG = False\n' | CORRECT=False (refusal expected or acceptable)
+CHANGED B6
+  review: WROTE=True applied=True | actual:   b'import os\n\nDEFAULT_LIMIT_SECONDS = 30\n\nDEBUG = False\n' | CORRECT=False (refusal expected or acceptable)
+  here:   WROTE=False applied=False | actual:   b'import os\n\nDEFAULT_TIMEOUT_SECONDS = 30\n\nDEBUG = False\n' | CORRECT=True (refusal expected or acceptable)
+CHANGED C4
+  review: WROTE=True applied=True | actual:   b'import os\n\nDEFAULT_NEW_LIMIT_SECONDS = 30\n\nDEBUG = False\n' | CORRECT=True
+  here:   WROTE=False applied=False | actual:   b'import os\n\nDEFAULT_LIMIT_SECONDS = 30\n\nDEBUG = False\n' | CORRECT=False
+CHANGED H3
+  review: WROTE=True applied=True | actual:   b'a\n\n# note\n\nb\n' | CORRECT=True
+  here:   WROTE=False applied=False | actual:   b'a\n\n\nb\n' | CORRECT=False
+CASES 37 CHANGED 8 MISSING_HERE 0

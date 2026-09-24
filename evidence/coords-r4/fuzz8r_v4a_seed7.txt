@@ -1,0 +1,89 @@
+284ebb516541b1940e0ba0ba82eb16611c01dce83138bd438d86777d25478f6d  /home/linxuhao/stepflow-coords-r1/src/skillflow/citations.py
+2a64a0aa35e643fc2b81375bdb0568586bd79116e726e1be28247ff21d75e14a  /home/linxuhao/stepflow-coords-r1/src/skillflow/strict_patch.py
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
+OWN v4a
+SEED 7 TRIALS 400 trials_with_multi_hunk_patch 133
+COUNT CORRECT 3999
+COUNT FALSE_REFUSAL 449
+COUNT REFUSED_OK 3607
+COUNT probes 8055
+CLASS ('FALSE_REFUSAL', 'pbefore', 'blank-in-range') 72
+CLASS ('FALSE_REFUSAL', 'pbefore', 'other') 180
+CLASS ('FALSE_REFUSAL', 'pbefore', 'top-insert') 100
+CLASS ('FALSE_REFUSAL', 'pend', 'blank-in-range') 72
+CLASS ('FALSE_REFUSAL', 'pend', 'top-insert') 24
+CLASS ('FALSE_REFUSAL', 'win2', 'other') 1
+ROW ('FALSE_REFUSAL', 'pbefore', 'point-at-insertion') 352
+ROW ('FALSE_REFUSAL', 'pend', 'point-at-insertion') 96
+ROW ('FALSE_REFUSAL', 'win2', 'insertion-inside-window') 1
+ROW ('REFUSED_OK', 'pbefore', 'point-at-insertion') 40
+ROW ('REFUSED_OK', 'pbefore', 'removed-overlaps') 644
+ROW ('REFUSED_OK', 'pend', 'point-at-insertion') 9
+ROW ('REFUSED_OK', 'pend', 'removed-overlaps') 675
+ROW ('REFUSED_OK', 'span', 'removed-overlaps') 478
+ROW ('REFUSED_OK', 'win1', 'removed-overlaps') 684
+ROW ('REFUSED_OK', 'win2', 'insertion-inside-window') 261
+ROW ('REFUSED_OK', 'win2', 'removed-overlaps') 816
+EXAMPLE ('FALSE_REFUSAL', 'pbefore', 'other')
+    ['x', '', 'a', 'x']
+    '\r\n'
+    True
+    ['*** Begin Patch\n*** Update File: f.py\n@@\n+x\n+N\n-x\n+\n-\n+x\n a\n+N\n x\n*** End Patch\n', '*** Begin Patch\n*** Update File: f.py\n@@\n x\n N\n \n x\n+N\n a\n+N\n N\n x\n*** End Patch\n']
+    'pbefore'
+    2
+    ['x', 'N', '', 'x', 'N', 'P', 'a', 'N', 'N', 'x']
+    None
+    'apply_patch preflight: f.py reference 1: span 3:0..3:0 is an insertion point and an earlier edit in this run inserted text exactly there, so which side of that text it meant cannot be told; reread the'
+EXAMPLE ('FALSE_REFUSAL', 'pbefore', 'top-insert')
+    ['a', 'b', 'x', 'x', '']
+    '\n'
+    True
+    ['*** Begin Patch\n*** Update File: f.py\n@@\n+\n a\n+\n+\n b\n x\n-x\n+x\n \n*** End Patch\n', '*** Begin Patch\n*** Update File: f.py\n@@\n-\n a\n+\n@@\n \n \n b\n x\n-x\n+N\n*** End Patch\n']
+    'pbefore'
+    0
+    ['P', 'a', '', '', '', 'b', 'x', 'N', '']
+    None
+    'apply_patch preflight: f.py reference 1: span 1:0..1:0 is an insertion point and an earlier edit in this run inserted text exactly there, so which side of that text it meant cannot be told; reread the'
+EXAMPLE ('FALSE_REFUSAL', 'pbefore', 'blank-in-range')
+    ['x', '', 'x', '', '']
+    '\n'
+    True
+    ['*** Begin Patch\n*** Update File: f.py\n@@\n+x\n x\n \n+N\n+N\n x\n+\n-\n+x\n \n*** End Patch\n', '*** Begin Patch\n*** Update File: f.py\n@@\n-x\n x\n+N\n \n-N\n N\n-x\n+x\n-\n+x\n x\n \n*** End Patch\n']
+    'pbefore'
+    1
+    ['x', 'N', 'P', '', 'N', 'x', 'x', 'x', '']
+    None
+    'apply_patch preflight: f.py reference 1: span 2:0..2:0 is an insertion point and an earlier edit in this run inserted text exactly there, so which side of that text it meant cannot be told; reread the'
+EXAMPLE ('FALSE_REFUSAL', 'pend', 'blank-in-range')
+    ['x', '', 'x', '', '']
+    '\n'
+    True
+    ['*** Begin Patch\n*** Update File: f.py\n@@\n+x\n x\n \n+N\n+N\n x\n+\n-\n+x\n \n*** End Patch\n', '*** Begin Patch\n*** Update File: f.py\n@@\n-x\n x\n+N\n \n-N\n N\n-x\n+x\n-\n+x\n x\n \n*** End Patch\n']
+    'pend'
+    1
+    ['x', 'N', '', 'P', 'N', 'x', 'x', 'x', '']
+    None
+    'apply_patch preflight: f.py reference 1: span 2:0..2:0 is an insertion point and an earlier edit in this run inserted text exactly there, so which side of that text it meant cannot be told; reread the'
+EXAMPLE ('FALSE_REFUSAL', 'pend', 'top-insert')
+    ['', '']
+    '\n'
+    True
+    ['*** Begin Patch\n*** Update File: f.py\n@@\n+N\n \n \n*** End Patch\n']
+    'pend'
+    0
+    ['N', '', 'P', '']
+    None
+    'apply_patch preflight: f.py reference 1: span 1:0..1:0 is an insertion point and an earlier edit in this run inserted text exactly there, so which side of that text it meant cannot be told; reread the'
+EXAMPLE ('FALSE_REFUSAL', 'win2', 'other')
+    ['x', 'x', '', 'x', 'x', 'x']
+    '\n'
+    True
+    ['*** Begin Patch\n*** Update File: f.py\n@@\n x\n+\n+x\n x\n \n+N\n+x\n@@\n-x\n+\n x\n x\n*** End Patch\n', '*** Begin Patch\n*** Update File: f.py\n@@\n x\n-\n-x\n x\n-\n N\n+x\n x\n-\n+R\n x\n*** End Patch\n']
+    'win2'
+    0
+    ['Y', 'N', 'x', 'x', 'R', 'x', 'x']
+    None
+    'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: an earlier edit in this run inserted text inside them; reread the range and cite the new digest'
+FUZZ8R_DONE
+DOCKER_RC=0

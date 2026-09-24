@@ -1,0 +1,209 @@
+284ebb516541b1940e0ba0ba82eb16611c01dce83138bd438d86777d25478f6d  /home/linxuhao/stepflow-coords-r1/src/skillflow/citations.py
+2a64a0aa35e643fc2b81375bdb0568586bd79116e726e1be28247ff21d75e14a  /home/linxuhao/stepflow-coords-r1/src/skillflow/strict_patch.py
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
+OWN ref
+SEED 8 TRIALS 400 trials_with_multi_hunk_patch 119
+COUNT CORRECT 3828
+COUNT FALSE_REFUSAL 594
+COUNT REFUSED_OK 3453
+COUNT SKIP_ALL_DELETED 13
+COUNT probes 7875
+CLASS ('FALSE_REFUSAL', 'pbefore', 'blank-in-range') 100
+CLASS ('FALSE_REFUSAL', 'pbefore', 'other') 178
+CLASS ('FALSE_REFUSAL', 'pbefore', 'top-insert') 108
+CLASS ('FALSE_REFUSAL', 'pend', 'blank-in-range') 100
+CLASS ('FALSE_REFUSAL', 'pend', 'other') 4
+CLASS ('FALSE_REFUSAL', 'pend', 'top-insert') 27
+CLASS ('FALSE_REFUSAL', 'span', 'other') 4
+CLASS ('FALSE_REFUSAL', 'win1', 'blank-in-range') 37
+CLASS ('FALSE_REFUSAL', 'win1', 'other') 4
+CLASS ('FALSE_REFUSAL', 'win1', 'top-insert') 14
+CLASS ('FALSE_REFUSAL', 'win2', 'blank-in-range') 10
+CLASS ('FALSE_REFUSAL', 'win2', 'top-insert') 8
+ROW ('FALSE_REFUSAL', 'pbefore', 'point-at-insertion') 309
+ROW ('FALSE_REFUSAL', 'pbefore', 'point-at-insertion/just-after-a-two-readings-blank') 27
+ROW ('FALSE_REFUSAL', 'pbefore', 'removed-overlaps/two-readings-at-blank') 44
+ROW ('FALSE_REFUSAL', 'pbefore', 'untranslated: apply_patch preflight: f.py reference 1: span 1:0..1:0 changed since i') 2
+ROW ('FALSE_REFUSAL', 'pbefore', 'untranslated: apply_patch preflight: f.py reference 1: span 2:0..2:0 changed since i') 1
+ROW ('FALSE_REFUSAL', 'pbefore', 'untranslated: apply_patch preflight: f.py reference 1: span 3:0..3:0 changed since i') 1
+ROW ('FALSE_REFUSAL', 'pbefore', 'untranslated: apply_patch preflight: f.py reference 1: span 4:0..4:0 changed since i') 2
+ROW ('FALSE_REFUSAL', 'pend', 'point-at-insertion') 74
+ROW ('FALSE_REFUSAL', 'pend', 'point-at-insertion/just-after-a-two-readings-blank') 7
+ROW ('FALSE_REFUSAL', 'pend', 'removed-overlaps/two-readings-at-blank') 44
+ROW ('FALSE_REFUSAL', 'pend', 'untranslated: apply_patch preflight: f.py reference 1: span 1:1..1:1 changed since i') 2
+ROW ('FALSE_REFUSAL', 'pend', 'untranslated: apply_patch preflight: f.py reference 1: span 2:0..2:0 changed since i') 1
+ROW ('FALSE_REFUSAL', 'pend', 'untranslated: apply_patch preflight: f.py reference 1: span 3:0..3:0 changed since i') 1
+ROW ('FALSE_REFUSAL', 'pend', 'untranslated: apply_patch preflight: f.py reference 1: span 4:1..4:1 changed since i') 2
+ROW ('FALSE_REFUSAL', 'span', 'untranslated: apply_patch preflight: f.py reference 1: span 1:0..1:1 changed since i') 2
+ROW ('FALSE_REFUSAL', 'span', 'untranslated: apply_patch preflight: f.py reference 1: span 4:0..4:1 changed since i') 2
+ROW ('FALSE_REFUSAL', 'win1', 'removed-overlaps/two-readings-at-blank') 49
+ROW ('FALSE_REFUSAL', 'win1', 'untranslated: apply_patch preflight: f.py reference 1: lines 1-4 changed since the d') 3
+ROW ('FALSE_REFUSAL', 'win1', 'untranslated: apply_patch preflight: f.py reference 1: lines 1-7 changed since the d') 3
+ROW ('FALSE_REFUSAL', 'win2', 'removed-overlaps/two-readings-at-blank') 18
+ROW ('REFUSED_OK', 'pbefore', 'point-at-insertion') 30
+ROW ('REFUSED_OK', 'pbefore', 'point-at-insertion/just-after-a-two-readings-blank') 4
+ROW ('REFUSED_OK', 'pbefore', 'removed-overlaps') 606
+ROW ('REFUSED_OK', 'pbefore', 'removed-overlaps/two-readings-at-blank') 15
+ROW ('REFUSED_OK', 'pbefore', 'untranslated: apply_patch preflight: f.py reference 1: span 2:0..2:0 changed since i') 1
+ROW ('REFUSED_OK', 'pbefore', 'untranslated: apply_patch preflight: f.py reference 1: span 3:0..3:0 changed since i') 1
+ROW ('REFUSED_OK', 'pbefore', 'untranslated: apply_patch preflight: f.py reference 1: span 5:0..5:0 changed since i') 1
+ROW ('REFUSED_OK', 'pbefore', 'untranslated: apply_patch preflight: f.py reference 1: span 6:0..6:0 changed since i') 1
+ROW ('REFUSED_OK', 'pbefore', 'untranslated: apply_patch preflight: f.py reference 1: span 7:0..7:0 changed since i') 1
+ROW ('REFUSED_OK', 'pend', 'point-at-insertion') 6
+ROW ('REFUSED_OK', 'pend', 'point-at-insertion/just-after-a-two-readings-blank') 3
+ROW ('REFUSED_OK', 'pend', 'removed-overlaps') 631
+ROW ('REFUSED_OK', 'pend', 'removed-overlaps/two-readings-at-blank') 15
+ROW ('REFUSED_OK', 'pend', 'untranslated: apply_patch preflight: f.py reference 1: span 2:0..2:0 changed since i') 1
+ROW ('REFUSED_OK', 'pend', 'untranslated: apply_patch preflight: f.py reference 1: span 3:0..3:0 changed since i') 1
+ROW ('REFUSED_OK', 'pend', 'untranslated: apply_patch preflight: f.py reference 1: span 5:0..5:0 changed since i') 1
+ROW ('REFUSED_OK', 'pend', 'untranslated: apply_patch preflight: f.py reference 1: span 6:1..6:1 changed since i') 1
+ROW ('REFUSED_OK', 'pend', 'untranslated: apply_patch preflight: f.py reference 1: span 7:1..7:1 changed since i') 1
+ROW ('REFUSED_OK', 'span', 'removed-overlaps') 460
+ROW ('REFUSED_OK', 'span', 'removed-overlaps/two-readings-at-blank') 3
+ROW ('REFUSED_OK', 'span', 'untranslated: apply_patch preflight: f.py reference 1: span 6:0..6:1 changed since i') 1
+ROW ('REFUSED_OK', 'span', 'untranslated: apply_patch preflight: f.py reference 1: span 7:0..7:1 changed since i') 1
+ROW ('REFUSED_OK', 'win1', 'removed-overlaps') 638
+ROW ('REFUSED_OK', 'win1', 'removed-overlaps/two-readings-at-blank') 17
+ROW ('REFUSED_OK', 'win1', 'untranslated: apply_patch preflight: f.py reference 1: lines 1-4 changed since the d') 1
+ROW ('REFUSED_OK', 'win1', 'untranslated: apply_patch preflight: f.py reference 1: lines 1-7 changed since the d') 4
+ROW ('REFUSED_OK', 'win2', 'insertion-inside-window') 219
+ROW ('REFUSED_OK', 'win2', 'removed-overlaps') 724
+ROW ('REFUSED_OK', 'win2', 'removed-overlaps/two-readings-at-blank') 56
+ROW ('REFUSED_OK', 'win2', 'untranslated: apply_patch preflight: f.py reference 1: lines 1-4 changed since the d') 3
+ROW ('REFUSED_OK', 'win2', 'untranslated: apply_patch preflight: f.py reference 1: lines 1-7 changed since the d') 6
+FORM delete-line-start 75
+FORM delete-newline-first 85
+FORM insert-line-start 280
+FORM insert-newline-first 287
+FORM replace-window 411
+FORM two-readings-at-blank 67
+EXAMPLE ('FALSE_REFUSAL', 'pbefore', 'top-insert')
+    ['x', 'a', 'x', '']
+    '\n'
+    True
+    [[('col', (1, 1), (1, 1), '\nN'), ('col', (2, 1), (3, 1), '')], [('col', (1, 0), (1, 0), '\n'), ('win', (3, None), (3, None), 'x'), ('col', (4, 0), (4, 0), '\n')]]
+    'pbefore'
+    0
+    ['', 'P', 'x', 'N', 'x', '', '']
+    None
+    'apply_patch preflight: f.py reference 1: span 1:0..1:0 is an insertion point and an earlier edit in this run inserted text exactly there, so which side of that text it meant cannot be told; reread the'
+EXAMPLE ('FALSE_REFUSAL', 'win1', 'blank-in-range')
+    ['x', 'a', 'x', '']
+    '\n'
+    True
+    [[('col', (1, 1), (1, 1), '\nN'), ('col', (2, 1), (3, 1), '')], [('col', (1, 0), (1, 0), '\n'), ('win', (3, None), (3, None), 'x'), ('col', (4, 0), (4, 0), '\n')]]
+    'win1'
+    3
+    ['', 'x', 'N', 'x', 'Y', '']
+    None
+    'apply_patch preflight: f.py reference 1: lines 4-4 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest'
+EXAMPLE ('FALSE_REFUSAL', 'pbefore', 'blank-in-range')
+    ['x', 'a', 'x', '']
+    '\n'
+    True
+    [[('col', (1, 1), (1, 1), '\nN'), ('col', (2, 1), (3, 1), '')], [('col', (1, 0), (1, 0), '\n'), ('win', (3, None), (3, None), 'x'), ('col', (4, 0), (4, 0), '\n')]]
+    'pbefore'
+    3
+    ['', 'x', 'N', 'x', 'P', '', '']
+    None
+    "apply_patch preflight: f.py reference 1: span 4:0..4:0 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; rer"
+EXAMPLE ('FALSE_REFUSAL', 'pend', 'blank-in-range')
+    ['x', 'a', 'x', '']
+    '\n'
+    True
+    [[('col', (1, 1), (1, 1), '\nN'), ('col', (2, 1), (3, 1), '')], [('col', (1, 0), (1, 0), '\n'), ('win', (3, None), (3, None), 'x'), ('col', (4, 0), (4, 0), '\n')]]
+    'pend'
+    3
+    ['', 'x', 'N', 'x', '', 'P', '']
+    None
+    "apply_patch preflight: f.py reference 1: span 4:0..4:0 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; rer"
+EXAMPLE ('FALSE_REFUSAL', 'pbefore', 'other')
+    ['b', 'b']
+    '\n'
+    True
+    [[('col', (1, 1), (1, 1), '\n\n')]]
+    'pbefore'
+    1
+    ['b', '', '', 'P', 'b']
+    None
+    'apply_patch preflight: f.py reference 1: span 2:0..2:0 is an insertion point and an earlier edit in this run inserted text exactly there, so which side of that text it meant cannot be told; reread the'
+EXAMPLE ('FALSE_REFUSAL', 'pend', 'top-insert')
+    ['', 'x', '']
+    '\n'
+    True
+    [[('col', (1, 0), (1, 0), 'N\n')]]
+    'pend'
+    0
+    ['N', '', 'P', 'x', '']
+    None
+    'apply_patch preflight: f.py reference 1: span 1:0..1:0 is an insertion point and an earlier edit in this run inserted text exactly there, so which side of that text it meant cannot be told; reread the'
+EXAMPLE ('FALSE_REFUSAL', 'win1', 'top-insert')
+    ['', 'a', 'b', 'x', 'a', 'a', 'x']
+    '\n'
+    True
+    [[('col', (1, 0), (1, 0), '\nx\n'), ('win', (3, None), (4, None), 'N\nN')]]
+    'win1'
+    0
+    ['', 'x', 'Y', 'a', 'N', 'N', 'a', 'a', 'x']
+    None
+    'apply_patch preflight: f.py reference 1: lines 1-1 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest'
+EXAMPLE ('FALSE_REFUSAL', 'win2', 'top-insert')
+    ['', 'a', 'b', 'x', 'a', 'a', 'x']
+    '\n'
+    True
+    [[('col', (1, 0), (1, 0), '\nx\n'), ('win', (3, None), (4, None), 'N\nN')]]
+    'win2'
+    0
+    ['', 'x', 'Y', 'N', 'N', 'a', 'a', 'x']
+    None
+    'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest'
+EXAMPLE ('FALSE_REFUSAL', 'win2', 'blank-in-range')
+    ['', 'x', 'a', '']
+    '\n'
+    True
+    [[('col', (1, 0), (1, 0), '\n'), ('col', (3, 0), (3, 0), 'x\n'), ('col', (4, 0), (4, 0), '\nx\n')]]
+    'win2'
+    2
+    ['', '', 'x', 'x', 'Y', 'x', '']
+    None
+    'apply_patch preflight: f.py reference 1: lines 3-4 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest'
+EXAMPLE ('FALSE_REFUSAL', 'win1', 'other')
+    ['x', '', '', 'a', '', 'x', 'x']
+    '\n'
+    True
+    [[('col', (2, 0), (2, 0), '\nN\n'), ('col', (2, 0), (3, 0), ''), ('win', (5, None), (7, None), 'N\nN\n')]]
+    'win1'
+    0
+    ['Y', '', 'N', '', 'a', 'N', 'N', '']
+    None
+    "apply_patch preflight: f.py reference 1: lines 1-7 changed since the digest was issued, by a write this run's journal does not account for (a write from outside the run, or history the engine no longe"
+EXAMPLE ('FALSE_REFUSAL', 'span', 'other')
+    ['x', '', '', 'a', '', 'x', 'x']
+    '\n'
+    True
+    [[('col', (2, 0), (2, 0), '\nN\n'), ('col', (2, 0), (3, 0), ''), ('win', (5, None), (7, None), 'N\nN\n')]]
+    'span'
+    0
+    ['Y', '', 'N', '', 'a', 'N', 'N', '']
+    None
+    "apply_patch preflight: f.py reference 1: span 1:0..1:1 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; rer"
+EXAMPLE ('FALSE_REFUSAL', 'pend', 'other')
+    ['x', '', '', 'a', '', 'x', 'x']
+    '\n'
+    True
+    [[('col', (2, 0), (2, 0), '\nN\n'), ('col', (2, 0), (3, 0), ''), ('win', (5, None), (7, None), 'N\nN\n')]]
+    'pend'
+    0
+    ['x', 'P', '', 'N', '', 'a', 'N', 'N', '']
+    None
+    "apply_patch preflight: f.py reference 1: span 1:1..1:1 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; rer"
+EXAMPLE SKIP_ALL_DELETED
+    ['a', '', 'a']
+    [[('col', (1, 0), (2, 0), ''), ('col', (2, 0), (3, 1), '')], None]
+    'win1'
+    0
+    None
+    None
+FUZZ8R_DONE
+DOCKER_RC=0

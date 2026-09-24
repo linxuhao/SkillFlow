@@ -1,0 +1,22 @@
+CHANGED C1
+  review: WROTE=True applied=True | actual:   b'def g():\n    x = 1\n    return 1\n' | VERDICT=WROTE_WHERE_REFUSAL_EXPECTED
+  here:   WROTE=False applied=False | actual:   b'def f():\n    x = 1\n    return 1\n' | VERDICT=REFUSED
+CHANGED C1b
+  review: WROTE=True applied=True | actual:   b'def g():    x = 1\n    return 1\n' | VERDICT=WROTE_WHERE_REFUSAL_EXPECTED
+  here:   WROTE=False applied=False | actual:   b'def f():\n    x = 1\n    return 1\n' | VERDICT=REFUSED
+CHANGED C1r
+  review: WROTE=True applied=True | actual:   b'def g():\n    x = 1\n    return 1\n' | VERDICT=WROTE_WHERE_REFUSAL_EXPECTED
+  here:   WROTE=False applied=False | actual:   b'def f():\n    x = 1\n    return 1\n' | VERDICT=REFUSED
+CHANGED C1s
+  review: WROTE=True applied=True | actual:   b'def g():\n    x = 1\n    return 1\n' | VERDICT=WROTE_WHERE_REFUSAL_EXPECTED
+  here:   WROTE=False applied=False | actual:   b'def f():\n    x = 1\n    return 1\n' | VERDICT=REFUSED
+CHANGED C2
+  review: WROTE=True applied=True | actual:   b'b\nY\nc\n' | VERDICT=WROTE_WHERE_REFUSAL_EXPECTED
+  here:   WROTE=False applied=False | actual:   b'b\n\n\nc\n' | VERDICT=REFUSED
+CHANGED C3
+  review: WROTE=True applied=True | actual:   b'\nP# header\n\nimport os\n' | VERDICT=WRONG_WRITE
+  here:   WROTE=False applied=False | actual:   b'# header\n\nimport os\n' | VERDICT=REFUSED
+CHANGED C4
+  review: WROTE=True applied=True | actual:   b'\nPN\n\n\n' | VERDICT=WRONG_WRITE
+  here:   WROTE=False applied=False | actual:   b'N\n\n\n' | VERDICT=REFUSED
+CASES 7 CHANGED 7 MISSING_HERE 0

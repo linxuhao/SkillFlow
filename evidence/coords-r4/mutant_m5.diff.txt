@@ -1,0 +1,25 @@
+--- /home/linxuhao/stepflow-coords-r1/src/skillflow/citations.py	2026-09-24 15:36:42.375530031 +0000
++++ /home/linxuhao/coords-r4-scratch/mut_m5/src/skillflow/citations.py	2026-09-24 21:28:25.286209536 +0000
+@@ -99,6 +99,13 @@
+ _EPOCHS = itertools.count(1)
+ 
+ 
++def _ignite(name):
++    import os as _os
++    _p = _os.path.join(_os.path.dirname(__file__), '..', '..', 'IGNITIONS.log')
++    with open(_p, 'a') as _fh:
++        _fh.write('IGNITION ' + name + '\n')
++
++
+ def text_sha(text: str) -> str:
+     """The digest the journal identifies one version of a file's text by.
+ 
+@@ -346,7 +353,7 @@
+         if not entry:
+             return False
+         if epoch is not None and entry["epoch"] != epoch:
+-            return False
++            _ignite('m5')  # MUTANT m5: epoch comparison removed
+         shas = entry["shas"]
+         return (0 <= generation < len(shas) and shas[generation] == file_sha
+                 and shas[-1] == current_sha)

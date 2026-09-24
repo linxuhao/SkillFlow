@@ -1,0 +1,64 @@
+2,4c2,4
+<    WROTE=True applied=True
+<    actual:   b'l1\nl2\n# note\nL3NEW\nl4\nl5\n'
+<    CORRECT=True
+---
+>    WROTE=False applied=False
+>    actual:   b'l1\nl2\nL3NEW\nl4\nl5\n'
+>    CORRECT=False
+6,8c6,8
+<    WROTE=True applied=True
+<    actual:   b'l1\nl2\n# note\nl4\nl5\n'
+<    CORRECT=False (refusal expected or acceptable)
+---
+>    WROTE=False applied=False
+>    actual:   b'l1\nl2\nl4\nl5\n'
+>    CORRECT=True (refusal expected or acceptable)
+18,20c18,20
+<    WROTE=True applied=True
+<    actual:   b'l1\nl2\nSECOND\nFIRST\nl3\nl4\nl5\n'
+<    CORRECT=True
+---
+>    WROTE=False applied=False
+>    actual:   b'l1\nl2\nFIRST\nl3\nl4\nl5\n'
+>    CORRECT=False
+33,35c33,35
+<    WROTE=True applied=True
+<    actual:   b'import os\n\nDEFAULT_LIMIT_SECONDS = 30\n\nDEBUG = False\n'
+<    CORRECT=True
+---
+>    WROTE=False applied=False
+>    actual:   b'import os\n\nDEFAULT_TIMEOUT_SECONDS = 30\n\nDEBUG = False\n'
+>    CORRECT=False
+38,40c38,40
+<    WROTE=False applied=False
+<    actual:   b'import os\n\nDEFAULT_ZTIMEOUT_SECONDS = 30\n\nDEBUG = False\n'
+<    CORRECT=True (refusal expected or acceptable)
+---
+>    WROTE=True applied=True
+>    actual:   b'import os\n\nDEFAULT_ZLIMIT_SECONDS = 30\n\nDEBUG = False\n'
+>    CORRECT=False (refusal expected or acceptable)
+47,49c47,49
+<    WROTE=True applied=True
+<    actual:   b'import os\n\nDEFAULT_LIMIT_SECONDS = 30\n\nDEBUG = False\n'
+<    CORRECT=False (refusal expected or acceptable)
+---
+>    WROTE=False applied=False
+>    actual:   b'import os\n\nDEFAULT_TIMEOUT_SECONDS = 30\n\nDEBUG = False\n'
+>    CORRECT=True (refusal expected or acceptable)
+63,65c63,65
+<    WROTE=True applied=True
+<    actual:   b'import os\n\nDEFAULT_NEW_LIMIT_SECONDS = 30\n\nDEBUG = False\n'
+<    CORRECT=True
+---
+>    WROTE=False applied=False
+>    actual:   b'import os\n\nDEFAULT_LIMIT_SECONDS = 30\n\nDEBUG = False\n'
+>    CORRECT=False
+148,150c148,150
+<    WROTE=True applied=True
+<    actual:   b'a\n\n# note\n\nb\n'
+<    CORRECT=True
+---
+>    WROTE=False applied=False
+>    actual:   b'a\n\n\nb\n'
+>    CORRECT=False

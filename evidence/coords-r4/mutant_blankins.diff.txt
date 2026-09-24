@@ -1,0 +1,43 @@
+--- /home/linxuhao/stepflow-coords-r1/src/skillflow/strict_patch.py	2026-09-24 15:55:57.252053037 +0000
++++ /home/linxuhao/coords-r4-scratch/mut_blankins/src/skillflow/strict_patch.py	2026-09-24 21:28:53.052949477 +0000
+@@ -337,6 +337,13 @@
+ MAX_ECHO_CHARS = 240
+ 
+ 
++def _ignite(name):
++    import os as _os
++    _p = _os.path.join(_os.path.dirname(__file__), '..', '..', 'IGNITIONS.log')
++    with open(_p, 'a') as _fh:
++        _fh.write('IGNITION ' + name + '\n')
++
++
+ def _coords(from_line, from_col, to_line, to_col) -> str:
+     def col(value):
+         return "-" if value is None else str(value)
+@@ -476,6 +483,9 @@
+     insertion offset and is refused.
+     """
+     if whole_lines:
++        if start == end and new_text:
++            _ignite('blankins')  # MUTANT blankins: blank line replaced = insertion
++            return [(start, start, len(new_text))]
+         return [(start, end + 1, len(new_text) + 1)]
+     size = len(terminated)
+     if not (start < size and terminated[start] == "\n"
+@@ -746,8 +756,14 @@
+         starts.append(run)
+         run += len(line) + 1
+     starts.append(run)
+-    return [(starts[k], starts[k + m], sum(len(line) + 1 for line in new))
+-            for k, m, new in blocks]
++    out = []
++    for k, m, new in blocks:
++        if m == 1 and original[k] == "" and new:
++            _ignite('blankins')  # MUTANT blankins: blank line replaced = insertion
++            out.append((starts[k], starts[k], sum(len(line) + 1 for line in new) - 1))
++        else:
++            out.append((starts[k], starts[k + m], sum(len(line) + 1 for line in new)))
++    return out
+ 
+ 
+ def updated_bytes(before: bytes, op: Operation, edits: list | None = None) -> bytes:

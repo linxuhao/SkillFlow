@@ -1,0 +1,9 @@
+# sha256 of each changed source and test file as committed (git show HEAD:<path>), computed 2026-09-24T21:38:44Z
+# before this file was added by amending the candidate commit; the commit sha itself is reported in the final message, since a commit cannot contain its own sha.
+284ebb516541b1940e0ba0ba82eb16611c01dce83138bd438d86777d25478f6d  src/skillflow/citations.py
+2a64a0aa35e643fc2b81375bdb0568586bd79116e726e1be28247ff21d75e14a  src/skillflow/strict_patch.py
+5c28c3f7b8af1029889958b97276ea941de1c31c9ad86672ea885a723a55f323  tests/test_the_journal_records_what_the_applier_wrote.py
+ecdcb7bff093a5533c78930bf0be0adea89bf7351816b413e6ecbc468bcdb20d  tests/test_a_citation_writes_only_where_it_was_shown.py
+ae3f970353da500ad552fe63325c7b839eb9f67cc8a318df940c0c12e65714b2  src/skillflow/read_tools.py
+bedc01e2a8d4d2354c69b7197e7b034dbf433b2844691259bcfbaa86b50610bc  src/skillflow/tools/apply_patch/tool.yaml
+# logged in every candidate run: citations.py 284ebb51..., strict_patch.py 2a64a0aa..., read_tools.py ae3f9703..., tool.yaml bedc01e2... (suite_candidate.txt lines 2-5)

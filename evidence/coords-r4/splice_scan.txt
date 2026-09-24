@@ -1,0 +1,36 @@
+== src/skillflow/citations.py lines 429 hits 1
+   89 FUSED? _LOCK = threading.Lock()
+== src/skillflow/strict_patch.py lines 1040 hits 0
+== tests/test_the_journal_records_what_the_applier_wrote.py lines 685 hits 0
+== tests/test_a_citation_writes_only_where_it_was_shown.py lines 345 hits 0
+== evidence/coords-r4/case_compare.py lines 34 hits 0
+== evidence/coords-r4/compare_bytes.py lines 19 hits 0
+== evidence/coords-r4/fuzz8r.py lines 511 hits 2
+   77 FUSED? rng = random.Random(SEED)
+   78 FUSED? form_rng = random.Random(SEED * 7919 + 1)
+== evidence/coords-r4/mutate_r4.py lines 145 hits 0
+== evidence/coords-r4/r_accounts.py lines 26 hits 3
+   13 FUSED? ("R1 H5 shape", "a\nx\nb\n", strict_patch.Hunk(("a", "x", "b"), ("a", "x", "x", "b"))),
+   14 FUSED? ("R2 H6 shape", "a\nx\nx\nb\n", strict_patch.Hunk(("a", "x", "x", "b"), ("a", "x", "b"))),
+   15 FUSED? ("R3 top insertion", "l1\nl2\n", strict_patch.Hunk(("l1",), ("H", "l1"))),
+== evidence/coords-r4/splice_scan.py lines 36 hits 5
+   12 PHRASE not a defect PHRASES = ("not a defect", "by design", "documented", "known limitation",
+   12 PHRASE by design PHRASES = ("not a defect", "by design", "documented", "known limitation",
+   12 PHRASE documented PHRASES = ("not a defect", "by design", "documented", "known limitation",
+   12 PHRASE known limitation PHRASES = ("not a defect", "by design", "documented", "known limitation",
+   13 PHRASE intentionally "intentionally")
+== evidence/coords-r4/sweep_summary.py lines 32 hits 0
+== evidence/coords-r4/mutants.sh lines 27 hits 0
+== evidence/coords-r4/replay.sh lines 12 hits 0
+== evidence/coords-r4/rerun.sh lines 11 hits 0
+== evidence/coords-r4/run_bytes.sh lines 18 hits 0
+== evidence/coords-r4/run_in_throwaway.sh lines 15 hits 0
+== evidence/coords-r4/run_py.sh lines 19 hits 0
+== evidence/coords-r4/stage1.sh lines 29 hits 0
+== evidence/coords-r4/stage2.sh lines 22 hits 0
+== evidence/coords-r4/sweep.sh lines 21 hits 0
+== evidence/coords-r4/delivery_notes.md lines 335 hits 3
+   259 STALE_TAIL? - B1 writes the stale tail `…census.gd",d",`;
+   297 FUSED? - `FUSED?` on Python attribute calls: `citations.py:89` (`threading.Lock()`), `fuzz8r.py:77-78` (`random.Random(...)`), 
+   298 STALE_TAIL? - `FUSED?` on this bullet's own quotation of those names, and `STALE_TAIL?` on this note's quotation of the base's defec
+TOTAL_HITS 14

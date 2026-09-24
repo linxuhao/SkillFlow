@@ -1,0 +1,2593 @@
+TREE_HEAD= DIRTY_PATHS=0
+2a64a0aa35e643fc2b81375bdb0568586bd79116e726e1be28247ff21d75e14a  src/skillflow/strict_patch.py
+14570fcde41551ceba1cc2c3ee4082c85d9483bb87630538a31fb9ec6932ebe4  src/skillflow/citations.py
+ae3f970353da500ad552fe63325c7b839eb9f67cc8a318df940c0c12e65714b2  src/skillflow/read_tools.py
+bedc01e2a8d4d2354c69b7197e7b034dbf433b2844691259bcfbaa86b50610bc  src/skillflow/tools/apply_patch/tool.yaml
+IMPORT_PROOF /home/linxuhao/coords-r4-scratch/mut_point/src/skillflow/__init__.py
+PYTEST 9.1.1 ASYNCIO 1.4.0
+..................s......ss............................................. [  4%]
+........................................................................ [  9%]
+........................................................................ [ 13%]
+........................................................................ [ 18%]
+........................................................................ [ 22%]
+........................................................................ [ 27%]
+........................................................................ [ 32%]
+........................................................................ [ 36%]
+........................................................................ [ 41%]
+........................................................................ [ 45%]
+........................................................................ [ 50%]
+........................................................................ [ 55%]
+........................................................................ [ 59%]
+..............................................F..........FFFFFF......... [ 64%]
+........FFFFFF.......FFFFFFFFFFFFFFF..........FFFFFFFFFFFFFFFFFFFFFFFF.. [ 68%]
+...........FFFFFFFFFFFFFFFFFFFFFFFF.............FFFFFFFFFFF.FFF......... [ 73%]
+.FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF...................................... [ 78%]
+........................................................................ [ 82%]
+........................................................................ [ 87%]
+........................................................................ [ 91%]
+........................................................................ [ 96%]
+........................................................                 [100%]
+=================================== FAILURES ===================================
+__________ test_H3_a_point_on_this_run_s_insertion_offset_is_refused ___________
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_H3_a_point_on_this_run_s_0')
+
+    def test_H3_a_point_on_this_run_s_insertion_offset_is_refused(root):
+        """probe4.py H3, intended bytes retracted by the goal's rev 5: the point
+        2:0 was previewed before blank line 2, and the run's V4A then inserted a
+        blank line exactly there. Before or after that line is a guess."""
+        put(root, b"a\n\nb\n")
+        w = rd(root, 0, 3)["citation"]["sha"]
+        ins = span(root, w, 2, 0, 2, 0)
+        before = own(root, ap(root, patch=v4a(" a\n+\n \n b\n")))
+        assert before == b"a\n\n\nb\n"
+        res = ap(root, [{"file": REL, "sha": ins, "new_text": "# note\n"}])
+>       refused(root, res, before, point(2, 0))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:146: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_H3_a_point_on_this_run_s_0')
+res = {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+before = b'a\n\n\nb\n'
+error = 'apply_patch preflight: f.py reference 1: span 2:0..2:0 is an insertion point and an earlier edit in this run inserted... it meant cannot be told; reread the range and resend the reference with the new digest to be shown where it lands now'
+
+    def refused(root, res, before, error):
+>       assert res["applied"] is False, res
+E       AssertionError: {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+E       assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:106: AssertionError
+____ test_C3_a_point_on_a_blank_first_line_after_a_top_insertion_is_refused ____
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C3_a_point_on_a_blank_fir0')
+
+    def test_C3_a_point_on_a_blank_first_line_after_a_top_insertion_is_refused(root):
+        """probe8.py C3. It used to fuse `\\nP# header`."""
+        put(root, b"\nimport os\n")
+        w = rd(root, 0, 2)["citation"]["sha"]
+        p = span(root, w, 1, 0, 1, 0)
+        before = own(root, ap(root, patch=v4a("+# header\n \n import os\n")))
+        assert before == b"# header\n\nimport os\n"
+        res = ap(root, [{"file": REL, "sha": p, "new_text": "\nP"}])
+>       refused(root, res, before, point(1, 0))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:280: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C3_a_point_on_a_blank_fir0')
+res = {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+before = b'# header\n\nimport os\n'
+error = 'apply_patch preflight: f.py reference 1: span 1:0..1:0 is an insertion point and an earlier edit in this run inserted... it meant cannot be told; reread the range and resend the reference with the new digest to be shown where it lands now'
+
+    def refused(root, res, before, error):
+>       assert res["applied"] is False, res
+E       AssertionError: {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+E       assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:106: AssertionError
+________________ test_C4_the_fuzz7_example_verbatim_is_refused _________________
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C4_the_fuzz7_example_verb0')
+
+    def test_C4_the_fuzz7_example_verbatim_is_refused(root):
+        """probe8.py C4: ['',''], V4A '+N / blank / blank', point 1:0 with '\\nP'.
+        It used to fuse `\\nPN`."""
+        put(root, b"\n\n")
+        w = rd(root, 0, 2)["citation"]["sha"]
+        p = span(root, w, 1, 0, 1, 0)
+        before = own(root, ap(root, patch=v4a("+N\n \n \n")))
+        assert before == b"N\n\n\n"
+        res = ap(root, [{"file": REL, "sha": p, "new_text": "\nP"}])
+>       refused(root, res, before, point(1, 0))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:292: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C4_the_fuzz7_example_verb0')
+res = {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+before = b'N\n\n\n'
+error = 'apply_patch preflight: f.py reference 1: span 1:0..1:0 is an insertion point and an earlier edit in this run inserted... it meant cannot be told; reread the range and resend the reference with the new digest to be shown where it lands now'
+
+    def refused(root, res, before, error):
+>       assert res["applied"] is False, res
+E       AssertionError: {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+E       assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:106: AssertionError
+______ test_T1_a_point_before_line_1_after_a_v4a_top_insertion_is_refused ______
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_T1_a_point_before_line_1_0')
+
+    def test_T1_a_point_before_line_1_after_a_v4a_top_insertion_is_refused(root):
+        """probe6.py T1. It used to write `import sys` above the docstring."""
+        put(root, b"import os\nx = 1\n")
+        w = rd(root, 0, 2)["citation"]["sha"]
+        p = span(root, w, 1, 0, 1, 0)
+        before = own(root, ap(root, patch=v4a('+"""Doc."""\n import os\n')))
+        res = ap(root, [{"file": REL, "sha": p, "new_text": "import sys\n"}])
+>       refused(root, res, before, point(1, 0))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:308: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_T1_a_point_before_line_1_0')
+res = {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+before = b'"""Doc."""\nimport os\nx = 1\n'
+error = 'apply_patch preflight: f.py reference 1: span 1:0..1:0 is an insertion point and an earlier edit in this run inserted... it meant cannot be told; reread the range and resend the reference with the new digest to be shown where it lands now'
+
+    def refused(root, res, before, error):
+>       assert res["applied"] is False, res
+E       AssertionError: {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+E       assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:106: AssertionError
+_______________ test_T1k_the_same_point_one_line_down_is_refused _______________
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_T1k_the_same_point_one_li0')
+
+    def test_T1k_the_same_point_one_line_down_is_refused(root):
+        """probe6.py T1k. The review's table has this one correct (review.md line
+        211); the goal's table refuses a point on an insertion offset wherever it
+        is, so this is a false refusal, counted in the delivery note."""
+        put(root, b"a = 0\nimport os\nx = 1\n")
+        w = rd(root, 0, 3)["citation"]["sha"]
+        p = span(root, w, 2, 0, 2, 0)
+        before = own(root, ap(root, patch=v4a(' a = 0\n+"""Doc."""\n import os\n')))
+        res = ap(root, [{"file": REL, "sha": p, "new_text": "import sys\n"}])
+>       refused(root, res, before, point(2, 0))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:320: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_T1k_the_same_point_one_li0')
+res = {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+before = b'a = 0\n"""Doc."""\nimport os\nx = 1\n'
+error = 'apply_patch preflight: f.py reference 1: span 2:0..2:0 is an insertion point and an earlier edit in this run inserted... it meant cannot be told; reread the range and resend the reference with the new digest to be shown where it lands now'
+
+    def refused(root, res, before, error):
+>       assert res["applied"] is False, res
+E       AssertionError: {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+E       assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:106: AssertionError
+_______ test_T1r_T1v_one_byte_change_two_formats_one_outcome[reference] ________
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_T1r_T1v_one_byte_change_t0')
+how = 'reference'
+
+    @pytest.mark.parametrize("how", ["reference", "v4a"])
+    def test_T1r_T1v_one_byte_change_two_formats_one_outcome(root, how):
+        """probe6.py T1r (reference, line-start form) and T1v (V4A). The review
+        found the same byte change landing in two places (review.md lines
+        152-156). Both are now the same point on the same insertion offset."""
+        put(root, b"a = 0\nimport os\nx = 1\nz = 2\n")
+        w0 = rd(root, 0, 4)["citation"]["sha"]
+        p = span(root, w0, 2, 0, 2, 0)
+        w4 = rd(root, 3, 4)["citation"]["sha"]
+        own(root, ap(root, [{"file": REL, "sha": w4, "new_text": "z = 3"}]))
+        if how == "reference":
+            w1 = rd(root, 0, 4)["citation"]["sha"]
+            p1 = span(root, w1, 2, 0, 2, 0)
+            assert p != p1
+            own(root, ap(root, [{"file": REL, "sha": p1, "new_text": '"""Doc."""\n'}]))
+        else:
+            own(root, ap(root, patch=v4a(' a = 0\n+"""Doc."""\n import os\n')))
+        before = (root / REL).read_bytes()
+        assert before == b'a = 0\n"""Doc."""\nimport os\nx = 1\nz = 3\n'
+        res = ap(root, [{"file": REL, "sha": p, "new_text": "import sys\n"}])
+>       refused(root, res, before, point(2, 0))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:343: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_T1r_T1v_one_byte_change_t0')
+res = {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+before = b'a = 0\n"""Doc."""\nimport os\nx = 1\nz = 3\n'
+error = 'apply_patch preflight: f.py reference 1: span 2:0..2:0 is an insertion point and an earlier edit in this run inserted... it meant cannot be told; reread the range and resend the reference with the new digest to be shown where it lands now'
+
+    def refused(root, res, before, error):
+>       assert res["applied"] is False, res
+E       AssertionError: {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+E       assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:106: AssertionError
+__________ test_T1r_T1v_one_byte_change_two_formats_one_outcome[v4a] ___________
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_T1r_T1v_one_byte_change_t1')
+how = 'v4a'
+
+    @pytest.mark.parametrize("how", ["reference", "v4a"])
+    def test_T1r_T1v_one_byte_change_two_formats_one_outcome(root, how):
+        """probe6.py T1r (reference, line-start form) and T1v (V4A). The review
+        found the same byte change landing in two places (review.md lines
+        152-156). Both are now the same point on the same insertion offset."""
+        put(root, b"a = 0\nimport os\nx = 1\nz = 2\n")
+        w0 = rd(root, 0, 4)["citation"]["sha"]
+        p = span(root, w0, 2, 0, 2, 0)
+        w4 = rd(root, 3, 4)["citation"]["sha"]
+        own(root, ap(root, [{"file": REL, "sha": w4, "new_text": "z = 3"}]))
+        if how == "reference":
+            w1 = rd(root, 0, 4)["citation"]["sha"]
+            p1 = span(root, w1, 2, 0, 2, 0)
+            assert p != p1
+            own(root, ap(root, [{"file": REL, "sha": p1, "new_text": '"""Doc."""\n'}]))
+        else:
+            own(root, ap(root, patch=v4a(' a = 0\n+"""Doc."""\n import os\n')))
+        before = (root / REL).read_bytes()
+        assert before == b'a = 0\n"""Doc."""\nimport os\nx = 1\nz = 3\n'
+        res = ap(root, [{"file": REL, "sha": p, "new_text": "import sys\n"}])
+>       refused(root, res, before, point(2, 0))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:343: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_T1r_T1v_one_byte_change_t1')
+res = {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+before = b'a = 0\n"""Doc."""\nimport os\nx = 1\nz = 3\n'
+error = 'apply_patch preflight: f.py reference 1: span 2:0..2:0 is an insertion point and an earlier edit in this run inserted... it meant cannot be told; reread the range and resend the reference with the new digest to be shown where it lands now'
+
+    def refused(root, res, before, error):
+>       assert res["applied"] is False, res
+E       AssertionError: {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+E       assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:106: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[one-insert0-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w0')
+shape = 'one', edit = ('insert', 0, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[one-insert0-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w1')
+shape = 'one', edit = ('insert', 0, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[one-insert0-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w2')
+shape = 'one', edit = ('insert', 0, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[one-insert0-''-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w3')
+shape = 'one', edit = ('insert', 0, ''), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[one-insert0-'N'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w4')
+shape = 'one', edit = ('insert', 0, 'N'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'N', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[one-insert0-'N'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w5')
+shape = 'one', edit = ('insert', 0, 'N'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'N', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert0-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w13')
+shape = 'two', edit = ('insert', 0, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'x', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert0-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w14')
+shape = 'two', edit = ('insert', 0, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'x', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert0-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w15')
+shape = 'two', edit = ('insert', 0, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', '', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert0-''-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w16')
+shape = 'two', edit = ('insert', 0, ''), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', '', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert0-'N'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w17')
+shape = 'two', edit = ('insert', 0, 'N'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'N', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert0-'N'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w18')
+shape = 'two', edit = ('insert', 0, 'N'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'N', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w19')
+shape = 'two', edit = ('insert', 1, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-'x'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w20')
+shape = 'two', edit = ('insert', 1, 'x'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w21')
+shape = 'two', edit = ('insert', 1, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w22')
+shape = 'two', edit = ('insert', 1, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-''-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w23')
+shape = 'two', edit = ('insert', 1, ''), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-''-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w24')
+shape = 'two', edit = ('insert', 1, ''), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-'N'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w25')
+shape = 'two', edit = ('insert', 1, 'N'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'N', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-'N'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w26')
+shape = 'two', edit = ('insert', 1, 'N'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'N', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-'N'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w27')
+shape = 'two', edit = ('insert', 1, 'N'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'N', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert0-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w38')
+shape = 'three', edit = ('insert', 0, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'x', 'x', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert0-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w39')
+shape = 'three', edit = ('insert', 0, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'x', 'x', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert0-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w40')
+shape = 'three', edit = ('insert', 0, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', '', 'x', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert0-''-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w41')
+shape = 'three', edit = ('insert', 0, ''), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', '', 'x', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert0-'N'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w42')
+shape = 'three', edit = ('insert', 0, 'N'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'N', 'x', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert0-'N'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w43')
+shape = 'three', edit = ('insert', 0, 'N'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'N', 'x', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w44')
+shape = 'three', edit = ('insert', 1, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'x', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-'x'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w45')
+shape = 'three', edit = ('insert', 1, 'x'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'x', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w46')
+shape = 'three', edit = ('insert', 1, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'x', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w47')
+shape = 'three', edit = ('insert', 1, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', '', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-''-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w48')
+shape = 'three', edit = ('insert', 1, ''), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', '', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-''-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w49')
+shape = 'three', edit = ('insert', 1, ''), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', '', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-'N'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w50')
+shape = 'three', edit = ('insert', 1, 'N'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'N', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-'N'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w51')
+shape = 'three', edit = ('insert', 1, 'N'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'N', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-'N'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w52')
+shape = 'three', edit = ('insert', 1, 'N'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'N', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w53')
+shape = 'three', edit = ('insert', 2, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', 'x', 'P', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-'x'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w54')
+shape = 'three', edit = ('insert', 2, 'x'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', 'x', 'P', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w55')
+shape = 'three', edit = ('insert', 2, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', 'x', 'P', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w56')
+shape = 'three', edit = ('insert', 2, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', 'x', 'P', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-''-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w57')
+shape = 'three', edit = ('insert', 2, ''), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', 'x', 'P', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-''-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w58')
+shape = 'three', edit = ('insert', 2, ''), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', 'x', 'P', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-'N'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w59')
+shape = 'three', edit = ('insert', 2, 'N'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', 'x', 'P', 'N', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-'N'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w60')
+shape = 'three', edit = ('insert', 2, 'N'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', 'x', 'P', 'N', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-'N'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w61')
+shape = 'three', edit = ('insert', 2, 'N'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', 'x', 'P', 'N', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert0-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w75')
+shape = 'blank_between', edit = ('insert', 0, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'x', 'x', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert0-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w76')
+shape = 'blank_between', edit = ('insert', 0, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'x', 'x', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert0-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w77')
+shape = 'blank_between', edit = ('insert', 0, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', '', 'x', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert0-''-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w78')
+shape = 'blank_between', edit = ('insert', 0, ''), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', '', 'x', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert0-'N'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w79')
+shape = 'blank_between', edit = ('insert', 0, 'N'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'N', 'x', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert0-'N'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w80')
+shape = 'blank_between', edit = ('insert', 0, 'N'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'N', 'x', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w81')
+shape = 'blank_between', edit = ('insert', 1, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'x', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-'x'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w82')
+shape = 'blank_between', edit = ('insert', 1, 'x'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'x', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w83')
+shape = 'blank_between', edit = ('insert', 1, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'x', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w84')
+shape = 'blank_between', edit = ('insert', 1, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', '', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-''-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w85')
+shape = 'blank_between', edit = ('insert', 1, ''), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', '', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-''-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w86')
+shape = 'blank_between', edit = ('insert', 1, ''), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', '', 'P', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-'N'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w87')
+shape = 'blank_between', edit = ('insert', 1, 'N'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'N', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-'N'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w88')
+shape = 'blank_between', edit = ('insert', 1, 'N'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'N', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-'N'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w89')
+shape = 'blank_between', edit = ('insert', 1, 'N'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['x', 'P', 'N', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w90')
+shape = 'blank_between', edit = ('insert', 2, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', '', 'P', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-'x'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w91')
+shape = 'blank_between', edit = ('insert', 2, 'x'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', '', 'P', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w92')
+shape = 'blank_between', edit = ('insert', 2, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', '', 'P', 'x', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w93')
+shape = 'blank_between', edit = ('insert', 2, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', '', 'P', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-''-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w94')
+shape = 'blank_between', edit = ('insert', 2, ''), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', '', 'P', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-''-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w95')
+shape = 'blank_between', edit = ('insert', 2, ''), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', '', 'P', '', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-'N'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w96')
+shape = 'blank_between', edit = ('insert', 2, 'N'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', '', 'P', 'N', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-'N'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w97')
+shape = 'blank_between', edit = ('insert', 2, 'N'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', '', 'P', 'N', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-'N'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w98')
+shape = 'blank_between', edit = ('insert', 2, 'N'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['x', '', 'P', 'N', 'x'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert0-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w112')
+shape = 'two_blanks', edit = ('insert', 0, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'x', '', ''])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert0-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w113')
+shape = 'two_blanks', edit = ('insert', 0, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'x', '', ''])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert0-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w114')
+shape = 'two_blanks', edit = ('insert', 0, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', '', '', ''])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert0-''-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w115')
+shape = 'two_blanks', edit = ('insert', 0, ''), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['', 'P', '', ''])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert0-'N'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w116')
+shape = 'two_blanks', edit = ('insert', 0, 'N'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'N', '', ''])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert0-'N'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w117')
+shape = 'two_blanks', edit = ('insert', 0, 'N'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'N', '', ''])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w118')
+shape = 'two_blanks', edit = ('insert', 1, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['', 'P', 'x', ''])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-'x'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w119')
+shape = 'two_blanks', edit = ('insert', 1, 'x'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['', 'P', 'x', ''])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w120')
+shape = 'two_blanks', edit = ('insert', 1, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['', 'P', 'x', ''])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w121')
+shape = 'two_blanks', edit = ('insert', 1, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['', 'P', '', ''])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-''-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w122')
+shape = 'two_blanks', edit = ('insert', 1, ''), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['', 'P', '', ''])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-'N'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w124')
+shape = 'two_blanks', edit = ('insert', 1, 'N'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['', 'P', 'N', ''])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-'N'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w125')
+shape = 'two_blanks', edit = ('insert', 1, 'N'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['', 'P', 'N', ''])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-'N'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w126')
+shape = 'two_blanks', edit = ('insert', 1, 'N'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['', 'P', 'N', ''])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert0-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w137')
+shape = 'run_in_context', edit = ('insert', 0, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'x', 'a', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert0-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w138')
+shape = 'run_in_context', edit = ('insert', 0, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'x', 'a', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert0-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w139')
+shape = 'run_in_context', edit = ('insert', 0, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', '', 'a', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert0-''-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w140')
+shape = 'run_in_context', edit = ('insert', 0, ''), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', '', 'a', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert0-'N'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w141')
+shape = 'run_in_context', edit = ('insert', 0, 'N'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'N', 'a', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert0-'N'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w142')
+shape = 'run_in_context', edit = ('insert', 0, 'N'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 0), True, None, ['P', 'N', 'a', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w143')
+shape = 'run_in_context', edit = ('insert', 1, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['a', 'P', 'x', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-'x'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w144')
+shape = 'run_in_context', edit = ('insert', 1, 'x'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['a', 'P', 'x', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w145')
+shape = 'run_in_context', edit = ('insert', 1, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['a', 'P', 'x', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w146')
+shape = 'run_in_context', edit = ('insert', 1, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['a', 'P', '', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-''-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w147')
+shape = 'run_in_context', edit = ('insert', 1, ''), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['a', 'P', '', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-''-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w148')
+shape = 'run_in_context', edit = ('insert', 1, ''), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['a', 'P', '', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-'N'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w149')
+shape = 'run_in_context', edit = ('insert', 1, 'N'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['a', 'P', 'N', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-'N'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w150')
+shape = 'run_in_context', edit = ('insert', 1, 'N'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['a', 'P', 'N', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-'N'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w151')
+shape = 'run_in_context', edit = ('insert', 1, 'N'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 1), True, None, ['a', 'P', 'N', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w152')
+shape = 'run_in_context', edit = ('insert', 2, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['a', 'x', 'P', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-'x'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w153')
+shape = 'run_in_context', edit = ('insert', 2, 'x'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['a', 'x', 'P', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w154')
+shape = 'run_in_context', edit = ('insert', 2, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['a', 'x', 'P', 'x', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w155')
+shape = 'run_in_context', edit = ('insert', 2, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['a', 'x', 'P', '', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-''-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w156')
+shape = 'run_in_context', edit = ('insert', 2, ''), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['a', 'x', 'P', '', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-''-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w157')
+shape = 'run_in_context', edit = ('insert', 2, ''), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['a', 'x', 'P', '', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-'N'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w158')
+shape = 'run_in_context', edit = ('insert', 2, 'N'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['a', 'x', 'P', 'N', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-'N'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w159')
+shape = 'run_in_context', edit = ('insert', 2, 'N'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['a', 'x', 'P', 'N', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-'N'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w160')
+shape = 'run_in_context', edit = ('insert', 2, 'N'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 2), True, None, ['a', 'x', 'P', 'N', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-'x'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w161')
+shape = 'run_in_context', edit = ('insert', 3, 'x'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 3), True, None, ['a', 'x', 'x', 'P', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-'x'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w162')
+shape = 'run_in_context', edit = ('insert', 3, 'x'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 3), True, None, ['a', 'x', 'x', 'P', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-'x'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w163')
+shape = 'run_in_context', edit = ('insert', 3, 'x'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 3), True, None, ['a', 'x', 'x', 'P', 'x', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-''-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w164')
+shape = 'run_in_context', edit = ('insert', 3, ''), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 3), True, None, ['a', 'x', 'x', 'P', '', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-''-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w165')
+shape = 'run_in_context', edit = ('insert', 3, ''), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 3), True, None, ['a', 'x', 'x', 'P', '', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-''-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w166')
+shape = 'run_in_context', edit = ('insert', 3, ''), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 3), True, None, ['a', 'x', 'x', 'P', '', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-'N'-v4a] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w167')
+shape = 'run_in_context', edit = ('insert', 3, 'N'), fmt = 'v4a'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 3), True, None, ['a', 'x', 'x', 'P', 'N', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-'N'-newline-first] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w168')
+shape = 'run_in_context', edit = ('insert', 3, 'N'), fmt = 'newline-first'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 3), True, None, ['a', 'x', 'x', 'P', 'N', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+_ test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-'N'-line-start] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w169')
+shape = 'run_in_context', edit = ('insert', 3, 'N'), fmt = 'line-start'
+
+    @pytest.mark.parametrize("shape,edit,fmt", CASES, ids=IDS)
+    def test_an_older_citation_lands_where_the_table_puts_it_or_is_refused(
+            tmp_path, shape, edit, fmt):
+        lines = SHAPES[shape]
+        for probe in _probes(len(lines)):
+            expected = _oracle(shape, edit, fmt, probe)
+            applied, error, result = _outcome(tmp_path, lines, edit, fmt, probe)
+            if expected is None:
+>               assert applied is False and result == _after(lines, edit)[0], (
+                    probe, applied, error, result)
+E               AssertionError: (('point', 3), True, None, ['a', 'x', 'x', 'P', 'N', 'b'])
+E               assert (True is False)
+
+tests/test_the_journal_records_what_the_applier_wrote.py:635: AssertionError
+=============================== warnings summary ===============================
+tests/test_integration_configs.py: 39 warnings
+tests/test_regression.py: 1 warning
+  /home/linxuhao/coords-r4-scratch/mut_point/src/skillflow/core.py:7633: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    elapsed = (dt.datetime.utcnow() - started_dt).total_seconds()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_H3_a_point_on_this_run_s_insertion_offset_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_C3_a_point_on_a_blank_first_line_after_a_top_insertion_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_C4_the_fuzz7_example_verbatim_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_T1_a_point_before_line_1_after_a_v4a_top_insertion_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_T1k_the_same_point_one_line_down_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_T1r_T1v_one_byte_change_two_formats_one_outcome[reference]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_T1r_T1v_one_byte_change_two_formats_one_outcome[v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[one-insert0-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[one-insert0-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[one-insert0-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[one-insert0-''-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[one-insert0-'N'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[one-insert0-'N'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert0-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert0-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert0-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert0-''-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert0-'N'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert0-'N'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-'x'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-''-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-''-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-'N'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-'N'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two-insert1-'N'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert0-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert0-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert0-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert0-''-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert0-'N'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert0-'N'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-'x'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-''-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-''-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-'N'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-'N'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert1-'N'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-'x'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-''-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-''-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-'N'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-'N'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[three-insert2-'N'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert0-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert0-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert0-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert0-''-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert0-'N'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert0-'N'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-'x'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-''-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-''-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-'N'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-'N'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert1-'N'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-'x'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-''-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-''-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-'N'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-'N'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[blank_between-insert2-'N'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert0-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert0-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert0-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert0-''-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert0-'N'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert0-'N'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-'x'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-''-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-'N'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-'N'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[two_blanks-insert1-'N'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert0-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert0-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert0-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert0-''-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert0-'N'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert0-'N'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-'x'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-''-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-''-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-'N'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-'N'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert1-'N'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-'x'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-''-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-''-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-'N'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-'N'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert2-'N'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-'x'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-'x'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-'x'-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-''-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-''-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-''-line-start]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-'N'-v4a]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-'N'-newline-first]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_the_table_puts_it_or_is_refused[run_in_context-insert3-'N'-line-start]
+123 failed, 1442 passed, 3 skipped, 40 warnings in 24.86s
+PYTEST_RC=1
+DOCKER_RC=1

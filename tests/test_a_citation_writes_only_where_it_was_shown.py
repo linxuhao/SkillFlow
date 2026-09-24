@@ -237,10 +237,11 @@ BODY = b"import os\n\nDEFAULT_TIMEOUT_SECONDS = 30\n\nDEBUG = False\n"
 
 
 def test_T1_the_shown_text_edited_after_the_preview_is_refused(root):
-    """probe3.py case T1. The inner edit is strictly inside the previewed
-    span, so both of the span's ends still translate: only the comparison of
-    the text there with the text shown can refuse it. Without that comparison
-    the review's mutant M3 wrote `OTHER = 40` over the inner edit."""
+    """probe3.py case T1. The inner edit removed text inside the previewed
+    span, so the translation refuses it: a removed range overlaps the span.
+    The comparison of the text there with the text shown is exercised on its
+    own by `test_a_span_rechecks_its_text_when_the_journal_misdescribes_the_edit`
+    (tests/test_the_journal_records_what_the_applier_wrote.py)."""
     put(root, BODY)
     w = rd(root, 0, 5)["citation"]["sha"]
     big = ap(root, [{"file": REL, "sha": w, "from_line": 3, "from_col": 0,

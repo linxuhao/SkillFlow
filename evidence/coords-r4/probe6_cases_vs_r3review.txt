@@ -1,0 +1,43 @@
+CHANGED T1
+  review: WROTE=True applied=True | actual:   b'import sys\n"""Doc."""\nimport os\nx = 1\n' | VERDICT=WRONG_WRITE
+  here:   WROTE=False applied=False | actual:   b'"""Doc."""\nimport os\nx = 1\n' | VERDICT=REFUSED
+CHANGED T1k
+  review: WROTE=True applied=True | actual:   b'a = 0\n"""Doc."""\nimport sys\nimport os\nx = 1\n' | VERDICT=CORRECT
+  here:   WROTE=False applied=False | actual:   b'a = 0\n"""Doc."""\nimport os\nx = 1\n' | VERDICT=REFUSED
+CHANGED T1r
+  review: WROTE=True applied=True | actual:   b'a = 0\nimport sys\n"""Doc."""\nimport os\nx = 1\nz = 3\n' | VERDICT=WRONG_WRITE
+  here:   WROTE=False applied=False | actual:   b'a = 0\n"""Doc."""\nimport os\nx = 1\nz = 3\n' | VERDICT=REFUSED
+CHANGED T1v
+  review: WROTE=True applied=True | actual:   b'a = 0\n"""Doc."""\nimport sys\nimport os\nx = 1\nz = 3\n' | VERDICT=CORRECT
+  here:   WROTE=False applied=False | actual:   b'a = 0\n"""Doc."""\nimport os\nx = 1\nz = 3\n' | VERDICT=REFUSED
+CHANGED T2a
+  review: WROTE=False applied=False | actual:   b'# header\nimport os\nx = 1\ny = 2\n' | VERDICT=REFUSED
+  here:   WROTE=True applied=True | actual:   b'# header\nimport sys\nx = 1\ny = 2\n' | VERDICT=CORRECT
+CHANGED T2c
+  review: WROTE=False applied=False | actual:   b'# header\nimport os\nx = 1\ny = 2\n' | VERDICT=REFUSED
+  here:   WROTE=True applied=True | actual:   b'# header\nimport sys\nx = 9\ny = 2\n' | VERDICT=CORRECT
+CHANGED T2d
+  review: WROTE=False applied=False | actual:   b'# header\nimport os\nx = 1\ny = 2\n' | VERDICT=REFUSED
+  here:   WROTE=True applied=True | actual:   b'# header\nimport sys\nx = 1\ny = 2\n' | VERDICT=CORRECT
+CHANGED T2e
+  review: WROTE=False applied=False | actual:   b'# header\nimport os\nx = 1\n' | VERDICT=REFUSED
+  here:   WROTE=True applied=True | actual:   b'# header\nimport sys\nx = 1\n' | VERDICT=CORRECT
+CHANGED T3a
+  review: WROTE=True applied=True | actual:   b'a\nP\nc\n' | VERDICT=WROTE_WHERE_REFUSAL_EXPECTED
+  here:   WROTE=False applied=False | actual:   b'a\nc\n' | VERDICT=REFUSED
+CHANGED T3e
+  review: WROTE=True applied=True | actual:   b'a\nP\nx\nb\n' | VERDICT=WROTE_WHERE_REFUSAL_EXPECTED
+  here:   WROTE=False applied=False | actual:   b'a\nx\nb\n' | VERDICT=REFUSED
+CHANGED R1
+  review: 
+  here:   
+CHANGED R2
+  review: 
+  here:   
+CHANGED R3
+  review: 
+  here:   
+CHANGED B2
+  review: WROTE=False applied=False | actual:   b'a\n\nN\nb\n' | VERDICT=REFUSED
+  here:   WROTE=True applied=True | actual:   b'a\nY\nN\nb\n' | VERDICT=CORRECT
+CASES 41 CHANGED 14 MISSING_HERE 0

@@ -1,0 +1,62 @@
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
+
+=== A. host run eac7cacb ===
+  fixture sha256 036440eb37d4428cd72f43650cdb1750abdddd86f67b026610afa941fdac0ffe bytes 49447
+  read(1674,1685) citation {'start_line': 1675, 'end_line': 1684, 'start_col': 0, 'end_col': 19, 'start_byte': 49155, 'end_byte': 49447}
+  (trace id 17 served start_line 1675 end_line 1684 end_col 19 start_byte 49155 end_byte 49447)
+  A1 trace id 22 verbatim (to_col=27)                  applied=False
+                                                       line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+                                                       error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 1679:0..1679:27, which cover 'DEFAULT_TIMEOUT_SECONDS = 3' and leave '' before it and '0' after it on their lines; if that is exactly the text to replace, resend this reference with sha 609fbfd8f713411ecdb36697999f6010d5671f38 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+                                                       span shown: text='DEFAULT_TIMEOUT_SECONDS = 3' keeps_before='' keeps_after='0'
+  A1 file byte-identical to the original: True
+  A1' resent citing the span it was shown              applied=True
+                                                       line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 450'
+                                                       replaced: 'DEFAULT_TIMEOUT_SECONDS = 3'
+  A2 same read, same line, no columns                  applied=True
+                                                       line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 45'
+                                                       replaced: 'DEFAULT_TIMEOUT_SECONDS = 30'
+  A2 rest of file byte-identical: True
+  read(1678,1679) content '1679\tDEFAULT_TIMEOUT_SECONDS = 30'
+  A3 sha + new_text only                               applied=True
+                                                       line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 45'
+                                                       replaced: 'DEFAULT_TIMEOUT_SECONDS = 30'
+
+=== B. wuxia run b3983d63 ===
+  commit 5ac8714e line 78 '\t"res://tests/test_martial_arts_surface_census.gd",d",'
+  reconstructed pre-edit line 78 '\t"res://tests/" + "test_martial_arts_surface_census" + ".gd",' (61 characters)
+  read(70,84) reproduces trace id 2341 (content + range + bytes): True
+  B1 trace id 2354 verbatim (to_col=58)                applied=False
+                                                       line 78 = '\t"res://tests/" + "test_martial_arts_surface_census" + ".gd",'
+                                                       error: apply_patch preflight: tests/unit_test_runner.gd: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 78:0..78:58, which cover '\t"res://tests/" + "test_martial_arts_surface_census" + ".g' and leave '' before it and 'd",' after it on their lines; if that is exactly the text to replace, resend this reference with sha 93d4930a0aa322a0c3fef8148b1d9569f13661c8 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+                                                       span shown: text='\t"res://tests/" + "test_martial_arts_surface_census" + ".g' keeps_before='' keeps_after='d",'
+  B1 file == commit 5ac8714e bytes: False
+  B1 file == pre-edit bytes: True
+  B2 same read, same line, no columns                  applied=True
+                                                       line 78 = '\t"res://tests/test_martial_arts_surface_census.gd",'
+                                                       replaced: '\t"res://tests/" + "test_martial_arts_surface_census" + ".gd",'
+  B3 sha + new_text only                               applied=True
+                                                       line 78 = '\t"res://tests/test_martial_arts_surface_census.gd",'
+                                                       replaced: '\t"res://tests/" + "test_martial_arts_surface_census" + ".gd",'
+
+=== C. director probe shape (strict path, citation issued by hand) ===
+  len('DEFAULT_TIMEOUT_SECONDS = 30') = 28
+  to_col = len   (0..28)                               applied=False
+                                                       line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+                                                       error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 3:0..3:28, which cover 'DEFAULT_TIMEOUT_SECONDS = 30' and leave '' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha eec5fef9ce36867728772e8dc43e5d4cd2961c2a (in `spans`). To replace whole lines instead, omit from_col and to_col.
+                                                       span shown: text='DEFAULT_TIMEOUT_SECONDS = 30' keeps_before='' keeps_after=''
+  to_col = len-1 (0..27)                               applied=False
+                                                       line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+                                                       error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 3:0..3:27, which cover 'DEFAULT_TIMEOUT_SECONDS = 3' and leave '' before it and '0' after it on their lines; if that is exactly the text to replace, resend this reference with sha 511298b4aaebc1fe24fb08d1292f32424d8accba (in `spans`). To replace whole lines instead, omit from_col and to_col.
+                                                       span shown: text='DEFAULT_TIMEOUT_SECONDS = 3' keeps_before='' keeps_after='0'
+  to_col = len+1 (0..29)                               applied=False
+                                                       line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+                                                       error: apply_patch preflight: app/settings.py: to column 29 is past the end of line 3 (28 characters); reread the range
+  no columns (lines 3..3)                              applied=True
+                                                       line 3 = 'DEFAULT_TIMEOUT_SECONDS = 45'
+                                                       replaced: 'DEFAULT_TIMEOUT_SECONDS = 30'
+  sha + new_text only (read line 3)                    applied=True
+                                                       line 3 = 'DEFAULT_TIMEOUT_SECONDS = 45'
+                                                       replaced: 'DEFAULT_TIMEOUT_SECONDS = 30'
+  product bytes b'import os\n\nDEFAULT_TIMEOUT_SECONDS = 45\n\nDEBUG = False\n'
+SCRIPT_RC=0
+DOCKER_RC=0

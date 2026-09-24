@@ -1,0 +1,206 @@
+TREE_HEAD= DIRTY_PATHS=0
+27a912ce1f2fbe384ee467f23e285abb0c4a044b86004c8935184aff7a0008b0  src/skillflow/strict_patch.py
+284ebb516541b1940e0ba0ba82eb16611c01dce83138bd438d86777d25478f6d  src/skillflow/citations.py
+ae3f970353da500ad552fe63325c7b839eb9f67cc8a318df940c0c12e65714b2  src/skillflow/read_tools.py
+bedc01e2a8d4d2354c69b7197e7b034dbf433b2844691259bcfbaa86b50610bc  src/skillflow/tools/apply_patch/tool.yaml
+IMPORT_PROOF /home/linxuhao/coords-r4-scratch/mut_blankins/src/skillflow/__init__.py
+PYTEST 9.1.1 ASYNCIO 1.4.0
+..................s......ss............................................. [  4%]
+........................................................................ [  9%]
+........................................................................ [ 13%]
+........................................................................ [ 18%]
+........................................................................ [ 22%]
+........................................................................ [ 27%]
+........................................................................ [ 32%]
+........................................................................ [ 36%]
+........................................................................ [ 41%]
+........................................................................ [ 45%]
+........................................................................ [ 50%]
+........................................................................ [ 55%]
+........................................................................ [ 59%]
+....................................................FFFF................ [ 64%]
+......F................................................................. [ 68%]
+........................................................................ [ 73%]
+........................................................................ [ 78%]
+........................................................................ [ 82%]
+........................................................................ [ 87%]
+........................................................................ [ 91%]
+........................................................................ [ 96%]
+........................................................                 [100%]
+=================================== FAILURES ===================================
+_ test_C1_a_window_over_a_blank_line_this_run_s_v4a_replaced_is_refused[C1-def g():\n] _
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C1_a_window_over_a_blank_0')
+case = 'C1', new_text = 'def g():\n'
+
+    @pytest.mark.parametrize("case,new_text", [("C1", "def g():\n"), ("C1b", "def g():")])
+    def test_C1_a_window_over_a_blank_line_this_run_s_v4a_replaced_is_refused(root, case, new_text):
+        """probe8.py C1 and C1b. C1b used to write `def g():    x = 1`."""
+        put(root, C_SRC)
+        w = rd(root, 0, 3)["citation"]["sha"]
+        before = own(root, ap(root, patch=v4a(C_HUNK)))
+        assert before == b"def f():\n    x = 1\n    return 1\n"
+        res = ap(root, [{"file": REL, "sha": w, "from_line": 1, "to_line": 2,
+                         "new_text": new_text}])
+>       refused(root, res, before, removed(1, 2))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:237: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C1_a_window_over_a_blank_0')
+res = {'error': 'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: an earlier edit in ...d text inside them; reread the range and cite the new digest', 'phase': 'preflight', 'written': [], 'deleted': [], ...}
+before = b'def f():\n    x = 1\n    return 1\n'
+error = 'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest'
+
+    def refused(root, res, before, error):
+        assert res["applied"] is False, res
+>       assert res["error"] == error
+E       AssertionError: assert 'apply_patch ...he new digest' == 'apply_patch ...he new digest'
+E         
+E         Skipping 78 identical leading characters in diff, use -v to show
+E         - s issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest
+E         + s issued: an earlier edit in this run inserted text inside them; reread the range and cite the new digest
+
+tests/test_the_journal_records_what_the_applier_wrote.py:107: AssertionError
+_ test_C1_a_window_over_a_blank_line_this_run_s_v4a_replaced_is_refused[C1b-def g():] _
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C1_a_window_over_a_blank_1')
+case = 'C1b', new_text = 'def g():'
+
+    @pytest.mark.parametrize("case,new_text", [("C1", "def g():\n"), ("C1b", "def g():")])
+    def test_C1_a_window_over_a_blank_line_this_run_s_v4a_replaced_is_refused(root, case, new_text):
+        """probe8.py C1 and C1b. C1b used to write `def g():    x = 1`."""
+        put(root, C_SRC)
+        w = rd(root, 0, 3)["citation"]["sha"]
+        before = own(root, ap(root, patch=v4a(C_HUNK)))
+        assert before == b"def f():\n    x = 1\n    return 1\n"
+        res = ap(root, [{"file": REL, "sha": w, "from_line": 1, "to_line": 2,
+                         "new_text": new_text}])
+>       refused(root, res, before, removed(1, 2))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:237: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C1_a_window_over_a_blank_1')
+res = {'error': 'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: an earlier edit in ...d text inside them; reread the range and cite the new digest', 'phase': 'preflight', 'written': [], 'deleted': [], ...}
+before = b'def f():\n    x = 1\n    return 1\n'
+error = 'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest'
+
+    def refused(root, res, before, error):
+        assert res["applied"] is False, res
+>       assert res["error"] == error
+E       AssertionError: assert 'apply_patch ...he new digest' == 'apply_patch ...he new digest'
+E         
+E         Skipping 78 identical leading characters in diff, use -v to show
+E         - s issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest
+E         + s issued: an earlier edit in this run inserted text inside them; reread the range and cite the new digest
+
+tests/test_the_journal_records_what_the_applier_wrote.py:107: AssertionError
+_________ test_C1r_the_same_replacement_made_by_a_reference_is_refused _________
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C1r_the_same_replacement_0')
+
+    def test_C1r_the_same_replacement_made_by_a_reference_is_refused(root):
+        """probe8.py C1r."""
+        put(root, C_SRC)
+        w = rd(root, 0, 3)["citation"]["sha"]
+        w2 = rd(root, 1, 2)["citation"]["sha"]
+        before = own(root, ap(root, [{"file": REL, "sha": w2, "new_text": "    x = 1"}]))
+        assert before == b"def f():\n    x = 1\n    return 1\n"
+        res = ap(root, [{"file": REL, "sha": w, "from_line": 1, "to_line": 2,
+                         "new_text": "def g():\n"}])
+>       refused(root, res, before, removed(1, 2))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:249: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C1r_the_same_replacement_0')
+res = {'error': 'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: an earlier edit in ...d text inside them; reread the range and cite the new digest', 'phase': 'preflight', 'written': [], 'deleted': [], ...}
+before = b'def f():\n    x = 1\n    return 1\n'
+error = 'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest'
+
+    def refused(root, res, before, error):
+        assert res["applied"] is False, res
+>       assert res["error"] == error
+E       AssertionError: assert 'apply_patch ...he new digest' == 'apply_patch ...he new digest'
+E         
+E         Skipping 78 identical leading characters in diff, use -v to show
+E         - s issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest
+E         + s issued: an earlier edit in this run inserted text inside them; reread the range and cite the new digest
+
+tests/test_the_journal_records_what_the_applier_wrote.py:107: AssertionError
+______ test_C1s_a_sha_only_window_over_the_replaced_blank_line_is_refused ______
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C1s_a_sha_only_window_ove0')
+
+    def test_C1s_a_sha_only_window_over_the_replaced_blank_line_is_refused(root):
+        """probe8.py C1s."""
+        put(root, C_SRC)
+        w12 = rd(root, 0, 2)["citation"]["sha"]
+        before = own(root, ap(root, patch=v4a(C_HUNK)))
+        res = ap(root, [{"file": REL, "sha": w12, "new_text": "def g():\n"}])
+>       refused(root, res, before, removed(1, 2))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:258: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_C1s_a_sha_only_window_ove0')
+res = {'error': 'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: an earlier edit in ...d text inside them; reread the range and cite the new digest', 'phase': 'preflight', 'written': [], 'deleted': [], ...}
+before = b'def f():\n    x = 1\n    return 1\n'
+error = 'apply_patch preflight: f.py reference 1: lines 1-2 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest'
+
+    def refused(root, res, before, error):
+        assert res["applied"] is False, res
+>       assert res["error"] == error
+E       AssertionError: assert 'apply_patch ...he new digest' == 'apply_patch ...he new digest'
+E         
+E         Skipping 78 identical leading characters in diff, use -v to show
+E         - s issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest
+E         + s issued: an earlier edit in this run inserted text inside them; reread the range and cite the new digest
+
+tests/test_the_journal_records_what_the_applier_wrote.py:107: AssertionError
+_________ test_a_window_on_a_blank_line_a_reference_filled_is_refused __________
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_window_on_a_blank_line_1')
+
+    def test_a_window_on_a_blank_line_a_reference_filled_is_refused(root):
+        """The run replaced the blank line with text: its newline was removed
+        and written back after the text, a replacement, not an insertion."""
+        put(root, b"a\n\nb\n")
+        w2 = rd(root, 1, 2)["citation"]["sha"]
+        w2b = rd(root, 1, 2)["citation"]["sha"]
+        before = own(root, ap(root, [{"file": REL, "sha": w2b, "new_text": "filled"}]))
+        assert before == b"a\nfilled\nb\n"
+        res = ap(root, [{"file": REL, "sha": w2, "new_text": "Y"}])
+>       refused(root, res, before, removed(2, 2))
+
+tests/test_the_journal_records_what_the_applier_wrote.py:436: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_window_on_a_blank_line_1')
+res = {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+before = b'a\nfilled\nb\n'
+error = 'apply_patch preflight: f.py reference 1: lines 2-2 changed since the digest was issued: they were removed or replaced by an earlier edit in this run; reread the range and cite the new digest'
+
+    def refused(root, res, before, error):
+>       assert res["applied"] is False, res
+E       AssertionError: {'written': ['f.py'], 'deleted': [], 'applied': True, 'output_target': 'code', ...}
+E       assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:106: AssertionError
+=============================== warnings summary ===============================
+tests/test_integration_configs.py: 39 warnings
+tests/test_regression.py: 1 warning
+  /home/linxuhao/coords-r4-scratch/mut_blankins/src/skillflow/core.py:7633: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    elapsed = (dt.datetime.utcnow() - started_dt).total_seconds()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_C1_a_window_over_a_blank_line_this_run_s_v4a_replaced_is_refused[C1-def g():\n]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_C1_a_window_over_a_blank_line_this_run_s_v4a_replaced_is_refused[C1b-def g():]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_C1r_the_same_replacement_made_by_a_reference_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_C1s_a_sha_only_window_over_the_replaced_blank_line_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_window_on_a_blank_line_a_reference_filled_is_refused
+5 failed, 1560 passed, 3 skipped, 40 warnings in 23.81s
+PYTEST_RC=1
+DOCKER_RC=1

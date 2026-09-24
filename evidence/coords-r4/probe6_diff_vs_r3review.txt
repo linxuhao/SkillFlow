@@ -1,0 +1,120 @@
+3,5c3,5
+<    WROTE=True applied=True
+<    actual:   b'import sys\n"""Doc."""\nimport os\nx = 1\n'
+<    VERDICT=WRONG_WRITE
+---
+>    WROTE=False applied=False
+>    actual:   b'"""Doc."""\nimport os\nx = 1\n'
+>    VERDICT=REFUSED
+8,10c8,10
+<    WROTE=True applied=True
+<    actual:   b'a = 0\n"""Doc."""\nimport sys\nimport os\nx = 1\n'
+<    VERDICT=CORRECT
+---
+>    WROTE=False applied=False
+>    actual:   b'a = 0\n"""Doc."""\nimport os\nx = 1\n'
+>    VERDICT=REFUSED
+14,16c14,16
+<    WROTE=True applied=True
+<    actual:   b'a = 0\nimport sys\n"""Doc."""\nimport os\nx = 1\nz = 3\n'
+<    VERDICT=WRONG_WRITE
+---
+>    WROTE=False applied=False
+>    actual:   b'a = 0\n"""Doc."""\nimport os\nx = 1\nz = 3\n'
+>    VERDICT=REFUSED
+20,24d19
+<    WROTE=True applied=True
+<    actual:   b'a = 0\n"""Doc."""\nimport sys\nimport os\nx = 1\nz = 3\n'
+<    VERDICT=CORRECT
+<    own edit V4A header applied=True -> b'# header\nimport os\nx = 1\ny = 2\n'
+< CASE T2a window lines 1..1 (from a read of 1-3) after a v4a header insertion
+26c21
+<    actual:   b'# header\nimport os\nx = 1\ny = 2\n'
+---
+>    actual:   b'a = 0\n"""Doc."""\nimport os\nx = 1\nz = 3\n'
+27a23,27
+>    own edit V4A header applied=True -> b'# header\nimport os\nx = 1\ny = 2\n'
+> CASE T2a window lines 1..1 (from a read of 1-3) after a v4a header insertion
+>    WROTE=True applied=True
+>    actual:   b'# header\nimport sys\nx = 1\ny = 2\n'
+>    VERDICT=CORRECT
+30,32c30,32
+<    WROTE=False applied=False
+<    actual:   b'# header\nimport os\nx = 1\ny = 2\n'
+<    VERDICT=REFUSED
+---
+>    WROTE=True applied=True
+>    actual:   b'# header\nimport sys\nx = 1\ny = 2\n'
+>    VERDICT=CORRECT
+45,47c45,47
+<    WROTE=False applied=False
+<    actual:   b'# header\nimport os\nx = 1\ny = 2\n'
+<    VERDICT=REFUSED
+---
+>    WROTE=True applied=True
+>    actual:   b'# header\nimport sys\nx = 9\ny = 2\n'
+>    VERDICT=CORRECT
+50,52c50,52
+<    WROTE=False applied=False
+<    actual:   b'# header\nimport os\nx = 1\ny = 2\n'
+<    VERDICT=REFUSED
+---
+>    WROTE=True applied=True
+>    actual:   b'# header\nimport sys\nx = 9\ny = 2\n'
+>    VERDICT=CORRECT
+55,57c55,57
+<    WROTE=False applied=False
+<    actual:   b'# header\nimport os\nx = 1\ny = 2\n'
+<    VERDICT=REFUSED
+---
+>    WROTE=True applied=True
+>    actual:   b'# header\nimport sys\nx = 1\ny = 2\n'
+>    VERDICT=CORRECT
+60,62c60,62
+<    WROTE=False applied=False
+<    actual:   b'# header\nimport os\nx = 1\ny = 2\n'
+<    VERDICT=REFUSED
+---
+>    WROTE=True applied=True
+>    actual:   b'# header\nimport sys\nx = 1\ny = 2\n'
+>    VERDICT=CORRECT
+65,67c65,67
+<    WROTE=False applied=False
+<    actual:   b'# header\nimport os\nx = 1\n'
+<    VERDICT=REFUSED
+---
+>    WROTE=True applied=True
+>    actual:   b'# header\nimport sys\nx = 1\n'
+>    VERDICT=CORRECT
+70,72c70,72
+<    WROTE=True applied=True
+<    actual:   b'a\nP\nc\n'
+<    VERDICT=WROTE_WHERE_REFUSAL_EXPECTED
+---
+>    WROTE=False applied=False
+>    actual:   b'a\nc\n'
+>    VERDICT=REFUSED
+90,92c90,92
+<    WROTE=True applied=True
+<    actual:   b'a\nP\nx\nb\n'
+<    VERDICT=WROTE_WHERE_REFUSAL_EXPECTED
+---
+>    WROTE=False applied=False
+>    actual:   b'a\nx\nb\n'
+>    VERDICT=REFUSED
+159,161c159,161
+< CASE R1 H5 shape rows-less: out=b'a\nx\nx\nb\n' spans=[(0, 5, 7)] accounts=True
+< CASE R2 H6 shape rows-less: out=b'a\nx\nb\n' spans=[(0, 7, 5)] accounts=True
+< CASE R3 top insertion rows-less: out=b'H\nl1\nl2\n' spans=[(0, 2, 4)] accounts=True
+---
+> CASE R1 H5 shape rows-less: out=b'a\nx\nx\nb\n' spans=[(0, 6, 8)] accounts=False
+> CASE R2 H6 shape rows-less: out=b'a\nx\nb\n' spans=[(0, 8, 6)] accounts=False
+> CASE R3 top insertion rows-less: out=b'H\nl1\nl2\n' spans=[(0, 3, 5)] accounts=True
+194,196c194,196
+<    WROTE=False applied=False
+<    actual:   b'a\n\nN\nb\n'
+<    VERDICT=REFUSED
+---
+>    WROTE=True applied=True
+>    actual:   b'a\nY\nN\nb\n'
+>    VERDICT=CORRECT

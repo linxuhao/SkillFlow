@@ -1,0 +1,62 @@
+== fuzz7_seed7.txt
+   CORRECT=3999 FALSE_REFUSAL=449 REFUSED_OK=3607 probes=8055
+   WRONG_WRITE=0 WROTE_EXPECTED_REFUSAL=0
+== fuzz7_seed8.txt
+   CORRECT=3974 FALSE_REFUSAL=448 REFUSED_OK=3466 probes=7888
+   WRONG_WRITE=0 WROTE_EXPECTED_REFUSAL=0
+== fuzz8_seed7.txt
+   CORRECT=3999 FALSE_REFUSAL=449 REFUSED_OK=3607 probes=8055
+   WRONG_WRITE=0 WROTE_EXPECTED_REFUSAL=0
+== fuzz8_seed8.txt
+   CORRECT=3974 FALSE_REFUSAL=448 REFUSED_OK=3466 probes=7888
+   WRONG_WRITE=0 WROTE_EXPECTED_REFUSAL=0
+== fuzz8r_v4a_seed7.txt
+   CORRECT=3999 FALSE_REFUSAL=449 REFUSED_OK=3607 probes=8055
+   WRONG_WRITE=0 WROTE_EXPECTED_REFUSAL=0
+   FALSE_REFUSAL  insertion-inside-window                                 1
+   FALSE_REFUSAL  point-at-insertion                                      448
+   REFUSED_OK     insertion-inside-window                                 261
+   REFUSED_OK     point-at-insertion                                      49
+   REFUSED_OK     removed-overlaps                                        3297
+   FALSE_REFUSAL attributed 449 of 449
+   REFUSED_OK attributed 3607 of 3607
+== fuzz8r_v4a_seed8.txt
+   CORRECT=3974 FALSE_REFUSAL=448 REFUSED_OK=3466 probes=7888
+   WRONG_WRITE=0 WROTE_EXPECTED_REFUSAL=0
+   FALSE_REFUSAL  point-at-insertion                                      448
+   REFUSED_OK     insertion-inside-window                                 244
+   REFUSED_OK     point-at-insertion                                      41
+   REFUSED_OK     removed-overlaps                                        3181
+   FALSE_REFUSAL attributed 448 of 448
+   REFUSED_OK attributed 3466 of 3466
+== fuzz8r_ref_seed7.txt
+   CORRECT=3829 FALSE_REFUSAL=619 REFUSED_OK=3600 SKIP_ALL_DELETED=7 probes=8048
+   WRONG_WRITE=0 WROTE_EXPECTED_REFUSAL=0
+   FALSE_REFUSAL  insertion-inside-window                                 1
+   FALSE_REFUSAL  point-at-insertion                                      384
+   FALSE_REFUSAL  point-at-insertion/just-after-a-two-readings-blank      34
+   FALSE_REFUSAL  removed-overlaps/two-readings-at-blank                  168
+   FALSE_REFUSAL  untranslated (journal broken)                           32
+   REFUSED_OK     insertion-inside-window                                 231
+   REFUSED_OK     point-at-insertion                                      49
+   REFUSED_OK     point-at-insertion/just-after-a-two-readings-blank      4
+   REFUSED_OK     removed-overlaps                                        3178
+   REFUSED_OK     removed-overlaps/two-readings-at-blank                  127
+   REFUSED_OK     untranslated (journal broken)                           11
+   FALSE_REFUSAL attributed 619 of 619
+   REFUSED_OK attributed 3600 of 3600
+== fuzz8r_ref_seed8.txt
+   CORRECT=3828 FALSE_REFUSAL=594 REFUSED_OK=3453 SKIP_ALL_DELETED=13 probes=7875
+   WRONG_WRITE=0 WROTE_EXPECTED_REFUSAL=0
+   FALSE_REFUSAL  point-at-insertion                                      383
+   FALSE_REFUSAL  point-at-insertion/just-after-a-two-readings-blank      34
+   FALSE_REFUSAL  removed-overlaps/two-readings-at-blank                  155
+   FALSE_REFUSAL  untranslated (journal broken)                           22
+   REFUSED_OK     insertion-inside-window                                 219
+   REFUSED_OK     point-at-insertion                                      36
+   REFUSED_OK     point-at-insertion/just-after-a-two-readings-blank      7
+   REFUSED_OK     removed-overlaps                                        3059
+   REFUSED_OK     removed-overlaps/two-readings-at-blank                  106
+   REFUSED_OK     untranslated (journal broken)                           26
+   FALSE_REFUSAL attributed 594 of 594
+   REFUSED_OK attributed 3453 of 3453
