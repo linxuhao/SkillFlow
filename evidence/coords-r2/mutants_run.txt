@@ -1,0 +1,45 @@
+DRIVER_RC=0
+MUTATED control (none)
+MUTATE_control_RC=0
+SUITE_control_RC=0
+IGNITIONS_control=0
+1243 passed, 3 skipped, 40 warnings in 24.63s
+MUTATED m3
+MUTATE_m3_RC=0
+SUITE_m3_RC=1
+IGNITIONS_m3=1
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_T1_the_shown_text_edited_after_the_preview_is_refused
+1 failed, 1242 passed, 3 skipped, 40 warnings in 19.65s
+MATCHES 0 for m3b
+MUTATE_m3b_review_RC=2
+MUTATED m3b
+MUTATE_m3b_RC=0
+SUITE_m3b_RC=1
+IGNITIONS_m3b=3
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_a_span_from_before_an_outside_write_stays_refused_after_the_run_rebuilds_the_same_text
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_T2_a_span_after_an_outside_write_is_refused
+2 failed, 1241 passed, 3 skipped, 40 warnings in 18.50s
+MUTATED m5
+MUTATE_m5_RC=0
+SUITE_m5_RC=1
+IGNITIONS_m5=1
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_a_span_from_before_an_outside_write_stays_refused_after_the_run_rebuilds_the_same_text
+1 failed, 1242 passed, 3 skipped, 40 warnings in 18.31s
+MUTATED m6
+MUTATE_m6_RC=0
+SUITE_m6_RC=1
+IGNITIONS_m6=5
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_T2_a_window_after_an_outside_write_is_refused
+1 failed, 1242 passed, 3 skipped, 40 warnings in 18.98s
+MUTATED m7
+MUTATE_m7_RC=0
+SUITE_m7_RC=1
+IGNITIONS_m7=6
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_review_case_E_an_old_insertion_preview_writes_where_it_was_shown
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_review_case_S3_an_old_span_over_repeated_text_writes_where_it_was_shown
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_review_case_W_an_old_window_writes_where_it_was_read
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_review_case_S3w_an_old_window_cited_by_sha_alone_writes_where_it_was_read
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_the_same_range_in_the_same_version_is_one_sha_and_in_another_is_two
+5 failed, 1238 passed, 3 skipped, 40 warnings in 19.43s
+
+[exited with code 0]

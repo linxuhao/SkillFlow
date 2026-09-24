@@ -1,0 +1,279 @@
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
+HAS_ISSUE_SPAN True
+REAL_FILE sha256 036440eb37d4428cd72f43650cdb1750abdddd86f67b026610afa941fdac0ffe bytes 49447
+
+##### POLES
+read(1674,1685) citation 1675 1684 19 49155 49447
+CASE P1 eac7cacb trace-22 verbatim to_col=27
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 1679:0..1679:27, which cover 'DEFAULT_TIMEOUT_SECONDS = 3' and leave '' before it and '0' after it on their lines; if that is exactly the text to replace, resend this reference with sha 346cd14542540cc734b49b0ed43f62cc38bb93bb (in `spans`). To replace whole lines instead, omit from_col and to_col.
+   span: coords=1679:0..1679:27 text='DEFAULT_TIMEOUT_SECONDS = 3' keeps_before='' keeps_after='0'
+   line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+CASE P1' eac7cacb resend citing the shown span (declared gap)
+   WROTE=True applied=True
+   replaced: ['DEFAULT_TIMEOUT_SECONDS = 3']
+   line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 450'
+CASE P2 eac7cacb to_col=len(28)
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 1679:0..1679:28, which cover 'DEFAULT_TIMEOUT_SECONDS = 30' and leave '' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha 102d1b2621cae7e6bde9250007971c03e20d20c8 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+   span: coords=1679:0..1679:28 text='DEFAULT_TIMEOUT_SECONDS = 30' keeps_before='' keeps_after=''
+   line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+CASE P3 eac7cacb to_col=len+1(29)
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py reference 1: to column 29 is past the end of line 1679 as the read served it (28 characters); cite a column inside the line you read
+   line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+CASE P4 probe-shape to_col=27
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 3:0..3:27, which cover 'DEFAULT_TIMEOUT_SECONDS = 3' and leave '' before it and '0' after it on their lines; if that is exactly the text to replace, resend this reference with sha ab4a921532d68d2c74d6e7027fd9e6b548f5b073 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+   span: coords=3:0..3:27 text='DEFAULT_TIMEOUT_SECONDS = 3' keeps_before='' keeps_after='0'
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+CASE P4 probe-shape to_col=28
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 3:0..3:28, which cover 'DEFAULT_TIMEOUT_SECONDS = 30' and leave '' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha ede4a48deaa5135508ebd37962ba03e66013b418 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+   span: coords=3:0..3:28 text='DEFAULT_TIMEOUT_SECONDS = 30' keeps_before='' keeps_after=''
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+CASE P4 probe-shape to_col=29
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: to column 29 is past the end of line 3 (28 characters); reread the range
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+CASE P5a sha-only whole window, body line 3
+   WROTE=True applied=True
+   replaced: ['DEFAULT_TIMEOUT_SECONDS = 30']
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 45'
+   product bytes b'import os\n\nDEFAULT_TIMEOUT_SECONDS = 45\n\nDEBUG = False\n'
+CASE P5b sha-only whole window, eac7cacb line 1679
+   WROTE=True applied=True
+   replaced: ['DEFAULT_TIMEOUT_SECONDS = 30']
+   line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 45'
+   rest identical: True
+CASE P6a lines-only 3..3 inside window 1-5
+   WROTE=True applied=True
+   replaced: ['DEFAULT_TIMEOUT_SECONDS = 30']
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 45'
+   product bytes b'import os\n\nDEFAULT_TIMEOUT_SECONDS = 45\n\nDEBUG = False\n'
+CASE P6b column cut 3:26..3:28 -> '45' [call 1]
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 3:26..3:28, which cover '30' and leave 'DEFAULT_TIMEOUT_SECONDS = ' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha 03166fb526f7ce4e350f972ae72e59b53e2c0300 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+   span: coords=3:26..3:28 text='30' keeps_before='DEFAULT_TIMEOUT_SECONDS = ' keeps_after=''
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+CASE P6b column cut 3:26..3:28 -> '45' [call 2, span resent]
+   WROTE=True applied=True
+   replaced: ['30']
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 45'
+   product bytes b'import os\n\nDEFAULT_TIMEOUT_SECONDS = 45\n\nDEBUG = False\n'
+
+##### SILENT-WRITE ATTEMPTS
+S1 preview span for 2:4..2:6 = 9bf08472bdbaa75987f7730dbb981241a17ba6a4
+CASE S1a span cited at 4:4..4:6 (same text, other line)
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py reference 1: that sha is the span 2:4..2:6 and this reference names 4:4..4:6; a span citation corroborates only the coordinates it was issued for
+   line 2 = 'x = 30'
+   line 4 = 'x = 30'
+CASE S1b span cited at 2:3..2:5 (same length, shifted)
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py reference 1: that sha is the span 2:4..2:6 and this reference names 2:3..2:5; a span citation corroborates only the coordinates it was issued for
+   line 2 = 'x = 30'
+   line 4 = 'x = 30'
+CASE S1c span cited with lines 2..2 and no columns
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py reference 1: that sha is the span 2:4..2:6 and this reference names 2:-..2:-; a span citation corroborates only the coordinates it was issued for
+   line 2 = 'x = 30'
+   line 4 = 'x = 30'
+CASE S1d span cited with 2:4..2:- (to_col omitted)
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py reference 1: that sha is the span 2:4..2:6 and this reference names 2:4..2:-; a span citation corroborates only the coordinates it was issued for
+   line 2 = 'x = 30'
+   line 4 = 'x = 30'
+CASE S1e span cited against another file
+   WROTE=False applied=False
+   error: apply_patch preflight: app/other.py reference 1: that digest was issued for 'app/settings.py'
+   line 2 = 'x = 30'
+CASE S1f span cited in another run
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py reference 1: sha 9bf08472bdba… was never issued by a read in this run; cite a digest a read handed you
+   line 2 = 'x = 30'
+CASE S2a span sha-only after outside write under it
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py reference 1: span 2:4..2:6 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; reread the range and resend the reference with the new digest to be shown the text it covers now
+   line 2 = 'x = 31'
+CASE S2b span sha-only after outside insert above (chain broken)
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py reference 1: span 2:4..2:6 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; reread the range and resend the reference with the new digest to be shown the text it covers now
+   line 2 = 'a = 1'
+   line 3 = 'x = 30'
+CASE S2c span sha-only after own whole-line rewrite with same prefix
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py reference 1: span 3:0..3:27 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; reread the range and resend the reference with the new digest to be shown the text it covers now
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 35'
+CASE S2d span (line 4) sha-only after own insert above
+   WROTE=True applied=True
+   replaced: ['30']
+   line 3 = 'x = 30'
+   line 5 = 'x = 45'
+S3 file now b'a = 1\nx = 30\nb = 2\nx = 30\nb = 2\nx = 30\nc = 3\n'
+S3 span_a == span_b: False e2bc66d58cff675cb2bd06f2b67a5311ea5f62dd a5292b2df07de9239037e7d2f0141408425f1f6c
+CASE S3 frame-A intent cited with span_a after frame-B preview
+   WROTE=True applied=True
+   replaced: ['30']
+   line 2 = 'x = 30'
+   line 4 = 'x = 45'
+   line 6 = 'x = 30'
+   frame-A line 2 is now line 4; intended product: b'a = 1\nx = 30\nb = 2\nx = 45\nb = 2\nx = 30\nc = 3\n'
+   actual product: b'a = 1\nx = 30\nb = 2\nx = 45\nb = 2\nx = 30\nc = 3\n'
+S3w wa == wb: False
+CASE S3w window sha from frame A after frame-B read of same text
+   WROTE=True applied=True
+   replaced: ['x = 30']
+   line 2 = 'x = 30'
+   line 4 = 'x = 45'
+   line 6 = 'x = 30'
+   intended product: b'a = 1\nx = 30\nb = 2\nx = 45\nb = 2\nx = 30\nc = 3\n'
+   actual product: b'a = 1\nx = 30\nb = 2\nx = 45\nb = 2\nx = 30\nc = 3\n'
+CASE S4a span-corroborated hunk + uncorroborated hunk
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 2 names columns 4:4..4:5, which cover '3' and leave 'x = ' before it and '0' after it on their lines; if that is exactly the text to replace, resend this reference with sha 6142a03ac3924af760ced934edc0e05c58e810e2 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+   span: coords=4:4..4:5 text='3' keeps_before='x = ' keeps_after='0'
+   line 2 = 'x = 30'
+   line 4 = 'x = 30'
+CASE S4b whole-line hunk + uncorroborated hunk
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 2 names columns 4:4..4:5, which cover '3' and leave 'x = ' before it and '0' after it on their lines; if that is exactly the text to replace, resend this reference with sha 6142a03ac3924af760ced934edc0e05c58e810e2 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+   span: coords=4:4..4:5 text='3' keeps_before='x = ' keeps_after='0'
+   line 1 = 'a = 1'
+   line 4 = 'x = 30'
+CASE S4c two files, file 2 uncorroborated
+   WROTE a=False b=False applied=False
+   error: apply_patch preflight: app/b.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 4:4..4:5, which cover '3' and leave 'x = ' before it and '0' after it on their lines
+CASE S4d V4A hunk + uncorroborated reference
+   WROTE c=False a=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 4:4..4:5, which cover '3' and leave 'x = ' before it and '0' after it on thei
+CASE S5a from_col=26 only
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 3:26..3:-, which cover '30' and leave 'DEFAULT_TIMEOUT_SECONDS = ' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha 2fefcdd7e4a74f0249bbfdfe2c421b8e82277f5e (in `spans`). To replace whole lines instead, omit from_col and to_col.
+   span: coords=3:26..3:None text='30' keeps_before='DEFAULT_TIMEOUT_SECONDS = ' keeps_after=''
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+CASE S5b to_col=27 only
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 3:-..3:27, which cover 'DEFAULT_TIMEOUT_SECONDS = 3' and leave '' before it and '0' after it on their lines; if that is exactly the text to replace, resend this reference with sha 10e52851144394df78132b8fa2f6ffcc0529a213 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+   span: coords=3:None..3:27 text='DEFAULT_TIMEOUT_SECONDS = 3' keeps_before='' keeps_after='0'
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+CASE S5c from_col=null,to_col=null
+   WROTE=True applied=True
+   replaced: ['DEFAULT_TIMEOUT_SECONDS = 30']
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 45'
+CASE S5d from_col=false,to_col=true
+   WROTE=False applied=False
+   error: apply_patch preflight: reference 1: from_col must be a non-negative integer
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+CASE S5e empty insertion 3:27..3:27
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 3:27..3:27, which cover '' and leave 'DEFAULT_TIMEOUT_SECONDS = 3' before it and '0' after it on their lines; if that is exactly the text to replace, resend this reference with sha 3fd9eb1308385f04fa155fff19adfa669f23cd68 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+   span: coords=3:27..3:27 text='' keeps_before='DEFAULT_TIMEOUT_SECONDS = 3' keeps_after='0'
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+CASE S6a eac7cacb lines-only off by one (1680)
+   WROTE=True applied=True
+   replaced: ['']
+   line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+   line 1680 = 'DEFAULT_TIMEOUT_SECONDS = 45'
+CASE S6b eac7cacb columns 0..28 on wrong line 1681
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 1681:0..1681:28, which cover 'def load_settings(overrides=' and leave '' before it and 'None):' after it on their lines; if that is exactly the text to replace, resend this reference with sha c8723e9524cdb49622f15a734688c51ee8665868 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+   span: coords=1681:0..1681:28 text='def load_settings(overrides=' keeps_before='' keeps_after='None):'
+   line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+   line 1681 = 'def load_settings(overrides=None):'
+CASE S6c eac7cacb columns 0..0 on wrong (blank) line 1678
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 1678:0..1678:0, which cover '' and leave '' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha 4d58b5c9e9213518f38c0cd020649309855ce06e (in `spans`). To replace whole lines instead, omit from_col and to_col.
+   span: coords=1678:0..1678:0 text='' keeps_before='' keeps_after=''
+   line 1678 = ''
+   line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+S6d read(1679,1680) served '1680\t'
+CASE S6d sha-only on the window read(1679,1680) actually served
+   WROTE=True applied=True
+   replaced: ['']
+   line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+   line 1680 = 'DEFAULT_TIMEOUT_SECONDS = 45'
+CASE S6e sha-only on the 10-line window with a one-line new_text
+   WROTE=True applied=True
+   replaced: ['def helper_419(value):\n    """Helper number 419 — pads this module past one read window."""\n    return value + 419\n\nDEFAULT_TIMEOUT_SECONDS = 30\n\ndef load_settings(overrides=None):\n    settings = {"timeout": DEFAULT_TIMEOUT_SECONDS}\n    set…']
+   line 1675 = 'DEFAULT_TIMEOUT_SECONDS = 45'
+   line 1676 = ''
+   lines lost: 9
+CASE S7a CRLF+tab sha-only whole window
+   WROTE=True applied=True
+   replaced: ['\tDEFAULT_TIMEOUT_SECONDS = 30']
+   line 3 = '\tDEFAULT_TIMEOUT_SECONDS = 45\r'
+   product bytes b'import os\r\n\r\n\tDEFAULT_TIMEOUT_SECONDS = 45\r\n\r\nDEBUG = False\r\n'
+CASE S7b CRLF+tab column cut counted with tab=4 (to_col=30 -> past end? / 28) [call 1]
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 3:0..3:28, which cover '\tDEFAULT_TIMEOUT_SECONDS = 3' and leave '' before it and '0' after it on their lines; if that is exactly the text to replace, resend this reference with sha ca7197761428ff225739d52f3f6f0947c9cd50e3 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+   span: coords=3:0..3:28 text='\tDEFAULT_TIMEOUT_SECONDS = 3' keeps_before='' keeps_after='0'
+   line 3 = '\tDEFAULT_TIMEOUT_SECONDS = 30\r'
+CASE S7b CRLF+tab column cut counted with tab=4 (to_col=30 -> past end? / 28) [call 2, span resent]
+   WROTE=True applied=True
+   replaced: ['\tDEFAULT_TIMEOUT_SECONDS = 3']
+   line 3 = '\tDEFAULT_TIMEOUT_SECONDS = 450\r'
+   product bytes b'import os\r\n\r\n\tDEFAULT_TIMEOUT_SECONDS = 450\r\n\r\nDEBUG = False\r\n'
+CASE S7c CRLF: to_col counts the \r (len+\r = 30)
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py reference 1: to column 31 is past the end of line 3 as the read served it (29 characters); cite a column inside the line you read
+   line 3 = '\tDEFAULT_TIMEOUT_SECONDS = 30\r'
+S8 line code points=26 utf8 bytes=32
+CASE S8a to_col=21 counted in BYTES for the string literal (code points=19)
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 1:0..1:21, which cover 'name = "héllo wörld" ' and leave '' before it and ' # 注释' after it on their lines; if that is exactly the text to replace, resend this reference with sha 80bcab1497af60a2559633dfa53008bd41c0583f (in `spans`). To replace whole lines instead, omit from_col and to_col.
+   span: coords=1:0..1:21 text='name = "héllo wörld" ' keeps_before='' keeps_after=' # 注释'
+   line 1 = 'name = "héllo wörld"  # 注释'
+CASE S8b to_col=utf8 byte length of line (past end in code points)
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py reference 1: to column 32 is past the end of line 1 as the read served it (26 characters); cite a column inside the line you read
+   line 1 = 'name = "héllo wörld"  # 注释'
+CASE S8c code-point cut 0..19 two-call [call 1]
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 1:0..1:19, which cover 'name = "héllo wörld' and leave '' before it and '"  # 注释' after it on their lines; if that is exactly the text to replace, resend this reference with sha 05c1b2cdfda2ebd53771b86c34477ab276f5a16d (in `spans`). To replace whole lines instead, omit from_col and to_col.
+   span: coords=1:0..1:19 text='name = "héllo wörld' keeps_before='' keeps_after='"  # 注释'
+   line 1 = 'name = "héllo wörld"  # 注释'
+CASE S8c code-point cut 0..19 two-call [call 2, span resent]
+   WROTE=True applied=True
+   replaced: ['name = "héllo wörld']
+   line 1 = 'name = "hi""  # 注释'
+   product bytes b'name = "hi""  # \xe6\xb3\xa8\xe9\x87\x8a\nnext = 1\n'
+CASE S8d unicode sha-only whole window
+   WROTE=True applied=True
+   replaced: ['name = "héllo wörld"  # 注释']
+   line 1 = 'name = "ünï"'
+   product bytes b'name = "\xc3\xbcn\xc3\xaf"\nnext = 1\n'
+CASE S9a V4A exact
+   WROTE=True applied=True
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 45'
+CASE S9b V4A miscopied '=30'
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py hunk 1: stale (no exact match); reread that range and cite its sha in references — do not retype the original
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+CASE S9c V4A trailing space
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py hunk 1: stale (no exact match); reread that range and cite its sha in references — do not retype the original
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+CASE S10 whole-window sha-only after own edit inside the window
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py reference 1: lines 1-5 changed since the digest was issued; reread the range and cite the new digest
+   line 1 = 'a = 1'
+   line 3 = 'b = 22'
+CASE S11a from_line only
+   WROTE=False applied=False
+   error: apply_patch preflight: reference 1: give both from_line and to_line, or neither to replace the whole cited window
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+   line 4 = ''
+CASE S11b to_line only
+   WROTE=False applied=False
+   error: apply_patch preflight: reference 1: give both from_line and to_line, or neither to replace the whole cited window
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+   line 4 = ''
+CASE S11c lines 4..4 outside window 3-3
+   WROTE=False applied=False
+   error: apply_patch preflight: app/settings.py reference 1: lines 4-4 fall outside the cited window 3-3; cite the window that contains them
+   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+   line 4 = ''
+
+PROBE_DONE
+DOCKER_RC=0

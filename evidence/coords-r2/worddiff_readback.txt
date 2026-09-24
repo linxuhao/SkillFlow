@@ -1,0 +1,1133 @@
+# git diff --word-diff 382664c -- (tracked changed files)
+diff --git a/src/skillflow/citations.py b/src/skillflow/citations.py
+index 3a75631..8ac9fd2 100644
+--- a/src/skillflow/citations.py
++++ b/src/skillflow/citations.py
+@@ -44,14 +44,33 @@ replaced. Two properties keep that from becoming blind editing:
+  span an earlier edit replaced. That text is gone; nobody read the new text.
+* The journal is only trusted while the file's content still matches what the
+  journal says the engine left there. A write from outside the journal (the
+  `write` tool, `repo_apply`, a human) breaks the chain, and[-citations for that-]
+[-  file fall back to the original strict check —-] a [-refusal,-]{+citation issued+}
+{+  before it is refused —+} never a silent best-effort apply. {+Lines that still+}
+{+  read the same after such a write are not proof of anything: in a file of+}
+{+  repeated lines, a line written in above leaves every line number reading+}
+{+  the same text.+}
+
+{+## A digest names the place it was issued for+}
+
+{+The coordinate frame is part of what a digest identifies. Two reads of the+}
+{+same lines in two versions of a file used to return the same digest whenever+}
+{+the text on those lines was the same, and the ledger kept one record per+}
+{+digest, so the second read silently moved the first one: citing the older+}
+{+digest wrote at the newer place. The review of coords-r1 measured an+}
+{+insertion that its caller had been shown landing before `l3` being written+}
+{+before `NEW2`.+}
+
+{+So the digest is taken over every field that decides where it resolves: the+}
+{+journal chain it was issued in (`epoch`), the generation inside that chain,+}
+{+the digest of the whole text it was issued against, and the offset the range+}
+{+starts at. Two issues share a digest only when every one of those is equal,+}
+{+and then they resolve to the same place by construction.+}
+"""
+from __future__ import annotations
+
+import hashlib
+import hmac
+{+import itertools+}
+import secrets
+import threading
+from collections import OrderedDict
+@@ -69,10 +88,15 @@ MAX_GENERATIONS_PER_FILE = 4096
+_SECRET = secrets.token_bytes(32)
+_LOCK = threading.Lock()
+_LEDGER: "OrderedDict[str, OrderedDict[str, dict]]" = OrderedDict()
+# run_id -> path -> [-{"shas":-]{+{"epoch": n, "shas":+} [text sha per generation],
+{+#+}                     "edits": [[(s, e, n)]]}
+# shas[i] is the sha of the file's normalised text at generation i; edits[i] is
+# what turned generation i into generation i+1, so len(shas) == len(edits) + 1.
+{+# `epoch` is unique per chain: a chain that is discarded and started again+}
+{+# numbers its generations from 0 again, and a citation from the old chain must+}
+{+# not be read as one from the new.+}
+_JOURNAL: "OrderedDict[str, OrderedDict[str, dict]]" = OrderedDict()
+{+_EPOCHS = itertools.count(1)+}
+
+
+def text_sha(text: str) -> str:
+@@ -86,13 +110,22 @@ def text_sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+{+def _frame(epoch, generation, file_sha, start_char) -> str:+}
+{+    """Where a range was issued: the chain, the generation, the text, the offset."""+}
+{+    return f"{epoch}\x00{generation}\x00{file_sha}\x00{start_char}"+}
+
+
+def _digest(run_id: str, path: str, source: str, start_line: int,
+            end_line: int, text: {+str, frame:+} str) -> str:
+    payload = "\x00".join((run_id, path, source, str(start_line),
+                           str(end_line), [-text)).encode("utf-8")-]{+text, frame)).encode("utf-8")+}
+    return hmac.new(_SECRET, payload, hashlib.sha256).hexdigest()[:40]
+
+
+{+def _new_chain(file_sha: str) -> dict:+}
+{+    return {"epoch": next(_EPOCHS), "shas": [file_sha], "edits": []}+}
+
+
+def _bucket(store: OrderedDict, run_id: str, create: bool):
+    bucket = store.get(run_id)
+    if bucket is None and create:
+@@ -104,24 +137,24 @@ def _bucket(store: OrderedDict, run_id: str, create: bool):
+    return bucket
+
+
+def _note_version_locked(run_id: str, path: str, file_sha: str) -> [-int:-]
+[-    """The generation number ``file_sha`` is,-]{+tuple[int, int]:+}
+{+    """``(epoch, generation)`` of ``file_sha``,+} seeding/resetting as needed.
+
+    A version the journal has never seen means someone else wrote the file, so
+    the old chain describes text that is gone: it is replaced rather than
+    extended, {+under a new epoch,+} and the returned generation is 0. Citations
+    issued against the discarded [-generations-]{+chain+} then fail [-`chain_intact` and take the strict path.-]{+`chain_intact`.+}
+    """
+    files = _bucket(_JOURNAL, run_id, create=True)
+    entry = files.get(path)
+    if entry is not None and entry["shas"] and entry["shas"][-1] == file_sha:
+        files.move_to_end(path)
+        return {+entry["epoch"],+} len(entry["edits"])
+    {+entry =+} files[path] = [-{"shas": [file_sha], "edits": []}-]{+_new_chain(file_sha)+}
+    files.move_to_end(path)
+    while len(files) > MAX_JOURNAL_FILES:
+        files.popitem(last=False)
+    return {+entry["epoch"],+} 0
+
+
+def issue(run_id: str, *, path: str, source: str, start_line: int,
+@@ -138,8 +171,11 @@ def issue(run_id: str, *, path: str, source: str, start_line: int,
+    addressed in THIS window's coordinates after the file has moved on; a
+    caller that omits them gets exactly the old contract, which is a refusal
+    once the file changes.
+
+    {+The digest covers the frame (`_frame`) as well as the text, so the same+}
+{+    lines read again after the file has moved on get a different digest, and+}
+{+    the older one keeps resolving to the place it was issued for.+}
+    """
+[-    sha = _digest(run_id, path, source, start_line, end_line, text)-]
+    record = {
+        "path": path,
+        "source": source,
+@@ -149,7 +185,6 @@ def issue(run_id: str, *, path: str, source: str, start_line: int,
+        "end_col": len(text.split("\n")[-1]) if text else 0,
+        "start_byte": start_byte,
+        "end_byte": end_byte,
+[-        "sha": sha,-]
+    }
+    if not run_id:
+        # Nothing to bind it to, so nothing may be cited against it later.
+@@ -157,11 +192,16 @@ def issue(run_id: str, *, path: str, source: str, start_line: int,
+        # whether the host happened to supply a run id.
+        return {**record, "sha": "", "citable": False}
+    with _LOCK:
+        {+epoch,+} generation = [-(_note_version_locked(run_id,-]{+(+}
+{+            _note_version_locked(run_id,+} path, file_sha)
+            if file_sha and start_char is not None else [-None)-]{+(None, None))+}
+{+        sha = _digest(run_id, path, source, start_line, end_line, text,+}
+{+                      _frame(epoch, generation, file_sha, start_char))+}
+{+        record["sha"] = sha+}
+        bucket = _bucket(_LEDGER, run_id, create=True)
+        bucket[sha] = {**record, "text": text, "start_char": start_char,
+                       "file_sha": file_sha, "generation": [-generation}-]{+generation,+}
+{+                       "epoch": epoch}+}
+        bucket.move_to_end(sha)
+        while len(bucket) > MAX_CITATIONS_PER_RUN:
+            bucket.popitem(last=False)
+@@ -185,12 +225,12 @@ def issue_span(run_id: str, *, path: str, source: str, from_line: int,
+    the caller named them (a column may be None), because the citation is
+    bound to that request. ``start_char`` and ``file_sha`` place the text in
+    the file's normalised text, as for a window, so a later edit elsewhere in
+    the file does not invalidate the span. {+They are also part of the digest:+}
+{+    the same coordinates shown again after the file has moved on are a+}
+{+    different place, so they get a different sha.+}
+    """
+    if not run_id:
+        return {"kind": "span", "path": path, "sha": "", "citable": False}
+[-    sha = _digest(run_id, path, f"{source}\x00span\x00{from_col}\x00{to_col}",-]
+[-                  from_line, to_line, text)-]
+    record = {
+        "kind": "span",
+        "path": path,
+@@ -199,13 +239,17 @@ def issue_span(run_id: str, *, path: str, source: str, from_line: int,
+        "end_line": to_line,
+        "from_col": from_col,
+        "to_col": to_col,
+[-        "sha": sha,-]
+    }
+    with _LOCK:
+        {+epoch,+} generation = _note_version_locked(run_id, path, file_sha)
+        {+sha = _digest(run_id, path, f"{source}\x00span\x00{from_col}\x00{to_col}",+}
+{+                      from_line, to_line, text,+}
+{+                      _frame(epoch, generation, file_sha, start_char))+}
+{+        record["sha"] = sha+}
+        bucket = _bucket(_LEDGER, run_id, create=True)
+        bucket[sha] = {**record, "text": text, "start_char": start_char,
+                       "file_sha": file_sha, "generation": [-generation}-]{+generation,+}
+{+                       "epoch": epoch}+}
+        bucket.move_to_end(sha)
+        while len(bucket) > MAX_CITATIONS_PER_RUN:
+            bucket.popitem(last=False)
+@@ -227,7 +271,9 @@ def matches(record: dict, run_id: str, text: str) -> bool:
+    return hmac.compare_digest(
+        record["sha"],
+        _digest(run_id, record["path"], record["source"],
+                record["start_line"], record["end_line"], [-text),-]{+text,+}
+{+                _frame(record.get("epoch"), record.get("generation"),+}
+{+                       record.get("file_sha", ""), record.get("start_char"))),+}
+    )
+
+
+@@ -248,7 +294,7 @@ def journal_edit(run_id: str, path: str, *, edits, sha_before: str,
+        files = _bucket(_JOURNAL, run_id, create=True)
+        entry = files.get(path)
+        if entry is None or not entry["shas"] or entry["shas"][-1] != sha_before:
+            files[path] = [-{"shas": [sha_after], "edits": []}-]{+_new_chain(sha_after)+}
+            files.move_to_end(path)
+            while len(files) > MAX_JOURNAL_FILES:
+                files.popitem(last=False)
+@@ -258,8 +304,8 @@ def journal_edit(run_id: str, path: str, *, edits, sha_before: str,
+        while len(entry["edits"]) > MAX_GENERATIONS_PER_FILE:
+            # Dropping the oldest generation would silently re-number every
+            # citation still pointing at it, so the whole chain goes and those
+            # citations [-take-]{+are refused, with a reread as+} the [-strict path instead.-]{+remedy.+}
+            files[path] = [-{"shas": [sha_after], "edits": []}-]{+_new_chain(sha_after)+}
+            break
+        files.move_to_end(path)
+        return True
+@@ -270,7 +316,7 @@ def break_journal(run_id: str, path: str) -> None:
+
+    Used for a mutation the journal cannot describe as spans (a delete, an
+    add). The next read seeds a fresh chain; citations from before it fail
+    `chain_intact` and are [-checked strictly.-]{+refused.+}
+    """
+    if not run_id:
+        return
+@@ -281,14 +327,15 @@ def break_journal(run_id: str, path: str) -> None:
+
+
+def chain_intact(run_id: str, path: str, generation, file_sha: str,
+                 current_sha: [-str)-]{+str, epoch=None)+} -> bool:
+    """True when coordinates from ``generation`` can be translated to now.
+
+    Requires the journal to still hold the {+chain (``epoch``) and+} generation the
+    citation was issued against AND the file to still be exactly what the
+    journal says the engine last left there. The second half is what keeps an
+    outside write from being papered over: it breaks the chain, and [-the-]{+a+} citation
+    {+issued before it+} is [-then judged by-]{+refused. ``epoch`` None skips+} the [-original strict check.-]{+chain comparison,+}
+{+    for a caller that recorded none.+}
+    """
+    if not run_id or generation is None or not file_sha or not current_sha:
+        return False
+@@ -296,6 +343,8 @@ def chain_intact(run_id: str, path: str, generation, file_sha: str,
+        entry = (_JOURNAL.get(run_id) or {}).get(path)
+        if not entry:
+            return False
+        {+if epoch is not None and entry["epoch"] != epoch:+}
+{+            return False+}
+        shas = entry["shas"]
+        return (0 <= generation < len(shas) and shas[generation] == file_sha
+                and shas[-1] == current_sha)
+diff --git a/src/skillflow/strict_patch.py b/src/skillflow/strict_patch.py
+index 536a614..d008fbf 100644
+--- a/src/skillflow/strict_patch.py
++++ b/src/skillflow/strict_patch.py
+@@ -351,7 +351,11 @@ def _span_range(op: Operation, number: int, ref: Reference, record: dict,
+    The reference must name the span's own coordinates (or none, meaning the
+    span), and those coordinates must still cover exactly the text the engine
+    showed when it issued the span. The text is located through the same
+    journal a window uses, so [-an-]{+this run's own+} edit elsewhere in the file does
+    not stale it. {+Two checks refuse everything else: the chain check (the file+}
+{+    was written by something other than this run's journaled edits since the+}
+{+    span was shown) and the text check (this run's own edit changed the+}
+{+    shown text itself).+}
+    """
+    span = (record["start_line"], record["from_col"], record["end_line"],
+            record["to_col"])
+@@ -363,10 +367,13 @@ def _span_range(op: Operation, number: int, ref: Reference, record: dict,
+            "span citation corroborates only the coordinates it was issued for")
+    stale = PatchError(
+        f"{op.path} reference {number}: span {_coords(*span)} changed since "
+        "its citation was [-issued;-]{+issued: the text it showed was edited, or the file "+}
+{+        "was written by something other than this run's apply_patch; reread "+}
+{+        "the range and+} resend the reference with the [-window's sha "-]
+[-        "to-]{+new digest to+} be shown [-the-]{+"+}
+{+        "the+} text it covers now")
+    if not citations.chain_intact(run_id, op.path, record.get("generation"),
+                                  record.get("file_sha", ""), [-current_sha):-]{+current_sha,+}
+{+                                  epoch=record.get("epoch")):+}
+        raise stale
+    start = citations.remap(run_id, op.path, record["generation"],
+                            record["start_char"])
+@@ -440,7 +447,8 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
+    round measured at 54 reads and 37 writes on one file was paying for. The
+    translation is refused rather than guessed when the cited range was itself
+    replaced, and the chain is only trusted while the file is still what the
+    engine left there; otherwise the {+citation is refused. Only a citation+}
+{+    issued without a frame is judged by the+} original strict window [-check decides.-]{+check.+}
+
+    ``edits`` is filled, when given, with the disjoint
+    ``(start, end, new_length)`` spans this call applied, in the offsets of the
+@@ -503,7 +511,8 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
+        translatable = (
+            window_start is not None
+            and citations.chain_intact(run_id, op.path, generation,
+                                       record.get("file_sha", ""), [-current_sha))-]{+current_sha,+}
+{+                                       epoch=record.get("epoch")))+}
+        if translatable:
+            local_from = _window_offset(op, number, record, from_line,
+                                        ref.from_col, "from")
+@@ -524,6 +533,19 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
+                    f"{to_line} changed since the digest was issued; "
+                    "reread the range and cite the new digest")
+        else:
+            {+if window_start is not None:+}
+{+                # The read placed this window in a frame the journal can no+}
+{+                # longer connect to the file as it is now. Lines that still+}
+{+                # READ the same may be different lines: a file of repeated+}
+{+                # lines with one written in above looks unchanged at every+}
+{+                # line number.+}
+{+                raise PatchError(+}
+{+                    f"{op.path} reference {number}: lines {record['start_line']}-"+}
+{+                    f"{record['end_line']} changed since the digest was issued, "+}
+{+                    "by a write this run's journal does not account for (a "+}
+{+                    "write from outside the run, or history the engine no "+}
+{+                    "longer holds), so where they are now is unknown; reread "+}
+{+                    "the range and cite the new digest")+}
+            window = "\n".join(original[record["start_line"] - 1:record["end_line"]])
+            if not citations.matches(record, run_id, window):
+                raise PatchError(
+@@ -564,13 +586,24 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
+            edits.append((start, end, len(new_text)))
+        if echo is not None:
+            was = joined[start:end]
+            [-echo.append({-]{+said = {+}
+                "file": op.path,
+                "from_line": from_line, "to_line": to_line,
+                "replaced_chars": len(was),
+                "replaced": (was if len(was) <= MAX_ECHO_CHARS
+                             else was[:MAX_ECHO_CHARS] + "…"),
+            [-})-]{+}+}
+{+            lines_was = was.count("\n") + 1 if was else 0+}
+{+            lines_new = new_text.count("\n") + 1 if new_text else 0+}
+{+            if lines_was != lines_new:+}
+{+                # A change in line count is the one thing the echo above cuts+}
+{+                # off: a window of ten lines replaced by one shows only its+}
+{+                # first characters. Counted, in the file's own bytes.+}
+{+                said["replaced_lines"] = lines_was+}
+{+                said["replaced_bytes"] = len(was.replace(+}
+{+                    "\n", eol).encode("utf-8"))+}
+{+                said["new_lines"] = lines_new+}
+{+            echo.append(said)+}
+    pieces.append(joined[cursor:])
+    result = "".join(pieces).split("\n")
+    return (eol.join(result) + (eol if result and final_newline else "")).encode("utf-8")
+diff --git a/src/skillflow/tools/apply_patch/tool.yaml b/src/skillflow/tools/apply_patch/tool.yaml
+index 4c5def4..038bdc5 100644
+--- a/src/skillflow/tools/apply_patch/tool.yaml
++++ b/src/skillflow/tools/apply_patch/tool.yaml
+@@ -36,14 +36,18 @@ description: |
+  column one short of the line's end keeps the line's last character, which
+  is why a column is never written until you have seen what it covers. To
+  replace whole lines, omit the columns. from == to inserts at a point. The
+  result's `replaced` says what each reference took [-out.-]{+out, and when a+}
+{+  reference changes the number of lines, `replaced_lines`, `replaced_bytes`+}
+{+  and `new_lines` say by how much.+} Order does not
+  matter and you never compensate for line drift: every range in one call is
+  resolved against the same snapshot and the engine applies them. Ranges
+  must not overlap. To change one line, read or cite just that line — a
+  reference is a hunk, not a file rewrite.
+  A sha this run's `read` did not issue is [-refused, and so is a cited window-]
+[-  whose-]{+refused. A sha writes only where+}
+{+  it showed you: your own writes elsewhere are translated, but once the+} text
+  {+it covers+} has [-changed since:-]{+been edited, or the file was written by anything other than+}
+{+  this run's apply_patch, it is refused:+} reread the range and cite the new
+  sha. There is no fuzzy matching and no partial write.
+
+  V4A MODE (`patch`) — for Add and Delete, and for edits you would rather
+  express as a diff. Updates match exactly one occurrence of their context
+# new file: tests/test_a_citation_writes_only_where_it_was_shown.py (git diff --no-index --word-diff /dev/null tests/test_a_citation_writes_only_where_it_was_shown.py)
+diff --git a/tests/test_a_citation_writes_only_where_it_was_shown.py b/tests/test_a_citation_writes_only_where_it_was_shown.py
+new file mode 100644
+index 0000000..5d06c72
+--- /dev/null
++++ b/tests/test_a_citation_writes_only_where_it_was_shown.py
+@@ -0,0 +1,343 @@
+{+"""A citation writes only at the place it showed the caller when it was issued.+}
+
+{+The review of coords-r1 (`~/.AItelier/director/reports/coords-r1-review-20260924/+}
+{+review.md`, sha256 86f7316f…) found that a digest named its coordinates and+}
+{+its text but not the version of the file it was issued in. The ledger kept one+}
+{+record per digest, so the same coordinates previewed again after an edit got+}
+{+the SAME sha and silently moved the older one: citing it wrote at the new+}
+{+place and said `applied=True`. Its cases E and S3 (spans) and W and S3w+}
+{+(windows) are replayed below verbatim from its probes.+}
+
+{+Director ruling, 2026-09-24, on what "the file changed after it was issued"+}
+{+means: changed by anything other than this run's own journaled edits, or the+}
+{+shown bytes themselves were edited. This run's own edits elsewhere are known+}
+{+exactly and are translated, not refused. So:+}
+
+{+* E, S3, W, S3w — the old citation writes the bytes the review's control+}
+{+  produced, at the place it was shown, never at the re-issued place;+}
+{+* T1 — the shown text was edited by this run after the preview: refused;+}
+{+* T2 — the file was written from outside the run after the citation was+}
+{+  issued: refused, for a span and for a window.+}
+
+{+T1 is the only case the text check alone decides and T2 the only case the+}
+{+chain check alone decides; they are what kill the review's mutants M3 and M3b.+}
+{+"""+}
+{+from pathlib import Path+}
+
+{+import pytest+}
+
+{+from skillflow import citations+}
+{+from skillflow.read_tools import unified_read+}
+{+from skillflow.strict_patch import apply_code_patch+}
+
+{+RUN = "run-a-citation-writes-only-where-it-was-shown"+}
+{+REL = "f.py"+}
+{+SETTINGS = "app/settings.py"+}
+{+FIXTURE = Path(__file__).parent / "fixtures" / "eac7cacb_app_settings.py.txt"+}
+
+
+{+def smap(root):+}
+{+    return {"working_tree": [("repo", str(root))], "named": {}, "allowed": set()}+}
+
+
+{+def rd(root, s, e, rel=REL):+}
+{+    """The probes' read: 0-based start, exclusive end."""+}
+{+    return unified_read(smap(root), rel, start_line=s, end_line=e, run_id=RUN)+}
+
+
+{+def ap(root, refs):+}
+{+    return apply_code_patch("", root, references=refs, run_id=RUN)+}
+
+
+{+@pytest.fixture+}
+{+def root(tmp_path):+}
+{+    citations.forget_run(RUN)+}
+{+    yield tmp_path+}
+{+    citations.forget_run(RUN)+}
+
+
+{+def put(root, data, rel=REL):+}
+{+    path = root / rel+}
+{+    path.parent.mkdir(parents=True, exist_ok=True)+}
+{+    path.write_bytes(data)+}
+
+
+{+# ===========================================================================+}
+{+# review cases, verbatim: the old citation writes where it was shown+}
+{+# ===========================================================================+}
+
+{+L1_TO_L5 = b"l1\nl2\nl3\nl4\nl5\n"+}
+{+# probe2_candidate.txt, case E0 (the control, no second preview).+}
+{+E_SHOWN_PLACE = b"l1\nNEW1\nNEW2\nl2\n# note\nl3\nl4\nl5\n"+}
+
+
+{+def test_review_case_E_an_old_insertion_preview_writes_where_it_was_shown(root):+}
+{+    """probe2.py case E. An empty range covers '' in every version of the+}
+{+    file, so before this two previews of 3:0 in two versions were one sha."""+}
+{+    put(root, L1_TO_L5)+}
+{+    wa = rd(root, 0, 5)["citation"]["sha"]+}
+{+    p = ap(root, [{"file": REL, "sha": wa, "from_line": 3, "to_line": 3,+}
+{+                   "from_col": 0, "to_col": 0, "new_text": "# note\n"}])+}
+{+    span_a = p["spans"][0]["sha"]+}
+{+    assert (p["spans"][0]["text"], p["spans"][0]["keeps_after"]) == ("", "l3")+}
+{+    r = ap(root, [{"file": REL, "sha": wa, "from_line": 1, "to_line": 1,+}
+{+                   "new_text": "l1\nNEW1\nNEW2"}])+}
+{+    assert r["applied"] is True+}
+{+    wb = rd(root, 0, 7)["citation"]["sha"]+}
+{+    p2 = ap(root, [{"file": REL, "sha": wb, "from_line": 3, "to_line": 3,+}
+{+                    "from_col": 0, "to_col": 0, "new_text": "# other\n"}])+}
+{+    span_b = p2["spans"][0]["sha"]+}
+{+    assert (p2["spans"][0]["text"], p2["spans"][0]["keeps_after"]) == ("", "NEW2")+}
+{+    assert span_a != span_b+}
+
+{+    res = ap(root, [{"file": REL, "sha": span_a, "from_line": 3, "to_line": 3,+}
+{+                     "from_col": 0, "to_col": 0, "new_text": "# note\n"}])+}
+
+{+    assert res["applied"] is True, res+}
+{+    assert (root / REL).read_bytes() == E_SHOWN_PLACE+}
+
+
+{+def test_review_case_E0_control_writes_the_same_bytes(root):+}
+{+    """probe2.py case E0: the same flow without the second preview. Its bytes+}
+{+    are the ones E must produce."""+}
+{+    put(root, L1_TO_L5)+}
+{+    wa = rd(root, 0, 5)["citation"]["sha"]+}
+{+    span_a = ap(root, [{"file": REL, "sha": wa, "from_line": 3, "to_line": 3,+}
+{+                        "from_col": 0, "to_col": 0,+}
+{+                        "new_text": "# note\n"}])["spans"][0]["sha"]+}
+{+    ap(root, [{"file": REL, "sha": wa, "from_line": 1, "to_line": 1,+}
+{+               "new_text": "l1\nNEW1\nNEW2"}])+}
+{+    res = ap(root, [{"file": REL, "sha": span_a, "from_line": 3, "to_line": 3,+}
+{+                     "from_col": 0, "to_col": 0, "new_text": "# note\n"}])+}
+{+    assert res["applied"] is True, res+}
+{+    assert (root / REL).read_bytes() == E_SHOWN_PLACE+}
+
+
+{+DUP = b"a = 1\nx = 30\nb = 2\nx = 30\nc = 3\n"+}
+{+# probe.py S3 / S3w and probe2.py W: frame A's line 2 is line 4 after the+}
+{+# insert, so this is the product that writes where frame A was shown.+}
+{+DUP_SHOWN_PLACE = b"a = 1\nx = 30\nb = 2\nx = 45\nb = 2\nx = 30\nc = 3\n"+}
+
+
+{+def test_review_case_S3_an_old_span_over_repeated_text_writes_where_it_was_shown(root):+}
+{+    """probe.py case S3: the same coordinates over the same text `30`,+}
+{+    previewed in two versions of the file."""+}
+{+    put(root, DUP, SETTINGS)+}
+{+    wa = rd(root, 0, 5, SETTINGS)["citation"]["sha"]+}
+{+    first = ap(root, [{"file": SETTINGS, "sha": wa, "from_line": 2, "to_line": 2,+}
+{+                       "from_col": 4, "to_col": 6, "new_text": "45"}])+}
+{+    span_a = first["spans"][0]["sha"]+}
+{+    ap(root, [{"file": SETTINGS, "sha": wa, "from_line": 1, "to_line": 1,+}
+{+               "new_text": "a = 1\nx = 30\nb = 2"}])+}
+{+    wb = rd(root, 0, 7, SETTINGS)["citation"]["sha"]+}
+{+    second = ap(root, [{"file": SETTINGS, "sha": wb, "from_line": 2, "to_line": 2,+}
+{+                        "from_col": 4, "to_col": 6, "new_text": "45"}])+}
+{+    span_b = second["spans"][0]["sha"]+}
+{+    assert first["spans"][0]["text"] == second["spans"][0]["text"] == "30"+}
+{+    assert span_a != span_b+}
+
+{+    res = ap(root, [{"file": SETTINGS, "sha": span_a, "from_line": 2, "to_line": 2,+}
+{+                     "from_col": 4, "to_col": 6, "new_text": "45"}])+}
+
+{+    assert res["applied"] is True, res+}
+{+    assert (root / SETTINGS).read_bytes() == DUP_SHOWN_PLACE+}
+
+
+{+def test_review_case_W_an_old_window_writes_where_it_was_read(root):+}
+{+    """probe2.py case W: the same lines with the same text read in two+}
+{+    versions of the file. The review measured this one on base as well."""+}
+{+    put(root, DUP)+}
+{+    wa = rd(root, 1, 2)["citation"]["sha"]+}
+{+    w1 = rd(root, 0, 1)["citation"]["sha"]+}
+{+    r = ap(root, [{"file": REL, "sha": w1, "from_line": 1, "to_line": 1,+}
+{+                   "new_text": "a = 1\nx = 30\nb = 2"}])+}
+{+    assert r["applied"] is True+}
+{+    wb = rd(root, 1, 2)["citation"]["sha"]+}
+{+    assert wa != wb+}
+
+{+    res = ap(root, [{"file": REL, "sha": wa, "from_line": 2, "to_line": 2,+}
+{+                     "new_text": "x = 45"}])+}
+
+{+    assert res["applied"] is True, res+}
+{+    assert (root / REL).read_bytes() == DUP_SHOWN_PLACE+}
+
+
+{+def test_review_case_S3w_an_old_window_cited_by_sha_alone_writes_where_it_was_read(root):+}
+{+    """probe.py case S3w: the window form of S3, with the insert made by+}
+{+    citing the sha alone."""+}
+{+    put(root, DUP, SETTINGS)+}
+{+    wa = rd(root, 1, 2, SETTINGS)["citation"]["sha"]+}
+{+    ap(root, [{"file": SETTINGS, "sha": rd(root, 0, 1, SETTINGS)["citation"]["sha"],+}
+{+               "new_text": "a = 1\nx = 30\nb = 2"}])+}
+{+    wb = rd(root, 1, 2, SETTINGS)["citation"]["sha"]+}
+{+    assert wa != wb+}
+
+{+    res = ap(root, [{"file": SETTINGS, "sha": wa, "from_line": 2, "to_line": 2,+}
+{+                     "new_text": "x = 45"}])+}
+
+{+    assert res["applied"] is True, res+}
+{+    assert (root / SETTINGS).read_bytes() == DUP_SHOWN_PLACE+}
+
+
+{+# ===========================================================================+}
+{+# every field that decides where a sha resolves is covered by the sha+}
+{+# ===========================================================================+}
+
+{+def test_the_same_range_in_the_same_version_is_one_sha_and_in_another_is_two(root):+}
+{+    put(root, DUP)+}
+{+    first = rd(root, 3, 4)["citation"]["sha"]+}
+{+    assert rd(root, 3, 4)["citation"]["sha"] == first+}
+{+    ref = {"file": REL, "sha": first, "from_line": 4, "to_line": 4,+}
+{+           "from_col": 4, "to_col": 6, "new_text": "45"}+}
+{+    span = ap(root, [ref])["spans"][0]["sha"]+}
+{+    assert ap(root, [ref])["spans"][0]["sha"] == span+}
+
+{+    # This run's own edit BELOW the range: nothing above it moved, the text+}
+{+    # and offset are the same; only the version differs.+}
+{+    assert ap(root, [{"file": REL, "sha": rd(root, 4, 5)["citation"]["sha"],+}
+{+                      "new_text": "c = 4"}])["applied"] is True+}
+{+    again = rd(root, 3, 4)["citation"]+}
+{+    assert again["sha"] != first+}
+{+    assert ap(root, [{**ref, "sha": again["sha"]}])["spans"][0]["sha"] != span+}
+
+
+{+def test_a_span_from_before_an_outside_write_stays_refused_after_the_run_rebuilds_the_same_text(root):+}
+{+    """The chain is part of the place. Here an outside write intervenes, and+}
+{+    this run's own edits then rebuild exactly the text and generation the span+}
+{+    was issued in. Without the chain in the digest and the check, the span+}
+{+    would resolve through a history it was never issued in."""+}
+{+    put(root, b"a\nb\nc\n")+}
+{+    w = rd(root, 0, 3)["citation"]["sha"]+}
+{+    assert ap(root, [{"file": REL, "sha": w, "from_line": 2, "to_line": 2,+}
+{+                      "new_text": "B"}])["applied"] is True+}
+{+    w1 = rd(root, 0, 3)["citation"]["sha"]+}
+{+    span = ap(root, [{"file": REL, "sha": w1, "from_line": 3, "to_line": 3,+}
+{+                      "from_col": 0, "to_col": 1, "new_text": "C"}])["spans"][0]+}
+{+    assert span["text"] == "c"+}
+
+{+    put(root, b"a\nb\nc\n")                                  # outside write+}
+{+    w2 = rd(root, 0, 3)["citation"]["sha"]+}
+{+    assert ap(root, [{"file": REL, "sha": w2, "from_line": 2, "to_line": 2,+}
+{+                      "new_text": "B"}])["applied"] is True+}
+{+    rebuilt = (root / REL).read_bytes()+}
+{+    assert rebuilt == b"a\nB\nc\n"+}
+
+{+    res = ap(root, [{"file": REL, "sha": span["sha"], "new_text": "C"}])+}
+
+{+    assert res["applied"] is False+}
+{+    assert "reread" in res["error"]+}
+{+    assert (root / REL).read_bytes() == rebuilt+}
+
+
+{+# ===========================================================================+}
+{+# T1 / T2: what is refused, and the one check that decides each+}
+{+# ===========================================================================+}
+
+{+BODY = b"import os\n\nDEFAULT_TIMEOUT_SECONDS = 30\n\nDEBUG = False\n"+}
+
+
+{+def test_T1_the_shown_text_edited_after_the_preview_is_refused(root):+}
+{+    """probe3.py case T1. The inner edit is strictly inside the previewed+}
+{+    span, so both of the span's ends still translate: only the comparison of+}
+{+    the text there with the text shown can refuse it. Without that comparison+}
+{+    the review's mutant M3 wrote `OTHER = 40` over the inner edit."""+}
+{+    put(root, BODY)+}
+{+    w = rd(root, 0, 5)["citation"]["sha"]+}
+{+    big = ap(root, [{"file": REL, "sha": w, "from_line": 3, "from_col": 0,+}
+{+                     "to_line": 3, "to_col": 27, "new_text": "X"}])["spans"][0]+}
+{+    inner = ap(root, [{"file": REL, "sha": w, "from_line": 3, "from_col": 8,+}
+{+                       "to_line": 3, "to_col": 15, "new_text": "LIMIT"}])["spans"][0]+}
+{+    assert (big["text"], inner["text"]) == ("DEFAULT_TIMEOUT_SECONDS = 3", "TIMEOUT")+}
+{+    assert ap(root, [{"file": REL, "sha": inner["sha"],+}
+{+                      "new_text": "LIMIT"}])["applied"] is True+}
+{+    edited = (root / REL).read_bytes()+}
+{+    assert edited == b"import os\n\nDEFAULT_LIMIT_SECONDS = 30\n\nDEBUG = False\n"+}
+
+{+    res = ap(root, [{"file": REL, "sha": big["sha"], "new_text": "OTHER = 4"}])+}
+
+{+    assert res["applied"] is False+}
+{+    assert "changed since its citation was issued" in res["error"]+}
+{+    assert "reread" in res["error"]+}
+{+    assert (root / REL).read_bytes() == edited+}
+
+
+{+def test_T2_a_span_after_an_outside_write_is_refused(root):+}
+{+    """probe3.py case T2. Every line reads `x = 30` and the outside write adds+}
+{+    one more on top, so the text at the span's old offset is unchanged: only+}
+{+    the chain check can refuse it. Without it the review's mutant M3b wrote+}
+{+    line 3 instead of the line shown, now line 4."""+}
+{+    put(root, b"x = 30\n" * 5)+}
+{+    w = rd(root, 0, 5)["citation"]["sha"]+}
+{+    span = ap(root, [{"file": REL, "sha": w, "from_line": 3, "from_col": 4,+}
+{+                      "to_line": 3, "to_col": 6, "new_text": "45"}])["spans"][0]+}
+{+    put(root, b"x = 30\n" * 6)                               # outside write+}
+{+    outside = (root / REL).read_bytes()+}
+
+{+    res = ap(root, [{"file": REL, "sha": span["sha"], "new_text": "45"}])+}
+
+{+    assert res["applied"] is False+}
+{+    assert "changed since its citation was issued" in res["error"]+}
+{+    assert "reread" in res["error"]+}
+{+    assert (root / REL).read_bytes() == outside+}
+
+
+{+def test_T2_a_window_after_an_outside_write_is_refused(root):+}
+{+    """The window form of T2. Lines 3..3 still read `x = 30`, so the check+}
+{+    that compares the text at those line numbers passes; before this it wrote+}
+{+    line 3, which is not the line the read showed."""+}
+{+    put(root, b"x = 30\n" * 5)+}
+{+    w = rd(root, 0, 5)["citation"]["sha"]+}
+{+    put(root, b"x = 30\n" * 6)                               # outside write+}
+{+    outside = (root / REL).read_bytes()+}
+
+{+    res = ap(root, [{"file": REL, "sha": w, "from_line": 3, "to_line": 3,+}
+{+                     "new_text": "x = 45"}])+}
+
+{+    assert res["applied"] is False+}
+{+    assert "changed since the digest was issued" in res["error"]+}
+{+    assert "reread" in res["error"]+}
+{+    assert (root / REL).read_bytes() == outside+}
+
+
+{+# ===========================================================================+}
+{+# a whole-window replace that changes the line count says so+}
+{+# ===========================================================================+}
+
+{+def test_a_window_replaced_by_fewer_lines_states_the_lines_and_bytes_replaced(root):+}
+{+    """The review's case S6e: host run eac7cacb's own 10-line window, cited+}
+{+    by sha alone with a one-line new_text. It writes (the whole window is what+}
+{+    was cited) and the result says how much it took out."""+}
+{+    data = FIXTURE.read_bytes()+}
+{+    put(root, data, SETTINGS)+}
+{+    cite = rd(root, 1674, 1685, SETTINGS)["citation"]+}
+{+    assert (cite["start_line"], cite["end_line"]) == (1675, 1684)+}
+{+    lines = data.decode("utf-8").split("\n")+}
+{+    window = "\n".join(lines[1674:1684])+}
+
+{+    res = ap(root, [{"file": SETTINGS, "sha": cite["sha"],+}
+{+                     "new_text": "DEFAULT_TIMEOUT_SECONDS = 45"}])+}
+
+{+    assert res["applied"] is True, res+}
+{+    (said,) = res["replaced"]+}
+{+    assert said["replaced_lines"] == 10+}
+{+    assert said["replaced_bytes"] == len(window.encode("utf-8"))+}
+{+    assert said["new_lines"] == 1+}
+
+
+{+def test_the_line_count_is_stated_in_the_file_s_own_bytes(root):+}
+{+    put(root, b"a\r\nb\r\nc\r\n")+}
+{+    cite = rd(root, 0, 3)["citation"]+}
+{+    res = ap(root, [{"file": REL, "sha": cite["sha"], "new_text": "z"}])+}
+{+    (said,) = res["replaced"]+}
+{+    assert (said["replaced_lines"], said["replaced_bytes"], said["new_lines"]) == (3, 7, 1)+}
+{+    assert (root / REL).read_bytes() == b"z\r\n"+}
+
+
+{+def test_a_replace_that_keeps_the_line_count_adds_nothing_to_the_echo(root):+}
+{+    put(root, BODY)+}
+{+    cite = rd(root, 2, 3)["citation"]+}
+{+    res = ap(root, [{"file": REL, "sha": cite["sha"],+}
+{+                     "new_text": "DEFAULT_TIMEOUT_SECONDS = 45"}])+}
+{+    assert res["replaced"] == [{"file": REL, "from_line": 3, "to_line": 3,+}
+{+                                "replaced_chars": 28,+}
+{+                                "replaced": "DEFAULT_TIMEOUT_SECONDS = 30"}]+}
+# new file: evidence/coords-r2/mutate_r2.py (git diff --no-index --word-diff /dev/null evidence/coords-r2/mutate_r2.py)
+diff --git a/evidence/coords-r2/mutate_r2.py b/evidence/coords-r2/mutate_r2.py
+new file mode 100644
+index 0000000..eff9604
+--- /dev/null
++++ b/evidence/coords-r2/mutate_r2.py
+@@ -0,0 +1,76 @@
+{+"""Apply one named, ignition-instrumented mutant to a throwaway copy of the tree.+}
+
+{+Usage: python3 mutate_r2.py <copy> <m3b|m5|m6|m7>+}
+{+M3 is applied with the review's own mutate.py, unmodified. Every replacement+}
+{+here must match exactly once, or the script exits 2. An IGNITION line is+}
+{+appended to <copy>/IGNITIONS.log each time the ORIGINAL code would have+}
+{+refused (or, for m7, would have issued a distinct digest) and the mutant did+}
+{+not.+}
+{+"""+}
+{+import sys+}
+
+{+LOG = ("def _ignite(name):\n"+}
+{+       "    import os as _os\n"+}
+{+       "    _p = _os.path.join(_os.path.dirname(__file__), '..', '..', 'IGNITIONS.log')\n"+}
+{+       "    with open(_p, 'a') as _fh:\n"+}
+{+       "        _fh.write('IGNITION ' + name + '\\n')\n\n\n")+}
+
+{+SP = "src/skillflow/strict_patch.py"+}
+{+CI = "src/skillflow/citations.py"+}
+{+MUTANTS = {+}
+{+    # M3b: the review's mutant, with the one line the epoch argument added.+}
+{+    "m3b": [(SP, "def _coords(",+}
+{+             "    if not citations.chain_intact(run_id, op.path, record.get(\"generation\"),\n"+}
+{+             "                                  record.get(\"file_sha\", \"\"), current_sha,\n"+}
+{+             "                                  epoch=record.get(\"epoch\")):\n"+}
+{+             "        raise stale\n",+}
+{+             "    if not citations.chain_intact(run_id, op.path, record.get(\"generation\"),\n"+}
+{+             "                                  record.get(\"file_sha\", \"\"), current_sha,\n"+}
+{+             "                                  epoch=record.get(\"epoch\")):\n"+}
+{+             "        _ignite('m3b')  # MUTANT m3b: chain check deleted\n")],+}
+{+    # M5: the chain (epoch) comparison removed from chain_intact.+}
+{+    "m5": [(CI, "def text_sha(",+}
+{+            "        if epoch is not None and entry[\"epoch\"] != epoch:\n"+}
+{+            "            return False\n",+}
+{+            "        if epoch is not None and entry[\"epoch\"] != epoch:\n"+}
+{+            "            _ignite('m5')  # MUTANT m5: epoch comparison removed\n")],+}
+{+    # M6: the refusal of a framed window whose chain is broken removed+}
+{+    # (back to r1: the strict line-number check decides).+}
+{+    "m6": [(SP, "def _coords(",+}
+{+            "            if window_start is not None:\n"+}
+{+            "                # The read placed",+}
+{+            "            if window_start is not None:\n"+}
+{+            "                _ignite('m6')  # MUTANT m6: framed-window refusal removed\n"+}
+{+            "            if False:\n"+}
+{+            "                # The read placed")],+}
+{+    # M7: the frame dropped from the digest (r1's digest).+}
+{+    "m7": [(CI, "def text_sha(",+}
+{+            "    payload = \"\\x00\".join((run_id, path, source, str(start_line),\n"+}
+{+            "                           str(end_line), text, frame)).encode(\"utf-8\")\n",+}
+{+            "    payload = \"\\x00\".join((run_id, path, source, str(start_line),\n"+}
+{+            "                           str(end_line), text)).encode(\"utf-8\")  # MUTANT m7\n"),+}
+{+           (CI, None,+}
+{+            "        record[\"sha\"] = sha\n        bucket = _bucket(_LEDGER, run_id, create=True)\n",+}
+{+            "        record[\"sha\"] = sha\n        bucket = _bucket(_LEDGER, run_id, create=True)\n"+}
+{+            "        _old = bucket.get(sha)\n"+}
+{+            "        if _old is not None and (_old.get('epoch'), _old.get('generation'), _old.get('file_sha'), _old.get('start_char')) != (epoch, generation, file_sha, start_char):\n"+}
+{+            "            _ignite('m7')  # a re-issue moved an existing sha\n")],+}
+{+}+}
+
+{+copy, name = sys.argv[1], sys.argv[2]+}
+{+logged = set()+}
+{+for rel, anchor, old, new in MUTANTS[name]:+}
+{+    path = copy + "/" + rel+}
+{+    src = open(path).read()+}
+{+    n = src.count(old)+}
+{+    expected = 2 if (name == "m7" and anchor is None) else 1+}
+{+    if n != expected:+}
+{+        print("MATCHES", n, "for", name, rel)+}
+{+        sys.exit(2)+}
+{+    src = src.replace(old, new)+}
+{+    if anchor and rel not in logged:+}
+{+        assert src.count(anchor) == 1+}
+{+        src = src.replace(anchor, LOG + anchor)+}
+{+        logged.add(rel)+}
+{+    open(path, "w").write(src)+}
+{+print("MUTATED", name)+}
+# new file: evidence/coords-r2/mutants.sh (git diff --no-index --word-diff /dev/null evidence/coords-r2/mutants.sh)
+diff --git a/evidence/coords-r2/mutants.sh b/evidence/coords-r2/mutants.sh
+new file mode 100755
+index 0000000..32b5ab6
+--- /dev/null
++++ b/evidence/coords-r2/mutants.sh
+@@ -0,0 +1,23 @@
+{+#!/bin/sh+}
+{+# usage: mutants.sh <name>...   (control = no mutation; m3 = review mutate.py verbatim)+}
+{+S=/home/linxuhao/coords-r2-scratch; T=/home/linxuhao/stepflow-coords-r1+}
+{+R=/home/linxuhao/.AItelier/director/reports/coords-r1-review-20260924+}
+{+for m in "$@"; do+}
+{+  C=$S/mut_$m; rm -rf "$C"; mkdir -p "$C"+}
+{+  (cd $T && tar --exclude=./.git -cf - .) | (cd "$C" && tar -xf -)+}
+{+  case $m in+}
+{+    control) echo "MUTATED control (none)";;+}
+{+    m3) python3 $R/mutate.py "$C" m3;;+}
+{+    m3b_review) python3 $R/mutate.py "$C" m3b;;+}
+{+    *) python3 $S/mutate_r2.py "$C" $m;;+}
+{+  esac+}
+{+  mrc=$?; echo "MUTATE_${m}_RC=$mrc"+}
+{+  [ $mrc -ne 0 ] && continue+}
+{+  for f in src/skillflow/strict_patch.py src/skillflow/citations.py; do diff -u "$T/$f" "$C/$f"; done > $S/mutant_${m}.diff.txt+}
+{+  $S/suite.sh "$C" coords-r2-mut-$m $S/mutant_${m}_suite.txt+}
+{+  echo "SUITE_${m}_RC=$?"+}
+{+  n=0; [ -f "$C/IGNITIONS.log" ] && n=$(grep -c IGNITION "$C/IGNITIONS.log")+}
+{+  echo "IGNITIONS_${m}=$n"+}
+{+  grep -E "^FAILED" $S/mutant_${m}_suite.txt | sed "s/ - .*//"+}
+{+  tail -3 $S/mutant_${m}_suite.txt | head -1+}
+{+done+}
+# new file: evidence/coords-r2/run_py.sh (git diff --no-index --word-diff /dev/null evidence/coords-r2/run_py.sh)
+diff --git a/evidence/coords-r2/run_py.sh b/evidence/coords-r2/run_py.sh
+new file mode 100755
+index 0000000..3dde2c9
+--- /dev/null
++++ b/evidence/coords-r2/run_py.sh
+@@ -0,0 +1,12 @@
+{+#!/bin/sh+}
+{+# usage: run_py.sh <tree> <name> <log> <script> [args]   (review probes, unmodified, read-only mount)+}
+{+TREE=$1; NAME=$2; LOG=$3; shift 3+}
+{+R=/home/linxuhao/.AItelier/director/reports/coords-r1-review-20260924+}
+{+docker run --rm --init -m 3g --name "$NAME" -u 1000:1000 -e HOME=/tmp \+}
+{+  -e PYTHONPATH="$TREE/src" -e PYTHONDONTWRITEBYTECODE=1 -e REAL_FILE=$R/eac7cacb_real_settings.py \+}
+{+  -v /home/linxuhao/stepflow:/home/linxuhao/stepflow:ro \+}
+{+  -v "$TREE:$TREE" -v "$R:$R:ro" -w "$TREE" aitelier:latest \+}
+{+  python "$@" > "$LOG" 2>&1+}
+{+rc=$?+}
+{+echo "DOCKER_RC=$rc" >> "$LOG"+}
+{+exit $rc+}
+# new file: evidence/coords-r2/run_bytes.sh (git diff --no-index --word-diff /dev/null evidence/coords-r2/run_bytes.sh)
+diff --git a/evidence/coords-r2/run_bytes.sh b/evidence/coords-r2/run_bytes.sh
+new file mode 100755
+index 0000000..dbc9531
+--- /dev/null
++++ b/evidence/coords-r2/run_bytes.sh
+@@ -0,0 +1,17 @@
+{+#!/bin/sh+}
+{+# usage: run_bytes.sh <tree> <name> <log> <out.json>+}
+{+# The review's run_bytes.sh, with the output JSON written to this scratch dir+}
+{+# and the review directory mounted read-only.+}
+{+TREE=$1; NAME=$2; LOG=$3; OUT=$4+}
+{+R=/home/linxuhao/.AItelier/director/reports/coords-r1-review-20260924+}
+{+S=/home/linxuhao/coords-r2-scratch+}
+{+T=tests/test_reference_hunks.py+}
+{+W=tests/test_a_successful_write_leaves_the_next_coordinates_valid.py+}
+{+docker run --rm --init -m 3g --name "$NAME" -u 1000:1000 -e HOME=/tmp \+}
+{+  -e PYTHONPATH="$TREE/src" -e PYTHONDONTWRITEBYTECODE=1 \+}
+{+  -v /home/linxuhao/stepflow:/home/linxuhao/stepflow:ro \+}
+{+  -v "$TREE:$TREE:ro" -v "$R:$R:ro" -v "$S:$S" -w "$TREE" aitelier:latest \+}
+{+  sh -c "python -c \"import skillflow; print(\\\"IMPORT_PROOF\\\", skillflow.__file__)\"; python -m pytest -p no:cacheprovider -q --basetemp=/tmp/bt $T::test_a_digest_the_read_issued_applies $T::test_reference_and_v4a_produce_the_same_bytes $T::test_one_word_cites_one_line_and_leaves_the_rest_alone $T::test_unordered_references_match_descending_ones_byte_for_byte tests/test_output_targets.py::test_reference_mode_runs_end_to_end_through_the_engine $W::test_citing_inside_a_span_this_run_replaced_is_refused_by_name $W::test_the_result_says_what_it_replaced $W::test_the_privacy_r2_corruption_shape; rc=\$?; echo PYTEST_RC=\$rc; python $R/hash_tmp.py /tmp/bt $OUT; exit \$rc" > "$LOG" 2>&1+}
+{+rc=$?+}
+{+echo "DOCKER_RC=$rc" >> "$LOG"+}
+{+exit $rc+}
+# new file: evidence/coords-r2/replay.sh (git diff --no-index --word-diff /dev/null evidence/coords-r2/replay.sh)
+diff --git a/evidence/coords-r2/replay.sh b/evidence/coords-r2/replay.sh
+new file mode 100755
+index 0000000..fa75944
+--- /dev/null
++++ b/evidence/coords-r2/replay.sh
+@@ -0,0 +1,11 @@
+{+#!/bin/sh+}
+{+# usage: replay.sh <tree-under-test> <name> <log>   (r1 replay script, unmodified)+}
+{+TREE=$1; NAME=$2; LOG=$3; CAND=/home/linxuhao/stepflow-coords-r1+}
+{+docker run --rm --init -m 3g --name "$NAME" -u 1000:1000 -e HOME=/tmp \+}
+{+  -e PYTHONPATH="$TREE/src" -e PYTHONDONTWRITEBYTECODE=1 \+}
+{+  -v /home/linxuhao/stepflow:/home/linxuhao/stepflow:ro \+}
+{+  -v "$TREE:$TREE:ro" -v "$CAND:$CAND:ro" -w /tmp aitelier:latest \+}
+{+  sh -c "python $CAND/evidence/coords-r1/replay_real_edits.py; rc=\$?; echo SCRIPT_RC=\$rc; exit \$rc" > "$LOG" 2>&1+}
+{+rc=$?+}
+{+echo "DOCKER_RC=$rc" >> "$LOG"+}
+{+exit $rc+}
+# new file: evidence/coords-r2/run_in_throwaway.sh (git diff --no-index --word-diff /dev/null evidence/coords-r2/run_in_throwaway.sh)
+diff --git a/evidence/coords-r2/run_in_throwaway.sh b/evidence/coords-r2/run_in_throwaway.sh
+new file mode 100755
+index 0000000..12af7d8
+--- /dev/null
++++ b/evidence/coords-r2/run_in_throwaway.sh
+@@ -0,0 +1,14 @@
+{+#!/bin/sh+}
+{+# usage: run_in_throwaway.sh <tree> <container-name> <log> [pytest args...]+}
+{+# Runs pytest in a throwaway --init container with <tree>/src first on the+}
+{+# import path, and logs the import proof, the tree state and the hashes of the+}
+{+# files this round changes. The exit code is pytest's, captured bare.+}
+{+TREE=$1; NAME=$2; LOG=$3; shift 3+}
+{+docker run --rm --init -m 3g --name "$NAME" -u 1000:1000 -e HOME=/tmp \+}
+{+  -e PYTHONPATH="$TREE/src" -e PYTHONDONTWRITEBYTECODE=1 \+}
+{+  -v /home/linxuhao/stepflow:/home/linxuhao/stepflow:ro \+}
+{+  -v "$TREE:$TREE" -w "$TREE" aitelier:latest \+}
+{+  sh -c 'echo "TREE_HEAD=$(git rev-parse HEAD 2>/dev/null) DIRTY_PATHS=$(git status --porcelain 2>/dev/null | wc -l)"; sha256sum src/skillflow/strict_patch.py src/skillflow/citations.py src/skillflow/read_tools.py src/skillflow/tools/apply_patch/tool.yaml 2>&1; python -c "import skillflow; print(\"IMPORT_PROOF\", skillflow.__file__)"; python -c "import pytest, pytest_asyncio; print(\"PYTEST\", pytest.__version__, \"ASYNCIO\", pytest_asyncio.__version__)"; python -m pytest -p no:cacheprovider -q -rfE "$@"; rc=$?; echo "PYTEST_RC=$rc"; exit $rc' sh "$@" > "$LOG" 2>&1+}
+{+rc=$?+}
+{+echo "DOCKER_RC=$rc" >> "$LOG"+}
+{+exit $rc+}
+# new file: evidence/coords-r2/delivery_notes.md (git diff --no-index --word-diff /dev/null evidence/coords-r2/delivery_notes.md)
+diff --git a/evidence/coords-r2/delivery_notes.md b/evidence/coords-r2/delivery_notes.md
+new file mode 100644
+index 0000000..33ced4a
+--- /dev/null
++++ b/evidence/coords-r2/delivery_notes.md
+@@ -0,0 +1,226 @@
+{+# editing.the-coordinates-must-come-from-the-read-too (rev 3) — delivery notes+}
+
+{+- Attempt `attempt-9c2c6cc8d8174700847f0f45e4466983`, branch `director/coords-r2-20260924`.+}
+{+- Base: the r1 candidate `382664c0c966eaf7ec9d1456af43a6e19afcdcec`. Release base: `101da5c44e23aadbb0dcf3a423a0ac43286453bc` (1.5.79).+}
+{+- The r1 review is `~/.AItelier/director/reports/coords-r1-review-20260924/review.md` (sha256 `86f7316f…`), called `$R` below.+}
+{+- Written 2026-09-24 (UTC). Every log named here is in this directory (`evidence/coords-r2/`) as `.txt`, unless it names `$R`.+}
+{+- Every run used a throwaway `docker run --rm --init -m 3g aitelier:latest`, with the tree's `src/` first on `PYTHONPATH`. Each log prints `IMPORT_PROOF <tree>/src/skillflow/__init__.py`, and every RC below was captured bare (`$?`, no pipe).+}
+
+{+## The director's ruling this round follows (quoted)+}
+
+{+> Director ruling: take reading (1).+}
+{+>+}
+{+> In the rev 3 wording, 「文件在它签发之后被改过」 means changed by anything other than this run's own journaled edits, or the shown bytes themselves were edited. The run's own edits above the span are known exactly, and they are translated, not refused. That matches the property the goal states first: 一个 citation 只能写到它签发时展示给调用方的那个位置.+}
+{+>+}
+{+> What must hold, each with a test:+}
+{+>+}
+{+> - **E and S3 (the review's cases, verbatim):** the old preview writes exactly the bytes the review's E0 control produced, at the place it was shown, never at the re-issued place. Pin those bytes.+}
+{+> - **T1 (the shown text was edited after the preview):** refused, with a "reread / re-preview" message, and nothing written.+}
+{+> - **T2 (the file was written from outside the run after the preview):** refused, for spans AND windows. You say the strict fallback lets the window shape through today, so close that too.+}
+{+> - **M3 and M3b:** killed literally by T1 and T2, with bare RC 1 and ignition > 0.+}
+{+> - **Every field that decides where a sha resolves is covered by the sha.** Show that a re-issue at the same coordinates after an own edit yields a different sha, or an equivalently bound one that cannot resolve elsewhere.+}
+
+{+## What changed+}
+
+{+1. `src/skillflow/citations.py`+}
+{+   - **The digest covers the frame.** Window and span digests are now HMACs over the run, path, source, lines, columns (spans) and text, as before, plus `_frame(epoch, generation, file_sha, start_char)`.+}
+{+     - `epoch`: which journal chain the range was issued in. It is new, unique per chain, and taken from a process-wide counter.+}
+{+     - `generation`: the version inside that chain.+}
+{+     - `file_sha`: the digest of the whole normalised text the range was issued against.+}
+{+     - `start_char`: where the range starts in that text.+}
+{+   - These are every field the resolution reads. The coordinates and text were already covered; the frame fields pick the journal and offset the coordinates are translated from.+}
+{+   - The digest is computed under the lock, after the generation is known. `matches()` recomputes it with the record's own frame.+}
+{+   - **The journal chain has an identity.** Every chain gets an `epoch`, and `chain_intact(..., epoch=)` refuses a citation from any other chain.+}
+{+     - A chain is replaced whenever the file is found at a version the journal did not write (an outside write, `break_journal`, eviction). Generation numbers restart at 0 in the new chain.+}
+{+     - Before this, a citation from the old chain could be matched against the new one whenever the generation and the text happened to coincide.+}
+{+2. `src/skillflow/strict_patch.py`+}
+{+   - `_span_range` passes the epoch to the chain check. The stale message now names both causes and the remedy: `…changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; reread the range and resend the reference with the new digest to be shown the text it covers now`.+}
+{+   - **A framed window whose chain is broken is refused** (`…changed since the digest was issued, by a write this run's journal does not account for (…); reread the range and cite the new digest`).+}
+{+     - Before this, such a window fell back to comparing the text at the cited line numbers. That comparison passes when an outside write shifts identical lines, and it then wrote at a line the read never showed (T2-window, below).+}
+{+     - Only a citation issued with no frame (`citations.issue` called without `start_char`, which no read does) is still judged by line numbers.+}
+{+   - **The echo states a line-count change.** When a reference's replaced text and its `new_text` span different numbers of lines, its `replaced` entry adds:+}
+{+     - `replaced_lines`;+}
+{+     - `replaced_bytes`, in the file's own bytes, CRLF included;+}
+{+     - `new_lines`.+}
+{+     There is no heuristic and no refusal. Entries whose line count is unchanged are byte-identical to r1's, so the 73 tests' exact-dict assertions are untouched.+}
+{+3. `src/skillflow/tools/apply_patch/tool.yaml`+}
+{+   - Says a sha writes only where it showed the caller: its own writes are translated, an edit of the covered text or an outside write gets it refused.+}
+{+   - Names the three new echo fields.+}
+{+4. `tests/test_a_citation_writes_only_where_it_was_shown.py` (13 tests, new). Each review case is copied from the probe named in its docstring (`$R/probe.py`, `$R/probe2.py`, `$R/probe3.py`). Only the helpers were adapted to a pytest fixture: the run id and the tmp dir.+}
+
+{+## Route and discriminating reason (criterion 1)+}
+
+{+**The route is unchanged from r1: caller-supplied digest redundancy.** The caller quotes a digest the engine issued, and never a count or the original text.+}
+{+- Explicit columns must cite a span the engine issued for exactly those coordinates, after showing the covered text.+}
+{+- The common intent needs no column at all: the whole window (sha only) or whole lines (lines only).+}
+
+{+**This round's reason, why the fix is binding the frame into the digest:**+}
+{+- A digest resolves to a place by reading exactly these fields: coordinates, text, epoch, generation, file_sha, start_char. All of them are now inside the HMAC.+}
+{+- So two issues share a sha only when they are equal in every field the resolution reads. When they are, they resolve to the same place by construction.+}
+{+- A later issue therefore cannot move an earlier sha. It gets its own sha, and the earlier one still resolves to the place it showed, translated through this run's own journaled edits.+}
+
+{+**Rejected alternatives:**+}
+{+- **Refuse a re-issue that would move an existing sha.** Rejected because the re-issue is a read or a preview, which is how a caller recovers. Refusing it would block the recovery path, not the wrong write.+}
+{+- **Refuse every citation after any change.** Rejected by the ruling, since own edits are translated. It would also turn the frozen-frame tests red (`test_a_second_edit_below_the_first_needs_no_read_in_between` and siblings).+}
+
+{+**Why two separate checks still decide T1 and T2:**+}
+{+- The frame binding fixes where a sha points. It does not by itself refuse T1 or T2: in both, the sha still points at the right frame.+}
+{+- T1 is refused only by the text comparison, and T2 only by the chain check.+}
+{+- The mutants below show each of those checks is the one that decides.+}
+
+{+## a-mis-specified-range-cannot-write-silently+}
+
+{+### Both poles, re-measured on this tree+}
+
+{+**Pole 1: the len-1 call is refused and writes nothing.** Source: `replay_candidate.txt` part C (the director's probe shape), SCRIPT_RC=0, DOCKER_RC=0. The `to_col = len-1 (0..27)` call gives `applied=False`, line 3 unchanged `DEFAULT_TIMEOUT_SECONDS = 30`, and:+}
+
+{+    a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 3:0..3:27, which cover 'DEFAULT_TIMEOUT_SECONDS = 3' and leave '' before it and '0' after it on their lines; …+}
+
+{+**Pole 2: len+1 is unchanged, word for word.** Same log, `to_col = len+1 (0..29)`:+}
+
+{+    to column 29 is past the end of line 3 (28 characters); reread the range+}
+
+{+On base the len-1 call writes `= 450` (`replay_base.txt`, SCRIPT_RC=0).+}
+
+{+The review's full probe (`$R/probe.py`, unmodified) was re-run on this tree: `probe_candidate.txt`, DOCKER_RC=0, 54 CASE blocks. `probe_diff_vs_review_r1.txt` is its diff against the review's r1 run, with 40-hex shas and tmp dirs masked. Only three kinds of line differ:+}
+{+- the import path;+}
+{+- one random never-issued sha prefix;+}
+{+- the stale message wording (3 lines).+}
+
+{+Two outcomes also changed, S3 and S3w, which now write the intended bytes. Every other case, including P1, P3, P4, S1a–f, S2a–d, S4a–d and S5–S11, prints the same outcome as on r1.+}
+
+{+### The review's cases, replayed verbatim+}
+
+{+Each case below is a test in `tests/test_a_citation_writes_only_where_it_was_shown.py`, and was also re-run as the review's own probe script, unmodified.+}
+
+{+| case (source) | shown place | this tree | log | r1 (review) |+}
+{+|---|---|---|---|---|+}
+{+| E (`$R/probe2.py`) | insertion before `l3` | `span_a == span_b: False`; `WROTE=True applied=True`; actual `b'l1\nNEW1\nNEW2\nl2\n# note\nl3\nl4\nl5\n'` = E0's bytes, `CORRECT=True` | `probe2_candidate.txt`, DOCKER_RC=0 | wrote before `NEW2`, CORRECT=False |+}
+{+| E0 control (`$R/probe2.py`) | same | same bytes, `CORRECT=True` | same | CORRECT=True |+}
+{+| S3 (`$R/probe.py`) | frame-A line 2, now line 4 | `span_a == span_b: False`; `line 4 = 'x = 45'`; actual `b'a = 1\nx = 30\nb = 2\nx = 45\nb = 2\nx = 30\nc = 3\n'` | `probe_candidate.txt`, DOCKER_RC=0 | wrote line 2 |+}
+{+| W (`$R/probe2.py`, window) | frame-A line 2, now line 4 | `wa == wb: False`; `CORRECT=True`, same bytes as S3's intended | `probe2_candidate.txt` | CORRECT=False (on base too) |+}
+{+| S3w (`$R/probe.py`, window) | same | `wa == wb: False`; actual = intended | `probe_candidate.txt` | wrote line 2 |+}
+{+| T1 (`$R/probe3.py`) | `DEFAULT_TIMEOUT_SECONDS = 3`, then edited inside by this run | `WROTE=False applied=False`, error `span 3:0..3:27 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; reread the range and resend the reference with the new digest to be shown the text it covers now` | `probe3_candidate.txt`, DOCKER_RC=0 | refused (old wording) |+}
+{+| T2 span (`$R/probe3.py`) | `30` on line 3 of 5 identical lines, then an outside write adds one on top | `WROTE=False applied=False`, same error for `span 3:4..3:6` | `probe3_candidate.txt` | refused (old wording) |+}
+{+| T2 window (new) | the same file shape, window cited with lines 3..3 | refused: `…changed since the digest was issued, by a write this run's journal does not account for (…); reread the range and cite the new digest` | test `test_T2_a_window_after_an_outside_write_is_refused` | **wrote line 3** |+}
+
+{+The tests pin these bytes. `E_SHOWN_PLACE` is the E0 bytes above, and `DUP_SHOWN_PLACE` is S3/W/S3w's intended product.+}
+
+{+**The sha covers the fields that decide its place.** `test_the_same_range_in_the_same_version_is_one_sha_and_in_another_is_two` checks four things:+}
+{+- the same window read twice in one version gives one sha;+}
+{+- the same span previewed twice in one version gives one sha;+}
+{+- after this run's own edit BELOW the range, the same lines give a different sha. The text and offset are unchanged there; only the version moved.+}
+{+- the same holds for the span.+}
+
+{+`test_a_span_from_before_an_outside_write_stays_refused_after_the_run_rebuilds_the_same_text` covers the chain identity. An outside write intervenes, then this run's own edits rebuild exactly the text and generation the span was issued in. The span is still refused.+}
+
+{+**Both polarities on the r1 tree.** The new test file run against r1's `src/` (`~/stepflow-coords-r2-prev`, detached at 382664c) gives `new_tests_on_r1.txt`: `11 failed, 2 passed`, PYTEST_RC=1, DOCKER_RC=1.+}
+{+- The 2 that pass on r1 are the E0 control and the unchanged-line-count echo, both of which r1 already did right.+}
+{+- On r1, E, S3, W, S3w and the same-version test fail on `assert span_a != span_b` / `wa != wb`: r1 gives equal shas.+}
+{+- T2-window and the rebuilt-chain test fail on `assert True is False`: r1 applied the write.+}
+{+- T1 and T2-span fail only on the word `reread`: r1 already refused them, with the old wording.+}
+{+- The two echo tests fail with `KeyError: 'replaced_lines'`.+}
+
+{+### M3 and M3b, and the new checks, killed on disk+}
+
+{+Each mutant runs on a throwaway copy of the tree (`tar` of the worktree without `.git`, into `~/coords-r2-scratch/mut_<m>`).+}
+{+- Whole suite per mutant, bare RC.+}
+{+- An IGNITION is logged each time the ORIGINAL code would have refused (for M7: each time an issue re-used a sha for a different frame) and the mutant did not.+}
+{+- Driver: `mutants.sh`. Output: `mutants_run.txt`, DRIVER_RC=0.+}
+{+- Mutant code: `mutate_r2.py`. M3 uses the review's own `$R/mutate.py`, unmodified.+}
+{+- Diffs: `mutant_<m>.diff.txt`. Ignition logs: `mutant_<m>_ignitions.txt`.+}
+
+{+| mutant | change | whole suite (log) | bare RC | ignitions | red tests |+}
+{+|---|---|---|---|---|---|+}
+{+| control | none | 1243 passed, 3 skipped (`mutant_control_suite.txt`) | SUITE_control_RC=0 | 0 | none |+}
+{+| **M3** | the review's M3, verbatim: the span text comparison dropped | 1 failed, 1242 passed (`mutant_m3_suite.txt`) | **SUITE_m3_RC=1** | **1** | `test_T1_the_shown_text_edited_after_the_preview_is_refused` |+}
+{+| **M3b** | the review's M3b: the span chain check's `raise stale` replaced by an ignition | 2 failed, 1241 passed (`mutant_m3b_suite.txt`) | **SUITE_m3b_RC=1** | **3** | `test_T2_a_span_after_an_outside_write_is_refused`, `test_a_span_from_before_an_outside_write_stays_refused_after_the_run_rebuilds_the_same_text` |+}
+{+| M5 | the epoch comparison in `chain_intact` removed | 1 failed, 1242 passed (`mutant_m5_suite.txt`) | SUITE_m5_RC=1 | 1 | `test_a_span_from_before_an_outside_write_stays_refused_after_the_run_rebuilds_the_same_text` |+}
+{+| M6 | the framed-window refusal on a broken chain removed (back to r1's line-number check) | 1 failed, 1242 passed (`mutant_m6_suite.txt`) | SUITE_m6_RC=1 | 5 | `test_T2_a_window_after_an_outside_write_is_refused` |+}
+{+| M7 | the frame dropped from the digest (r1's digest) | 5 failed, 1238 passed (`mutant_m7_suite.txt`) | SUITE_m7_RC=1 | 6 | E, S3, W, S3w, same-version tests |+}
+
+{+**M3b, "verbatim".** The review's `$R/mutate.py m3b` no longer applies to this tree: `MATCHES 0 for m3b`, `MUTATE_m3b_review_RC=2` in `mutants_run.txt`. The chain-check call it matches gained one argument line (`epoch=record.get("epoch")`). `mutate_r2.py`'s `m3b` is the same mutation, `raise stale` to an ignition, with that one line added to its match string.+}
+
+{+Coverage, as a cross product:+}
+{+- 5 mutants (M3, M3b, M5, M6, M7) plus an unmutated control × the whole suite (1243 tests), 1 run each.+}
+{+- Every mutant is killed.+}
+{+- Each named check has at least one test that fails when it alone is removed.+}
+
+{+## prove-it-on-the-edit-that-actually-went-wrong+}
+
+{+Re-measured on this tree, with the r1 script unmodified (`evidence/coords-r1/replay_real_edits.py`). Logs: `replay_candidate.txt` (SCRIPT_RC=0, DOCKER_RC=0) and `replay_base.txt` (base, SCRIPT_RC=0, DOCKER_RC=0).+}
+
+{+**The file and the read.**+}
+{+- Same file: fixture sha256 `036440eb37d4428cd72f43650cdb1750abdddd86f67b026610afa941fdac0ffe`, 49,447 bytes.+}
+{+- `read(1674,1685)` reproduces trace id 17's window: `start_line 1675 end_line 1684 end_col 19 start_byte 49155 end_byte 49447`.+}
+
+{+**The edits:**+}
+{+- **A1**, trace id 22 verbatim (`to_col=27`): `applied=False`, line 1679 `'DEFAULT_TIMEOUT_SECONDS = 30'`, `A1 file byte-identical to the original: True`. On base: `applied=True`, `'DEFAULT_TIMEOUT_SECONDS = 450'`.+}
+{+- **A2**, same read, same line, no columns: `applied=True`, `line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 45'`, `A2 rest of file byte-identical: True`.+}
+{+- **A3**, sha + new_text only, from `read(1678,1679)`: `applied=True`, `line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 45'`.+}
+
+{+**wuxia b3983d63 (second case):**+}
+{+- B1 (`to_col=58`) is refused, showing `'\t"res://tests/" + "test_martial_arts_surface_census" + ".g'` with `'d",'` left behind; `B1 file == pre-edit bytes: True`.+}
+{+- B2 and B3 write `'\t"res://tests/test_martial_arts_surface_census.gd",'`.+}
+
+{+**The 73 reference-mode tests** (`test_reference_hunks` + `test_strict_patch_parser` + `test_output_targets`):+}
+{+- candidate: `73 passed`, PYTEST_RC=0, DOCKER_RC=0 (`reference73_candidate.txt`);+}
+{+- base: `73 passed`, PYTEST_RC=0, DOCKER_RC=0 (`reference73_base.txt`).+}
+
+{+**Byte identity of the 8 tests r1 rewrote**, measured by running the real test functions:+}
+{+- Method: the review's `run_bytes.sh` + `$R/hash_tmp.py` (copy: `run_bytes.sh`, output path moved to the scratch dir). The base tree runs the 8 original tests and this tree runs the 8 rewritten ones, and every `.py` each left in its tmp dir is hashed.+}
+{+- Runs: base `8 passed`, PYTEST_RC=0, DOCKER_RC=0 (`rewritten_real_base.txt`); candidate `8 passed`, PYTEST_RC=0, DOCKER_RC=0 (`rewritten_real_candidate.txt`).+}
+{+- Result: `IDENTICAL 22 / 22 (candidate keys 22)`, COMPARE_RC=0 (`rewritten_real_compare.txt`; hashes in `rewritten_real_*.json.txt`).+}
+{+- The 22 are 11 distinct files, each seen twice through pytest's `current` symlink: one per test, except 2 for the v4a test and 3 for the unordered test.+}
+
+{+No docstring or message attributes the eac7cacb error to the model.+}
+
+{+## replace-what-was-read-without-naming-a-column+}
+
+{+**Pole 1: no column number.** `replay_candidate.txt` part C, `sha + new_text only (read line 3)`: `applied=True`, product bytes `b'import os\n\nDEFAULT_TIMEOUT_SECONDS = 45\n\nDEBUG = False\n'`. Test: `test_citing_the_sha_alone_replaces_the_line_that_was_read` in `tests/test_the_coordinates_come_from_the_read.py`, 34 passed with the new file (`new_tests_candidate.txt`, PYTEST_RC=0, DOCKER_RC=0).+}
+
+{+**Pole 2: a narrowed sub-range still works.** Part C `no columns (lines 3..3)` gives `= 45`. The column cut `3:26..3:28 -> '45'` is refused on the first call, showing `'30'`, and written by the span on the second (`$R/probe.py` P6a/P6b, unchanged in `probe_diff_vs_review_r1.txt`). The two forms give the same bytes.+}
+
+{+**The review's new risk (S6e): a window replaced by fewer lines now says so.** No heuristic was added.+}
+{+- When a reference changes the line count, its `replaced` entry adds `replaced_lines`, `replaced_bytes` (in the file's own bytes) and `new_lines`.+}
+{+- `test_a_window_replaced_by_fewer_lines_states_the_lines_and_bytes_replaced` uses eac7cacb's own 10-line window `read(1674,1685)`, cited by sha alone with one line of `new_text`. The result carries `replaced_lines == 10`, `replaced_bytes ==` the window's UTF-8 length, and `new_lines == 1`.+}
+{+- `test_the_line_count_is_stated_in_the_file_s_own_bytes`: on CRLF, `(3, 7, 1)`.+}
+{+- `test_a_replace_that_keeps_the_line_count_adds_nothing_to_the_echo`: an unchanged count leaves the entry exactly as r1 shaped it.+}
+
+{+## Whole suite+}
+
+{+| tree | result | bare RC | log | import proof |+}
+{+|---|---|---|---|---|+}
+{+| release base `101da5c` | 1209 passed, 3 skipped | PYTEST_RC=0, DOCKER_RC=0, SUITE_BASE_RC=0 | `suite_base.txt` (`TREE_HEAD=101da5c… DIRTY_PATHS=0`) | `IMPORT_PROOF /home/linxuhao/stepflow-coords-r1-base/src/skillflow/__init__.py` |+}
+{+| candidate | 1243 passed, 3 skipped | PYTEST_RC=0, DOCKER_RC=0, SUITE_CAND_RC=0 | `suite_candidate.txt` | `IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py` |+}
+
+{+- 1243 = r1's 1230 + the 13 new tests. No new red.+}
+{+- The candidate suite ran on the working tree before the commit (`DIRTY_PATHS=5`). The sha256 of the four changed sources it logged are:+}
+{+  - `strict_patch.py` `ecd68fde…`+}
+{+  - `citations.py` `0c2a05c1…`+}
+{+  - `read_tools.py` `ae3f9703…` (unchanged)+}
+{+  - `tool.yaml` `3ee6532b…`+}
+{+- These equal the committed files, and `cmp` shows them identical to the mutant control copy.+}
+
+{+## Word-diff read-back+}
+
+{+`worddiff_readback.txt` is `git diff --word-diff 382664c` for every changed non-log file:+}
+{+- the 3 sources;+}
+{+- the new test file;+}
+{+- the 6 runner and mutant scripts;+}
+{+- this note.+}
+
+{+The logs are excluded. Splice check:+}
+{+- I read every hunk back: no duplicated adjacent lines, fused lines, cut sentences or stale tails;+}
+{+- an awk scan for identical adjacent non-blank lines in the changed source and test files finds 0 hits (`splice_scan.txt`).+}
+
+{+The self-defence phrases (`not a defect`, `by design`, `documented`, `known limitation`, `intentionally`) appear 0 times in added lines (`splice_scan.txt`).+}
+
+{+## Not done, stated plainly+}
+
+{+- **A citation issued with no frame** (`citations.issue` without `start_char`) is still judged by the text at its line numbers, so the T2 shape would still write for it. No read issues one: every citable read passes `start_char` and `file_sha` (`read_tools.py:107-112`). Only direct callers of `citations.issue`, such as tests, can.+}
+{+- **Resending a preview without looking at it still writes what the count covered** (`A1'` in `replay_candidate.txt`: `= 450`). This is unchanged from r1 and follows the two-call design of the rev 2 ruling.+}
+{+- **Explicit lines-only ranges are not corroborated.** This is unchanged from r1.+}
+{+- **An insertion's neighbours are not re-checked.** An empty span covers no text, so the text check has nothing to compare. Suppose this run's own edit starts or ends exactly at the insertion point: it changes what `keeps_before`/`keeps_after` showed, and the insertion is not refused. It lands by `remap`'s boundary rule: an offset at an edit's start stays put, one at its end moves past the new text. No test pins that adjacent case. E and E0 pin only an edit elsewhere in the file.+}
+{+- **`~/AItelier/templates/coding_impl.md`** is still out of scope. Its replacement text is in `evidence/coords-r1/delivery_notes.md` and is unaffected by this round.+}
+{+- No tag, version bump, build or publish, and no State DAG write.+}

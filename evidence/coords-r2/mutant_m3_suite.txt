@@ -1,0 +1,61 @@
+TREE= DIRTY=0
+IMPORT_PROOF /home/linxuhao/coords-r2-scratch/mut_m3/src/skillflow/__init__.py
+PYTEST 9.1.1 ASYNCIO 1.4.0
+.......F..........s......ss............................................. [  5%]
+........................................................................ [ 11%]
+........................................................................ [ 17%]
+........................................................................ [ 23%]
+........................................................................ [ 28%]
+........................................................................ [ 34%]
+........................................................................ [ 40%]
+........................................................................ [ 46%]
+........................................................................ [ 52%]
+........................................................................ [ 57%]
+........................................................................ [ 63%]
+........................................................................ [ 69%]
+........................................................................ [ 75%]
+........................................................................ [ 80%]
+........................................................................ [ 86%]
+........................................................................ [ 92%]
+........................................................................ [ 98%]
+......................                                                   [100%]
+=================================== FAILURES ===================================
+__________ test_T1_the_shown_text_edited_after_the_preview_is_refused __________
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_T1_the_shown_text_edited_0')
+
+    def test_T1_the_shown_text_edited_after_the_preview_is_refused(root):
+        """probe3.py case T1. The inner edit is strictly inside the previewed
+        span, so both of the span's ends still translate: only the comparison of
+        the text there with the text shown can refuse it. Without that comparison
+        the review's mutant M3 wrote `OTHER = 40` over the inner edit."""
+        put(root, BODY)
+        w = rd(root, 0, 5)["citation"]["sha"]
+        big = ap(root, [{"file": REL, "sha": w, "from_line": 3, "from_col": 0,
+                         "to_line": 3, "to_col": 27, "new_text": "X"}])["spans"][0]
+        inner = ap(root, [{"file": REL, "sha": w, "from_line": 3, "from_col": 8,
+                           "to_line": 3, "to_col": 15, "new_text": "LIMIT"}])["spans"][0]
+        assert (big["text"], inner["text"]) == ("DEFAULT_TIMEOUT_SECONDS = 3", "TIMEOUT")
+        assert ap(root, [{"file": REL, "sha": inner["sha"],
+                          "new_text": "LIMIT"}])["applied"] is True
+        edited = (root / REL).read_bytes()
+        assert edited == b"import os\n\nDEFAULT_LIMIT_SECONDS = 30\n\nDEBUG = False\n"
+    
+        res = ap(root, [{"file": REL, "sha": big["sha"], "new_text": "OTHER = 4"}])
+    
+>       assert res["applied"] is False
+E       assert True is False
+
+tests/test_a_citation_writes_only_where_it_was_shown.py:258: AssertionError
+=============================== warnings summary ===============================
+tests/test_integration_configs.py: 39 warnings
+tests/test_regression.py: 1 warning
+  /home/linxuhao/coords-r2-scratch/mut_m3/src/skillflow/core.py:7633: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    elapsed = (dt.datetime.utcnow() - started_dt).total_seconds()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_T1_the_shown_text_edited_after_the_preview_is_refused
+1 failed, 1242 passed, 3 skipped, 40 warnings in 19.65s
+PYTEST_RC=1
+DOCKER_RC=1

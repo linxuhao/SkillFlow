@@ -36,14 +36,18 @@ description: |
   column one short of the line's end keeps the line's last character, which
   is why a column is never written until you have seen what it covers. To
   replace whole lines, omit the columns. from == to inserts at a point. The
-  result's `replaced` says what each reference took out. Order does not
+  result's `replaced` says what each reference took out, and when a
+  reference changes the number of lines, `replaced_lines`, `replaced_bytes`
+  and `new_lines` say by how much. Order does not
   matter and you never compensate for line drift: every range in one call is
   resolved against the same snapshot and the engine applies them. Ranges
   must not overlap. To change one line, read or cite just that line — a
   reference is a hunk, not a file rewrite.
-  A sha this run's `read` did not issue is refused, and so is a cited window
-  whose text has changed since: reread the range and cite the new sha. There
-  is no fuzzy matching and no partial write.
+  A sha this run's `read` did not issue is refused. A sha writes only where
+  it showed you: your own writes elsewhere are translated, but once the text
+  it covers has been edited, or the file was written by anything other than
+  this run's apply_patch, it is refused: reread the range and cite the new
+  sha. There is no fuzzy matching and no partial write.
 
   V4A MODE (`patch`) — for Add and Delete, and for edits you would rather
   express as a diff. Updates match exactly one occurrence of their context

@@ -351,7 +351,11 @@ def _span_range(op: Operation, number: int, ref: Reference, record: dict,
     The reference must name the span's own coordinates (or none, meaning the
     span), and those coordinates must still cover exactly the text the engine
     showed when it issued the span. The text is located through the same
-    journal a window uses, so an edit elsewhere in the file does not stale it.
+    journal a window uses, so this run's own edit elsewhere in the file does
+    not stale it. Two checks refuse everything else: the chain check (the file
+    was written by something other than this run's journaled edits since the
+    span was shown) and the text check (this run's own edit changed the
+    shown text itself).
     """
     span = (record["start_line"], record["from_col"], record["end_line"],
             record["to_col"])
@@ -363,10 +367,13 @@ def _span_range(op: Operation, number: int, ref: Reference, record: dict,
             "span citation corroborates only the coordinates it was issued for")
     stale = PatchError(
         f"{op.path} reference {number}: span {_coords(*span)} changed since "
-        "its citation was issued; resend the reference with the window's sha "
-        "to be shown the text it covers now")
+        "its citation was issued: the text it showed was edited, or the file "
+        "was written by something other than this run's apply_patch; reread "
+        "the range and resend the reference with the new digest to be shown "
+        "the text it covers now")
     if not citations.chain_intact(run_id, op.path, record.get("generation"),
-                                  record.get("file_sha", ""), current_sha):
+                                  record.get("file_sha", ""), current_sha,
+                                  epoch=record.get("epoch")):
         raise stale
     start = citations.remap(run_id, op.path, record["generation"],
                             record["start_char"])
@@ -440,7 +447,8 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
     round measured at 54 reads and 37 writes on one file was paying for. The
     translation is refused rather than guessed when the cited range was itself
     replaced, and the chain is only trusted while the file is still what the
-    engine left there; otherwise the original strict window check decides.
+    engine left there; otherwise the citation is refused. Only a citation
+    issued without a frame is judged by the original strict window check.
 
     ``edits`` is filled, when given, with the disjoint
     ``(start, end, new_length)`` spans this call applied, in the offsets of the
@@ -503,7 +511,8 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
         translatable = (
             window_start is not None
             and citations.chain_intact(run_id, op.path, generation,
-                                       record.get("file_sha", ""), current_sha))
+                                       record.get("file_sha", ""), current_sha,
+                                       epoch=record.get("epoch")))
         if translatable:
             local_from = _window_offset(op, number, record, from_line,
                                         ref.from_col, "from")
@@ -524,6 +533,19 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
                     f"{to_line} changed since the digest was issued; "
                     "reread the range and cite the new digest")
         else:
+            if window_start is not None:
+                # The read placed this window in a frame the journal can no
+                # longer connect to the file as it is now. Lines that still
+                # READ the same may be different lines: a file of repeated
+                # lines with one written in above looks unchanged at every
+                # line number.
+                raise PatchError(
+                    f"{op.path} reference {number}: lines {record['start_line']}-"
+                    f"{record['end_line']} changed since the digest was issued, "
+                    "by a write this run's journal does not account for (a "
+                    "write from outside the run, or history the engine no "
+                    "longer holds), so where they are now is unknown; reread "
+                    "the range and cite the new digest")
             window = "\n".join(original[record["start_line"] - 1:record["end_line"]])
             if not citations.matches(record, run_id, window):
                 raise PatchError(
@@ -564,13 +586,24 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
             edits.append((start, end, len(new_text)))
         if echo is not None:
             was = joined[start:end]
-            echo.append({
+            said = {
                 "file": op.path,
                 "from_line": from_line, "to_line": to_line,
                 "replaced_chars": len(was),
                 "replaced": (was if len(was) <= MAX_ECHO_CHARS
                              else was[:MAX_ECHO_CHARS] + "…"),
-            })
+            }
+            lines_was = was.count("\n") + 1 if was else 0
+            lines_new = new_text.count("\n") + 1 if new_text else 0
+            if lines_was != lines_new:
+                # A change in line count is the one thing the echo above cuts
+                # off: a window of ten lines replaced by one shows only its
+                # first characters. Counted, in the file's own bytes.
+                said["replaced_lines"] = lines_was
+                said["replaced_bytes"] = len(was.replace(
+                    "\n", eol).encode("utf-8"))
+                said["new_lines"] = lines_new
+            echo.append(said)
     pieces.append(joined[cursor:])
     result = "".join(pieces).split("\n")
     return (eol.join(result) + (eol if result and final_newline else "")).encode("utf-8")

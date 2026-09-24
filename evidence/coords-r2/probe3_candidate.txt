@@ -1,0 +1,15 @@
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
+T1 span A covers 'DEFAULT_TIMEOUT_SECONDS = 3'; inner span covers 'TIMEOUT'
+T1 inner edit applied=True file=b'import os\n\nDEFAULT_LIMIT_SECONDS = 30\n\nDEBUG = False\n'
+CASE T1 span A cited sha-only after an own edit strictly inside it
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: span 3:0..3:27 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; reread the range and resend the reference with the new digest to be shown the text it covers now
+   intended: "refusal: span A's text 'DEFAULT_TIMEOUT_SECONDS = 3' is no longer there"
+   actual:   b'import os\n\nDEFAULT_LIMIT_SECONDS = 30\n\nDEBUG = False\n'
+CASE T2 span cited sha-only after an outside insert of an identical line above
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: span 3:4..3:6 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; reread the range and resend the reference with the new digest to be shown the text it covers now
+   intended: b'x = 30\nx = 30\nx = 30\nx = 45\nx = 30\nx = 30\n (or a refusal)'
+   actual:   b'x = 30\nx = 30\nx = 30\nx = 30\nx = 30\nx = 30\n'
+PROBE3_DONE
+DOCKER_RC=0

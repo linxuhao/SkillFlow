@@ -1,0 +1,47 @@
+1c1
+< IMPORT_PROOF /home/linxuhao/.AItelier/director/reports/coords-r1-review-20260924/tree/src/skillflow/__init__.py
+---
+> IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
+93c93
+<    error: apply_patch preflight: app/settings.py reference 1: sha 04fc071409d1… was never issued by a read in this run; cite a digest a read handed you
+---
+>    error: apply_patch preflight: app/settings.py reference 1: sha 9bf08472bdba… was never issued by a read in this run; cite a digest a read handed you
+97c97
+<    error: apply_patch preflight: app/settings.py reference 1: span 2:4..2:6 changed since its citation was issued; resend the reference with the window's sha to be shown the text it covers now
+---
+>    error: apply_patch preflight: app/settings.py reference 1: span 2:4..2:6 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; reread the range and resend the reference with the new digest to be shown the text it covers now
+101c101
+<    error: apply_patch preflight: app/settings.py reference 1: span 2:4..2:6 changed since its citation was issued; resend the reference with the window's sha to be shown the text it covers now
+---
+>    error: apply_patch preflight: app/settings.py reference 1: span 2:4..2:6 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; reread the range and resend the reference with the new digest to be shown the text it covers now
+106c106
+<    error: apply_patch preflight: app/settings.py reference 1: span 3:0..3:27 changed since its citation was issued; resend the reference with the window's sha to be shown the text it covers now
+---
+>    error: apply_patch preflight: app/settings.py reference 1: span 3:0..3:27 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; reread the range and resend the reference with the new digest to be shown the text it covers now
+114c114
+< S3 span_a == span_b: True SHA SHA
+---
+> S3 span_a == span_b: False SHA SHA
+118,119c118,119
+<    line 2 = 'x = 45'
+<    line 4 = 'x = 30'
+---
+>    line 2 = 'x = 30'
+>    line 4 = 'x = 45'
+122,123c122,123
+<    actual product: b'a = 1\nx = 45\nb = 2\nx = 30\nb = 2\nx = 30\nc = 3\n'
+< S3w wa == wb: True
+---
+>    actual product: b'a = 1\nx = 30\nb = 2\nx = 45\nb = 2\nx = 30\nc = 3\n'
+> S3w wa == wb: False
+127,128c127,128
+<    line 2 = 'x = 45'
+<    line 4 = 'x = 30'
+---
+>    line 2 = 'x = 30'
+>    line 4 = 'x = 45'
+131c131
+<    actual product: b'a = 1\nx = 45\nb = 2\nx = 30\nb = 2\nx = 30\nc = 3\n'
+---
+>    actual product: b'a = 1\nx = 30\nb = 2\nx = 45\nb = 2\nx = 30\nc = 3\n'
+DIFF_RC=1

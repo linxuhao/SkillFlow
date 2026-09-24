@@ -1,0 +1,25 @@
+--- /home/linxuhao/stepflow-coords-r1/src/skillflow/strict_patch.py	2026-09-24 14:23:39.356363601 +0000
++++ /home/linxuhao/coords-r2-scratch/mut_m6/src/skillflow/strict_patch.py	2026-09-24 14:25:57.599198700 +0000
+@@ -327,6 +327,13 @@
+ MAX_ECHO_CHARS = 240
+ 
+ 
++def _ignite(name):
++    import os as _os
++    _p = _os.path.join(_os.path.dirname(__file__), '..', '..', 'IGNITIONS.log')
++    with open(_p, 'a') as _fh:
++        _fh.write('IGNITION ' + name + '\n')
++
++
+ def _coords(from_line, from_col, to_line, to_col) -> str:
+     def col(value):
+         return "-" if value is None else str(value)
+@@ -534,6 +541,8 @@
+                     "reread the range and cite the new digest")
+         else:
+             if window_start is not None:
++                _ignite('m6')  # MUTANT m6: framed-window refusal removed
++            if False:
+                 # The read placed this window in a frame the journal can no
+                 # longer connect to the file as it is now. Lines that still
+                 # READ the same may be different lines: a file of repeated
