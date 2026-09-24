@@ -1,11 +1,16 @@
-TREE=101da5c44e23aadbb0dcf3a423a0ac43286453bc DIRTY=6
+TREE=d8c490a20a6684d50e7782365b4c0d8eb676dfa2 DIRTY=9
 IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
 
 === A. host run eac7cacb ===
   fixture sha256 036440eb37d4428cd72f43650cdb1750abdddd86f67b026610afa941fdac0ffe bytes 49447
   read(1674,1685) citation {'start_line': 1675, 'end_line': 1684, 'start_col': 0, 'end_col': 19, 'start_byte': 49155, 'end_byte': 49447}
   (trace id 17 served start_line 1675 end_line 1684 end_col 19 start_byte 49155 end_byte 49447)
-  A1 trace id 22 verbatim (to_col=27)                  applied=True
+  A1 trace id 22 verbatim (to_col=27)                  applied=False
+                                                       line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+                                                       error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 1679:0..1679:27, which cover 'DEFAULT_TIMEOUT_SECONDS = 3' and leave '' before it and '0' after it on their lines; if that is exactly the text to replace, resend this reference with sha 3e56fdf6ba5d1b868d543dc604ec1515067e18a4 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+                                                       span shown: text='DEFAULT_TIMEOUT_SECONDS = 3' keeps_before='' keeps_after='0'
+  A1 file byte-identical to the original: True
+  A1' resent citing the span it was shown              applied=True
                                                        line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 450'
                                                        replaced: 'DEFAULT_TIMEOUT_SECONDS = 3'
   A2 same read, same line, no columns                  applied=True
@@ -21,10 +26,12 @@ IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
   commit 5ac8714e line 78 '\t"res://tests/test_martial_arts_surface_census.gd",d",'
   reconstructed pre-edit line 78 '\t"res://tests/" + "test_martial_arts_surface_census" + ".gd",' (61 characters)
   read(70,84) reproduces trace id 2341 (content + range + bytes): True
-  B1 trace id 2354 verbatim (to_col=58)                applied=True
-                                                       line 78 = '\t"res://tests/test_martial_arts_surface_census.gd",d",'
-                                                       replaced: '\t"res://tests/" + "test_martial_arts_surface_census" + ".g'
-  B1 file == commit 5ac8714e bytes: True
+  B1 trace id 2354 verbatim (to_col=58)                applied=False
+                                                       line 78 = '\t"res://tests/" + "test_martial_arts_surface_census" + ".gd",'
+                                                       error: apply_patch preflight: tests/unit_test_runner.gd: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 78:0..78:58, which cover '\t"res://tests/" + "test_martial_arts_surface_census" + ".g' and leave '' before it and 'd",' after it on their lines; if that is exactly the text to replace, resend this reference with sha dfc7430359e943f0225911d3b4a4e4178b05138a (in `spans`). To replace whole lines instead, omit from_col and to_col.
+                                                       span shown: text='\t"res://tests/" + "test_martial_arts_surface_census" + ".g' keeps_before='' keeps_after='d",'
+  B1 file == commit 5ac8714e bytes: False
+  B1 file == pre-edit bytes: True
   B2 same read, same line, no columns                  applied=True
                                                        line 78 = '\t"res://tests/test_martial_arts_surface_census.gd",'
                                                        replaced: '\t"res://tests/" + "test_martial_arts_surface_census" + ".gd",'
@@ -34,12 +41,14 @@ IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
 
 === C. director probe shape (strict path, citation issued by hand) ===
   len('DEFAULT_TIMEOUT_SECONDS = 30') = 28
-  to_col = len   (0..28)                               applied=True
-                                                       line 3 = 'DEFAULT_TIMEOUT_SECONDS = 45'
-                                                       replaced: 'DEFAULT_TIMEOUT_SECONDS = 30'
-  to_col = len-1 (0..27)                               applied=True
-                                                       line 3 = 'DEFAULT_TIMEOUT_SECONDS = 450'
-                                                       replaced: 'DEFAULT_TIMEOUT_SECONDS = 3'
+  to_col = len   (0..28)                               applied=False
+                                                       line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+                                                       error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 3:0..3:28, which cover 'DEFAULT_TIMEOUT_SECONDS = 30' and leave '' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha dc7ab6dbc253f4e33aec8cba0a9f90294be2e017 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+                                                       span shown: text='DEFAULT_TIMEOUT_SECONDS = 30' keeps_before='' keeps_after=''
+  to_col = len-1 (0..27)                               applied=False
+                                                       line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
+                                                       error: apply_patch preflight: app/settings.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 3:0..3:27, which cover 'DEFAULT_TIMEOUT_SECONDS = 3' and leave '' before it and '0' after it on their lines; if that is exactly the text to replace, resend this reference with sha ac8ffd6a58b1050c02263d3b493022da350250c5 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+                                                       span shown: text='DEFAULT_TIMEOUT_SECONDS = 3' keeps_before='' keeps_after='0'
   to_col = len+1 (0..29)                               applied=False
                                                        line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'
                                                        error: apply_patch preflight: app/settings.py: to column 29 is past the end of line 3 (28 characters); reread the range

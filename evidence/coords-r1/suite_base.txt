@@ -1,5 +1,6 @@
 TREE_HEAD=101da5c44e23aadbb0dcf3a423a0ac43286453bc DIRTY_PATHS=0
 5340112deaec2fc1ebdcfaf1d3b0eaf89cfb627baf17be4bb7a4ebd119f4d762  src/skillflow/strict_patch.py
+88a0d9c8a200f08d9a42f512f4f3b3fa360548bf15fec5b61f87705536aa68f3  src/skillflow/citations.py
 6b286807313206da5706c51425f5d07384d9e8d1c4458cca23e321544febf7b2  src/skillflow/read_tools.py
 aa8ccbebe55a31871214a87bb7eaa1c1aa4c1b904de5ea493f2c37e3f7e6d53a  src/skillflow/tools/apply_patch/tool.yaml
 IMPORT_PROOF /home/linxuhao/stepflow-coords-r1-base/src/skillflow/__init__.py
@@ -28,6 +29,6 @@ tests/test_regression.py: 1 warning
     elapsed = (dt.datetime.utcnow() - started_dt).total_seconds()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-1209 passed, 3 skipped, 40 warnings in 17.72s
+1209 passed, 3 skipped, 40 warnings in 18.71s
 PYTEST_RC=0
 DOCKER_RC=0

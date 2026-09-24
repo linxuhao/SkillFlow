@@ -8,6 +8,7 @@ IMPORT_PROOF /home/linxuhao/stepflow-coords-r1-base/src/skillflow/__init__.py
   A1 trace id 22 verbatim (to_col=27)                  applied=True
                                                        line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 450'
                                                        replaced: 'DEFAULT_TIMEOUT_SECONDS = 3'
+  A1 file byte-identical to the original: False
   A2 same read, same line, no columns                  applied=True
                                                        line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 45'
                                                        replaced: 'DEFAULT_TIMEOUT_SECONDS = 30'
@@ -25,6 +26,7 @@ IMPORT_PROOF /home/linxuhao/stepflow-coords-r1-base/src/skillflow/__init__.py
                                                        line 78 = '\t"res://tests/test_martial_arts_surface_census.gd",d",'
                                                        replaced: '\t"res://tests/" + "test_martial_arts_surface_census" + ".g'
   B1 file == commit 5ac8714e bytes: True
+  B1 file == pre-edit bytes: False
   B2 same read, same line, no columns                  applied=True
                                                        line 78 = '\t"res://tests/test_martial_arts_surface_census.gd",'
                                                        replaced: '\t"res://tests/" + "test_martial_arts_surface_census" + ".gd",'

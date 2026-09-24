@@ -1,7 +1,8 @@
-TREE_HEAD=101da5c44e23aadbb0dcf3a423a0ac43286453bc DIRTY_PATHS=6
-da8027a350d9556e79d72ec8ab698ba5434cdcaedad3d65f92e23fe958858cf0  src/skillflow/strict_patch.py
+TREE_HEAD=d8c490a20a6684d50e7782365b4c0d8eb676dfa2 DIRTY_PATHS=9
+4765a32f0fff4692ae6792ec67aa3fe76526386898573d07131be08915020112  src/skillflow/strict_patch.py
+dda8cd15884cf938175fb1d0f46d0e8476d7baef71e91cc2413ba53ace337068  src/skillflow/citations.py
 ae3f970353da500ad552fe63325c7b839eb9f67cc8a318df940c0c12e65714b2  src/skillflow/read_tools.py
-d5ed6c2e9de249255f99daee2c49bb38c8dcca208476a25ec4dfea3c6b3e8d13  src/skillflow/tools/apply_patch/tool.yaml
+497a36eb038f0299e2a8cb583cc8538045b55bda635b44e90f418c36742b8b8a  src/skillflow/tools/apply_patch/tool.yaml
 IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
 PYTEST 9.1.1 ASYNCIO 1.4.0
 ============================= test session starts ==============================
@@ -16,6 +17,6 @@ tests/test_reference_hunks.py .............                              [ 17%]
 tests/test_strict_patch_parser.py ......................                 [ 47%]
 tests/test_output_targets.py ......................................      [100%]
 
-============================== 73 passed in 1.57s ==============================
+============================== 73 passed in 1.69s ==============================
 PYTEST_RC=0
 DOCKER_RC=0

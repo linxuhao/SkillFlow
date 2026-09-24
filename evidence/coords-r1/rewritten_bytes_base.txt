@@ -1,0 +1,37 @@
+TREE_HEAD=101da5c44e23aadbb0dcf3a423a0ac43286453bc DIRTY_PATHS=0
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1-base/src/skillflow/__init__.py
+
+== test_reference_hunks::test_a_digest_the_read_issued_applies
+  original call: applied=True
+  final bytes sha256 32689e367fb70a32ab0bdc8565b4a27426ff20d5ad869cbafbce6cf53b32b3ae b'def answer():\n    value = 41\n    other = 2\n    return value\n\ndef helper():\n    return 0\n'
+
+== test_reference_hunks::test_reference_and_v4a_produce_the_same_bytes
+  original call: applied=True
+  final bytes sha256 4f2ec012200357620575989e174ef79f832836a2b6a5449b2a73be58adb74bb6 b'def answer():\n    value = 41\n    return value + 1\n\ndef helper():\n    return 0\n'
+
+== test_reference_hunks::test_one_word_cites_one_line_and_leaves_the_rest_alone
+  original call: applied=True
+  final bytes sha256 a2485f03d8e81cdb56524bc9909196e02abe86c2a0c6cab6993e5649798c4c58 b'def answer():\n    value = 1\n    other = 2\n    return value\n\ndef helper():\n    return 7\n'
+
+== test_reference_hunks::test_unordered_references_match_descending_ones_byte_for_byte
+  original call: applied=True
+  final bytes sha256 bb622c35da37952c0fe3d13ac0897d6a2a28c1ebaa2444bd0be195945311045a b'def answer():\n    value = 111\n    other = 2\n    return value * 2\n\ndef helper():\n    return 99\n'
+
+== test_output_targets::test_reference_mode_runs_end_to_end_through_the_engine
+  original call: applied=True
+  original call: applied=True
+  final bytes sha256 3abb78fa137b7caf6c6e70cc536751c8d319a296e7898844e7941656d0f1ca9c b'answer = 11111\nother = 22\nlast = 33\n'
+
+== test_a_successful_write::test_citing_inside_a_span_this_run_replaced_is_refused_by_name
+  original call: applied=True
+  final bytes sha256 112556c5f2a9b2786ae0f866467f2843e7f073be13dd7006b50e55b39014d9fe b'def answer():\n    first = 1\n    SECOND = 2\n    third = 3\n    fourth = 4\n    return first\n\ndef helper():\n    return 0\n'
+
+== test_a_successful_write::test_the_result_says_what_it_replaced
+  original call: applied=True
+  final bytes sha256 f61579521a786c3f4d4c42d3d61060fa8f054e7bee7f08028f9bbba7d057335b b'def answer():\n        first = 1  # noted = 1\n    second = 2\n    third = 3\n    fourth = 4\n    return first\n\ndef helper():\n    return 0\n'
+
+== test_a_successful_write::test_the_privacy_r2_corruption_shape
+  original call: applied=True
+  final bytes sha256 b2c35f943a80a744dde0e8ead2d66a407ab502074ee688431d70784efb25e5ab b'                 NEWctions() else []),\n'
+SCRIPT_RC=0
+DOCKER_RC=0

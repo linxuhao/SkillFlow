@@ -1,31 +1,13 @@
 TREE_HEAD=d8c490a20a6684d50e7782365b4c0d8eb676dfa2 DIRTY_PATHS=9
-5340112deaec2fc1ebdcfaf1d3b0eaf89cfb627baf17be4bb7a4ebd119f4d762  src/skillflow/strict_patch.py
+722e12bc8fc54758b56b0350352039e1d5d4a965bf5e38b73bd11539177b6aad  src/skillflow/strict_patch.py
 dda8cd15884cf938175fb1d0f46d0e8476d7baef71e91cc2413ba53ace337068  src/skillflow/citations.py
 ae3f970353da500ad552fe63325c7b839eb9f67cc8a318df940c0c12e65714b2  src/skillflow/read_tools.py
 497a36eb038f0299e2a8cb583cc8538045b55bda635b44e90f418c36742b8b8a  src/skillflow/tools/apply_patch/tool.yaml
-IMPORT_PROOF /home/linxuhao/coords-r1-scratch/mutant2/src/skillflow/__init__.py
+IMPORT_PROOF /home/linxuhao/coords-r1-scratch/mutant3/src/skillflow/__init__.py
 PYTEST 9.1.1 ASYNCIO 1.4.0
-FFFFFFFFFFF.FFFFFFF.F.F...FF....F........................F.............. [ 67%]
+.F..........FFFFFFF...F...FF....F........................F.............. [ 67%]
 ...........................F....FF.                                      [100%]
 =================================== FAILURES ===================================
-__________ test_citing_the_sha_alone_replaces_the_line_that_was_read ___________
-
-repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_citing_the_sha_alone_repl0')
-
-    def test_citing_the_sha_alone_replaces_the_line_that_was_read(repo):
-        """Pole 1: the real shape, and not one column computed anywhere."""
-        served = read(repo, start_line=2, end_line=3)
-        assert served["content"] == "3\t" + LINE
-        cite = served["citation"]
-        assert (cite["start_line"], cite["end_line"]) == (3, 3)
-        ref = {"file": FILE, "sha": cite["sha"], "new_text": WANT}
-        assert set(ref) == {"file", "sha", "new_text"}
-        got = apply(repo, [ref])
->       assert got["applied"] is True, got
-E       AssertionError: {'error': "apply_patch preflight: reference 1: missing field(s) ['from_line', 'to_line']", 'phase': 'preflight', 'written': [], 'deleted': [], ...}
-E       assert False is True
-
-tests/test_the_coordinates_come_from_the_read.py:103: AssertionError
 ____________ test_a_narrowed_sub_range_is_still_honoured_as_written ____________
 
 repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_narrowed_sub_range_is_s0')
@@ -56,7 +38,7 @@ tests/test_the_coordinates_come_from_the_read.py:128:
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_narrowed_sub_range_is_s0')
-reference = {'file': 'app/settings.py', 'sha': '816045e7fcdd21ccd2532d983ac4b1c722ac1399', 'from_line': 3, 'from_col': 26, ...}
+reference = {'file': 'app/settings.py', 'sha': '7dd5146275c1e6a22fae4ce1c22a8bb82f808a87', 'from_line': 3, 'from_col': 26, ...}
 
     def cite_span(root, reference):
         """The two-call column edit: be shown the span, then cite it."""
@@ -67,169 +49,6 @@ E       AssertionError: {'written': ['app/settings.py'], 'deleted': [], 'applied
 E       assert True is False
 
 tests/test_the_coordinates_come_from_the_read.py:65: AssertionError
-_____ test_the_whole_window_is_exactly_the_window_and_nothing_either_side ______
-
-repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_the_whole_window_is_exact0')
-
-    def test_the_whole_window_is_exactly_the_window_and_nothing_either_side(repo):
-        """A multi-line window: what was served goes, its neighbours stay."""
-        cite = read(repo, start_line=1, end_line=4)["citation"]
-        assert (cite["start_line"], cite["end_line"]) == (2, 4)
-        got = apply(repo, [{"file": FILE, "sha": cite["sha"], "new_text": "X"}])
->       assert got["applied"] is True, got
-E       AssertionError: {'error': "apply_patch preflight: reference 1: missing field(s) ['from_line', 'to_line']", 'phase': 'preflight', 'written': [], 'deleted': [], ...}
-E       assert False is True
-
-tests/test_the_coordinates_come_from_the_read.py:143: AssertionError
-__________ test_a_whole_window_survives_an_edit_elsewhere_in_the_file __________
-
-repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_whole_window_survives_a0')
-
-    def test_a_whole_window_survives_an_edit_elsewhere_in_the_file(repo):
-        """The frozen frame applies to the column-free form too: an earlier write
-        OUTSIDE the window moves the window's offsets, and the citation still
-        lands on the text it was issued for."""
-        whole = read(repo)["citation"]
-        line3 = read(repo, start_line=2, end_line=3)["citation"]
-        first = apply(repo, [{"file": FILE, "sha": whole["sha"], "from_line": 1,
-                              "to_line": 1, "new_text": "import os, sys  # grew"}])
-        assert first["applied"] is True, first
-        second = apply(repo, [{"file": FILE, "sha": line3["sha"], "new_text": WANT}])
->       assert second["applied"] is True, second
-E       AssertionError: {'error': "apply_patch preflight: reference 1: missing field(s) ['from_line', 'to_line']", 'phase': 'preflight', 'written': [], 'deleted': [], ...}
-E       assert False is True
-
-tests/test_the_coordinates_come_from_the_read.py:160: AssertionError
-______ test_a_whole_window_whose_text_changed_is_refused_not_overwritten _______
-
-repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_whole_window_whose_text0')
-
-    def test_a_whole_window_whose_text_changed_is_refused_not_overwritten(repo):
-        """The column-free form must not become a blind overwrite. A window this
-        run already edited inside is no longer the text the caller was shown."""
-        window = read(repo, start_line=1, end_line=4)["citation"]
-        line3 = read(repo, start_line=2, end_line=3)["citation"]
->       assert apply(repo, [{"file": FILE, "sha": line3["sha"],
-                             "new_text": WANT}])["applied"] is True
-E       assert False is True
-
-tests/test_the_coordinates_come_from_the_read.py:170: AssertionError
-_ test_half_a_range_is_refused_rather_than_completed_by_guess[partial0-give both from_line and to_line] _
-
-repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_half_a_range_is_refused_r0')
-partial = {'from_line': 3}, message = 'give both from_line and to_line'
-
-    @pytest.mark.parametrize("partial,message", [
-        ({"from_line": 3}, "give both from_line and to_line"),
-        ({"to_line": 3}, "give both from_line and to_line"),
-        ({"to_col": 27}, "from_col/to_col need from_line and to_line"),
-        ({"from_col": 0}, "from_col/to_col need from_line and to_line"),
-    ])
-    def test_half_a_range_is_refused_rather_than_completed_by_guess(repo, partial,
-                                                                    message):
-        cite = read(repo)["citation"]
->       with pytest.raises(PatchError, match=message):
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       AssertionError: Regex pattern did not match.
-E         Expected regex: 'give both from_line and to_line'
-E         Actual message: "reference 1: missing field(s) ['to_line']"
-
-tests/test_the_coordinates_come_from_the_read.py:198: AssertionError
-_ test_half_a_range_is_refused_rather_than_completed_by_guess[partial1-give both from_line and to_line] _
-
-repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_half_a_range_is_refused_r1')
-partial = {'to_line': 3}, message = 'give both from_line and to_line'
-
-    @pytest.mark.parametrize("partial,message", [
-        ({"from_line": 3}, "give both from_line and to_line"),
-        ({"to_line": 3}, "give both from_line and to_line"),
-        ({"to_col": 27}, "from_col/to_col need from_line and to_line"),
-        ({"from_col": 0}, "from_col/to_col need from_line and to_line"),
-    ])
-    def test_half_a_range_is_refused_rather_than_completed_by_guess(repo, partial,
-                                                                    message):
-        cite = read(repo)["citation"]
->       with pytest.raises(PatchError, match=message):
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       AssertionError: Regex pattern did not match.
-E         Expected regex: 'give both from_line and to_line'
-E         Actual message: "reference 1: missing field(s) ['from_line']"
-
-tests/test_the_coordinates_come_from_the_read.py:198: AssertionError
-_ test_half_a_range_is_refused_rather_than_completed_by_guess[partial2-from_col/to_col need from_line and to_line] _
-
-repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_half_a_range_is_refused_r2')
-partial = {'to_col': 27}, message = 'from_col/to_col need from_line and to_line'
-
-    @pytest.mark.parametrize("partial,message", [
-        ({"from_line": 3}, "give both from_line and to_line"),
-        ({"to_line": 3}, "give both from_line and to_line"),
-        ({"to_col": 27}, "from_col/to_col need from_line and to_line"),
-        ({"from_col": 0}, "from_col/to_col need from_line and to_line"),
-    ])
-    def test_half_a_range_is_refused_rather_than_completed_by_guess(repo, partial,
-                                                                    message):
-        cite = read(repo)["citation"]
->       with pytest.raises(PatchError, match=message):
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       AssertionError: Regex pattern did not match.
-E         Expected regex: 'from_col/to_col need from_line and to_line'
-E         Actual message: "reference 1: missing field(s) ['from_line', 'to_line']"
-
-tests/test_the_coordinates_come_from_the_read.py:198: AssertionError
-_ test_half_a_range_is_refused_rather_than_completed_by_guess[partial3-from_col/to_col need from_line and to_line] _
-
-repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_half_a_range_is_refused_r3')
-partial = {'from_col': 0}
-message = 'from_col/to_col need from_line and to_line'
-
-    @pytest.mark.parametrize("partial,message", [
-        ({"from_line": 3}, "give both from_line and to_line"),
-        ({"to_line": 3}, "give both from_line and to_line"),
-        ({"to_col": 27}, "from_col/to_col need from_line and to_line"),
-        ({"from_col": 0}, "from_col/to_col need from_line and to_line"),
-    ])
-    def test_half_a_range_is_refused_rather_than_completed_by_guess(repo, partial,
-                                                                    message):
-        cite = read(repo)["citation"]
->       with pytest.raises(PatchError, match=message):
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       AssertionError: Regex pattern did not match.
-E         Expected regex: 'from_col/to_col need from_line and to_line'
-E         Actual message: "reference 1: missing field(s) ['from_line', 'to_line']"
-
-tests/test_the_coordinates_come_from_the_read.py:198: AssertionError
-_______________ test_the_sha_is_still_required_and_still_checked _______________
-
-repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_the_sha_is_still_required0')
-
-    def test_the_sha_is_still_required_and_still_checked(repo):
-        read(repo)
->       with pytest.raises(PatchError, match=r"missing field\(s\) \['sha'\]"):
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-E       AssertionError: Regex pattern did not match.
-E         Expected regex: "missing field\\(s\\) \\['sha'\\]"
-E         Actual message: "reference 1: missing field(s) ['from_line', 'sha', 'to_line']"
-
-tests/test_the_coordinates_come_from_the_read.py:209: AssertionError
-___________ test_the_len_minus_one_belief_has_no_field_to_travel_in ____________
-
-repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_the_len_minus_one_belief_0')
-
-    def test_the_len_minus_one_belief_has_no_field_to_travel_in(repo):
-        """Pole 1. The caller that wrote to_col=27 believed the line was 27 long.
-        In the new writing that belief is not sent: the request is the sha of the
-        line the read served plus the new text, so `= 450` cannot be produced by
-        it — there is no number in it to be one short."""
-        served = read(repo, start_line=2, end_line=3)
-        ref = {"file": FILE, "sha": served["citation"]["sha"], "new_text": WANT}
-        assert not {"from_line", "to_line", "from_col", "to_col"} & set(ref)
-        got = apply(repo, [ref])
->       assert got["applied"] is True, got
-E       AssertionError: {'error': "apply_patch preflight: reference 1: missing field(s) ['from_line', 'to_line']", 'phase': 'preflight', 'written': [], 'deleted': [], ...}
-E       assert False is True
-
-tests/test_the_coordinates_come_from_the_read.py:237: AssertionError
 _ test_the_old_uncorroborated_column_call_is_refused_with_the_new_error[strict] _
 
 repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_the_old_uncorroborated_co0')
@@ -339,23 +158,6 @@ eac7cacb = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_host_run_eac7cacb_exa
 E       assert True is False
 
 tests/test_the_coordinates_come_from_the_read.py:364: AssertionError
-______________ test_host_run_eac7cacb_replayed_with_the_sha_alone ______________
-
-eac7cacb = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_host_run_eac7cacb_replaye1')
-
-    def test_host_run_eac7cacb_replayed_with_the_sha_alone(eac7cacb):
-        """The same edit with no number in the reference at all: read line 1679
-        (0-based args, as the read tool takes them), cite its sha, give the text."""
-        original = (eac7cacb / FILE).read_bytes()
-        served = read(eac7cacb, start_line=1678, end_line=1679)
-        assert served["content"] == "1679\t" + LINE
-        got = apply(eac7cacb, [{"file": FILE, "sha": served["citation"]["sha"],
-                                "new_text": WANT}])
->       assert got["applied"] is True, got
-E       AssertionError: {'error': "apply_patch preflight: reference 1: missing field(s) ['from_line', 'to_line']", 'phase': 'preflight', 'written': [], 'deleted': [], ...}
-E       assert False is True
-
-tests/test_the_coordinates_come_from_the_read.py:402: AssertionError
 ____________________ test_a_digest_the_read_issued_applies _____________________
 
 repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_digest_the_read_issued_0')
@@ -371,7 +173,7 @@ tests/test_reference_hunks.py:93:
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_digest_the_read_issued_0')
-references = [{'file': 'src/a.py', 'sha': '104b1d960dafe784724c86b4604578a66b1d9fd9', 'from_line': 2, 'from_col': 0, ...}]
+references = [{'file': 'src/a.py', 'sha': '9709f1f556a00d873afe6e809733167edc699747', 'from_line': 2, 'from_col': 0, ...}]
 run_id = 'run-under-test'
 
     def apply_corroborated(root, references, run_id=RUN):
@@ -413,7 +215,7 @@ tests/test_reference_hunks.py:168:
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_reference_and_v4a_produce0/ref')
-references = [{'file': 'src/a.py', 'sha': 'cee33559200ddd81c58afe39492eaf3f38cd2f59', 'from_line': 2, 'from_col': 0, ...}]
+references = [{'file': 'src/a.py', 'sha': 'e289f613a51caa5804f057f8e7696b9e82575167', 'from_line': 2, 'from_col': 0, ...}]
 run_id = 'run-under-test'
 
     def apply_corroborated(root, references, run_id=RUN):
@@ -445,7 +247,7 @@ tests/test_reference_hunks.py:186:
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_one_word_cites_one_line_a0')
-references = [{'file': 'src/a.py', 'sha': '5fda656279c23b6c7089b91c0016ede48b5dcaa6', 'from_line': 7, 'from_col': 11, ...}]
+references = [{'file': 'src/a.py', 'sha': '841e1977b8de4807ce7797ffeba84a9991858b2d', 'from_line': 7, 'from_col': 11, ...}]
 run_id = 'run-under-test'
 
     def apply_corroborated(root, references, run_id=RUN):
@@ -478,7 +280,7 @@ tests/test_reference_hunks.py:254: in _three_edits
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_unordered_references_matc0/desc')
-references = [{'file': 'src/a.py', 'sha': '5756fd6bfca808eb390c232b45ccae20e42b79b4', 'from_line': 7, 'from_col': 4, ...}, {'file':...: 4, ...}, {'file': 'src/a.py', 'sha': '5756fd6bfca808eb390c232b45ccae20e42b79b4', 'from_line': 2, 'from_col': 4, ...}]
+references = [{'file': 'src/a.py', 'sha': 'f0ca56c273b847222022ab782c19d1cc062c7894', 'from_line': 7, 'from_col': 4, ...}, {'file':...: 4, ...}, {'file': 'src/a.py', 'sha': 'f0ca56c273b847222022ab782c19d1cc062c7894', 'from_line': 2, 'from_col': 4, ...}]
 run_id = 'run-under-test'
 
     def apply_corroborated(root, references, run_id=RUN):
@@ -537,11 +339,11 @@ tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_reference_mode_runs_e
 tests/test_output_targets.py:126: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-sf = <skillflow.core.SkillFlow object at 0x75f818963740>
-rid = 'eca1592b-0af2-4756-9fd0-73db7501c7c4'
-claim = ClaimedStep(token=ClaimToken(step_id='implement', run_id='eca1592b-0af2-4756-9fd0-73db7501c7c4', step_instance_id=1, v...t_step.<locals>._emit at 0x75f818423e20>, trace=<function SkillFlow.claim_next_step.<locals>._trace at 0x75f818423ce0>)
+sf = <skillflow.core.SkillFlow object at 0x7d244a951160>
+rid = '6c2729ad-6ed8-4052-86e5-6115acbe095f'
+claim = ClaimedStep(token=ClaimToken(step_id='implement', run_id='6c2729ad-6ed8-4052-86e5-6115acbe095f', step_instance_id=1, v...t_step.<locals>._emit at 0x7d244a534220>, trace=<function SkillFlow.claim_next_step.<locals>._trace at 0x7d244a5340e0>)
 root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_reference_mode_runs_end_t0/repo')
-references = [{'file': 'original.py', 'sha': 'bc31be52c20995573f0c3062ad364f339ce583c8', 'from_line': 3, 'from_col': 7, ...}, {'file': 'original.py', 'sha': 'bc31be52c20995573f0c3062ad364f339ce583c8', 'from_line': 1, 'from_col': 9, ...}]
+references = [{'file': 'original.py', 'sha': 'a804195f7080d34fc44978781d68b1e867a29e40', 'from_line': 3, 'from_col': 7, ...}, {'file': 'original.py', 'sha': 'a804195f7080d34fc44978781d68b1e867a29e40', 'from_line': 1, 'from_col': 9, ...}]
 
     def patch_corroborated(sf, rid, claim, root, references):
         """Name columns, be shown what they cover through the engine, then cite it.
@@ -573,7 +375,7 @@ tests/test_a_successful_write_leaves_the_next_coordinates_valid.py:206:
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_citing_inside_a_span_this0')
-references = [{'file': 'src/a.py', 'sha': '22a195656c5a2f52597c9bf77f491bae9185121c', 'from_line': 3, 'to_line': 3, ...}]
+references = [{'file': 'src/a.py', 'sha': 'e09ee9e81d5b92dd2ea719d910e5071a13384bbb', 'from_line': 3, 'to_line': 3, ...}]
 run_id = 'run-frozen-frame'
 
     def apply_corroborated(root, references, run_id=RUN):
@@ -605,7 +407,7 @@ tests/test_a_successful_write_leaves_the_next_coordinates_valid.py:261:
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_the_result_says_what_it_r0')
-references = [{'file': 'src/a.py', 'sha': '22a195656c5a2f52597c9bf77f491bae9185121c', 'from_line': 2, 'to_line': 2, ...}]
+references = [{'file': 'src/a.py', 'sha': 'e09ee9e81d5b92dd2ea719d910e5071a13384bbb', 'from_line': 2, 'to_line': 2, ...}]
 run_id = 'run-frozen-frame'
 
     def apply_corroborated(root, references, run_id=RUN):
@@ -650,7 +452,7 @@ tests/test_a_successful_write_leaves_the_next_coordinates_valid.py:286:
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_the_privacy_r2_corruption0')
-references = [{'file': 'src/a.py', 'sha': 'f9c4ed51c56920a5a4dad2a619e1794025603f7f', 'from_line': 1, 'to_line': 1, ...}]
+references = [{'file': 'src/a.py', 'sha': '2b7a8230987570edc6f88b12c3ff6fce0ac050b8', 'from_line': 1, 'to_line': 1, ...}]
 run_id = 'run-frozen-frame'
 
     def apply_corroborated(root, references, run_id=RUN):
@@ -668,17 +470,7 @@ E       assert True is False
 
 tests/test_a_successful_write_leaves_the_next_coordinates_valid.py:86: AssertionError
 =========================== short test summary info ============================
-FAILED tests/test_the_coordinates_come_from_the_read.py::test_citing_the_sha_alone_replaces_the_line_that_was_read
 FAILED tests/test_the_coordinates_come_from_the_read.py::test_a_narrowed_sub_range_is_still_honoured_as_written
-FAILED tests/test_the_coordinates_come_from_the_read.py::test_the_whole_window_is_exactly_the_window_and_nothing_either_side
-FAILED tests/test_the_coordinates_come_from_the_read.py::test_a_whole_window_survives_an_edit_elsewhere_in_the_file
-FAILED tests/test_the_coordinates_come_from_the_read.py::test_a_whole_window_whose_text_changed_is_refused_not_overwritten
-FAILED tests/test_the_coordinates_come_from_the_read.py::test_half_a_range_is_refused_rather_than_completed_by_guess[partial0-give both from_line and to_line]
-FAILED tests/test_the_coordinates_come_from_the_read.py::test_half_a_range_is_refused_rather_than_completed_by_guess[partial1-give both from_line and to_line]
-FAILED tests/test_the_coordinates_come_from_the_read.py::test_half_a_range_is_refused_rather_than_completed_by_guess[partial2-from_col/to_col need from_line and to_line]
-FAILED tests/test_the_coordinates_come_from_the_read.py::test_half_a_range_is_refused_rather_than_completed_by_guess[partial3-from_col/to_col need from_line and to_line]
-FAILED tests/test_the_coordinates_come_from_the_read.py::test_the_sha_is_still_required_and_still_checked
-FAILED tests/test_the_coordinates_come_from_the_read.py::test_the_len_minus_one_belief_has_no_field_to_travel_in
 FAILED tests/test_the_coordinates_come_from_the_read.py::test_the_old_uncorroborated_column_call_is_refused_with_the_new_error[strict]
 FAILED tests/test_the_coordinates_come_from_the_read.py::test_the_old_uncorroborated_column_call_is_refused_with_the_new_error[read]
 FAILED tests/test_the_coordinates_come_from_the_read.py::test_a_counted_whole_line_is_a_counted_column_too
@@ -686,7 +478,6 @@ FAILED tests/test_the_coordinates_come_from_the_read.py::test_a_span_citation_co
 FAILED tests/test_the_coordinates_come_from_the_read.py::test_a_span_is_bound_to_the_bytes_it_showed
 FAILED tests/test_the_coordinates_come_from_the_read.py::test_a_span_survives_an_edit_elsewhere_and_its_sha_alone_is_enough
 FAILED tests/test_the_coordinates_come_from_the_read.py::test_host_run_eac7cacb_exact_call_is_refused_not_written
-FAILED tests/test_the_coordinates_come_from_the_read.py::test_host_run_eac7cacb_replayed_with_the_sha_alone
 FAILED tests/test_reference_hunks.py::test_a_digest_the_read_issued_applies
 FAILED tests/test_reference_hunks.py::test_reference_and_v4a_produce_the_same_bytes
 FAILED tests/test_reference_hunks.py::test_one_word_cites_one_line_and_leaves_the_rest_alone
@@ -695,6 +486,7 @@ FAILED tests/test_output_targets.py::test_reference_mode_runs_end_to_end_through
 FAILED tests/test_a_successful_write_leaves_the_next_coordinates_valid.py::test_citing_inside_a_span_this_run_replaced_is_refused_by_name
 FAILED tests/test_a_successful_write_leaves_the_next_coordinates_valid.py::test_the_result_says_what_it_replaced
 FAILED tests/test_a_successful_write_leaves_the_next_coordinates_valid.py::test_the_privacy_r2_corruption_shape
-27 failed, 80 passed in 2.01s
+16 failed, 91 passed in 2.03s
 PYTEST_RC=1
 DOCKER_RC=1
+IGNITIONS=16 (lines appended by the mutated branch)

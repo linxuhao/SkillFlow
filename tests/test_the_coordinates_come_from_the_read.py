@@ -12,13 +12,17 @@ cited the right sha on its first try and asked for line 1679 columns 0..27; the
 line is 28 characters long. It noticed on turn 4, spent turns 5-9 counting, and
 fixed it on turn 7 by abandoning references for a V4A retype (id 48).
 
-The fix here is not a check on the number. It is a form of the edit that has no
-number in it: a reference that carries only {file, sha, new_text} replaces the
-whole window the citation was issued for, and one that names lines without
-columns replaces those whole lines. The caller's belief about how long a line
-is has no field to travel in, and the text replaced is the text the read showed
-it, re-checked by sha. Explicit columns still cut inside a line exactly as
-written; that is the narrowed form, and it stays.
+Two changes, one per writing. The common intent needs no number: a reference
+that carries only {file, sha, new_text} replaces the whole window the citation
+was issued for, and one that names lines without columns replaces those whole
+lines. The caller's belief about how long a line is has no field to travel in.
+
+A column, when one is named, is no longer written on the caller's count. The
+only way to have a column written is to be shown, by the engine, the exact text
+those coordinates cover and what they leave on the line, and to cite back the
+span citation the engine issued for exactly that range; the write is then bound
+to those bytes. The call that counted 27 is refused and shown
+`DEFAULT_TIMEOUT_SECONDS = 3` with `0` left behind, and nothing is written.
 """
 import hashlib
 import shutil
@@ -52,6 +56,16 @@ def read(root, **kw):
 
 def apply(root, references):
     return apply_code_patch("", root, references=references, run_id=RUN)
+
+
+def cite_span(root, reference):
+    """The two-call column edit: be shown the span, then cite it."""
+    before = (root / FILE).read_bytes()
+    preview = apply(root, [reference])
+    assert preview["applied"] is False, preview
+    assert (root / FILE).read_bytes() == before
+    (span,) = preview["spans"]
+    return span, apply(root, [{**reference, "sha": span["sha"]}])
 
 
 @pytest.fixture
@@ -111,9 +125,11 @@ def test_a_narrowed_sub_range_is_still_honoured_as_written(repo):
     (repo / FILE).write_text(BODY)
     citations.forget_run(RUN)
     cite = read(repo)["citation"]
-    cut = apply(repo, [{"file": FILE, "sha": cite["sha"], "from_line": 3,
-                        "from_col": 26, "to_line": 3, "to_col": 28,
-                        "new_text": "45"}])
+    span, cut = cite_span(repo, {"file": FILE, "sha": cite["sha"],
+                                 "from_line": 3, "from_col": 26, "to_line": 3,
+                                 "to_col": 28, "new_text": "45"})
+    assert (span["text"], span["keeps_before"], span["keeps_after"]) == (
+        "30", "DEFAULT_TIMEOUT_SECONDS = ", "")
     assert cut["applied"] is True, cut
     assert (repo / FILE).read_bytes() == want
     assert cut["replaced"][0]["replaced"] == "30"
@@ -250,9 +266,106 @@ def test_the_len_plus_one_error_is_still_loud_and_word_for_word(repo):
     assert (repo / FILE).read_text() == BODY
 
 
+NEW_ERROR = ("a column the caller counted has nothing to check it against, "
+             "so columns must cite a span citation issued for exactly those "
+             "coordinates. Nothing was written.")
+
+
+@pytest.mark.parametrize("path", ["strict", "read"])
+def test_the_old_uncorroborated_column_call_is_refused_with_the_new_error(
+        repo, path):
+    """The call eac7cacb made, as it made it, on both resolution paths: it is
+    refused, nothing is written, and the refusal shows the caller the text its
+    count covers and the digit its count leaves behind."""
+    cite = _probe_citation() if path == "strict" else read(repo)["citation"]
+    got = apply(repo, [{"file": FILE, "sha": cite["sha"], "from_line": 3,
+                        "from_col": 0, "to_line": 3, "to_col": 27,
+                        "new_text": WANT}])
+    assert got["applied"] is False
+    assert got["written"] == [] and got["partial"] is False
+    assert NEW_ERROR in got["error"]
+    assert "'DEFAULT_TIMEOUT_SECONDS = 3'" in got["error"]
+    assert "'0' after it" in got["error"]
+    assert "omit from_col and to_col" in got["error"]
+    (span,) = got["spans"]
+    assert span["text"] == "DEFAULT_TIMEOUT_SECONDS = 3"
+    assert (span["keeps_before"], span["keeps_after"]) == ("", "0")
+    assert span["sha"] in got["error"]
+    assert (repo / FILE).read_text() == BODY
+
+
+def test_a_counted_whole_line_is_a_counted_column_too(repo):
+    """to_col=28 is right here, but it is the same unchecked count as 27: it
+    is refused the same way. The whole line is asked for by omitting it."""
+    cite = read(repo)["citation"]
+    got = apply(repo, [{"file": FILE, "sha": cite["sha"], "from_line": 3,
+                        "from_col": 0, "to_line": 3, "to_col": 28,
+                        "new_text": WANT}])
+    assert got["applied"] is False and NEW_ERROR in got["error"]
+    assert got["spans"][0]["text"] == LINE
+    assert (repo / FILE).read_text() == BODY
+
+
+def test_a_span_citation_corroborates_only_its_own_coordinates(repo):
+    cite = read(repo)["citation"]
+    ask = {"file": FILE, "sha": cite["sha"], "from_line": 3, "from_col": 0,
+           "to_line": 3, "to_col": 27, "new_text": WANT}
+    span = apply(repo, [ask])["spans"][0]
+    for moved in ({"to_col": 28}, {"from_col": 1}, {"from_line": 2},
+                  {"to_col": None}):
+        got = apply(repo, [{**ask, "sha": span["sha"], **moved}])
+        assert got["applied"] is False, moved
+        assert "corroborates only the coordinates it was issued for" in got["error"]
+    assert (repo / FILE).read_text() == BODY
+
+
+def test_a_span_is_bound_to_the_bytes_it_showed(repo):
+    """After the preview, the text under those coordinates changes: the span
+    no longer describes it and the write is refused."""
+    cite = read(repo)["citation"]
+    ask = {"file": FILE, "sha": cite["sha"], "from_line": 3, "from_col": 26,
+           "to_line": 3, "to_col": 28, "new_text": "45"}
+    span = apply(repo, [ask])["spans"][0]
+    outside = BODY.replace("= 30", "= 31")
+    (repo / FILE).write_text(outside)
+    got = apply(repo, [{**ask, "sha": span["sha"]}])
+    assert got["applied"] is False
+    assert "changed since its citation was issued" in got["error"]
+    assert (repo / FILE).read_text() == outside
+
+
+def test_a_span_survives_an_edit_elsewhere_and_its_sha_alone_is_enough(repo):
+    cite = read(repo)["citation"]
+    span = apply(repo, [{"file": FILE, "sha": cite["sha"], "from_line": 3,
+                         "from_col": 26, "to_line": 3, "to_col": 28,
+                         "new_text": "45"}])["spans"][0]
+    grew = apply(repo, [{"file": FILE, "sha": cite["sha"], "from_line": 1,
+                         "to_line": 1, "new_text": "import os, sys  # grew"}])
+    assert grew["applied"] is True, grew
+    got = apply(repo, [{"file": FILE, "sha": span["sha"], "new_text": "45"}])
+    assert got["applied"] is True, got
+    assert got["replaced"][0]["replaced"] == "30"
+    assert (repo / FILE).read_text() == (
+        "import os, sys  # grew\n\n" + WANT + "\n\nDEBUG = False\n")
+
+
 # ===========================================================================
 # prove-it-on-the-edit-that-actually-went-wrong
 # ===========================================================================
+
+def test_host_run_eac7cacb_exact_call_is_refused_not_written(eac7cacb):
+    """Trace ids 16 and 22 as they were sent: the same read, then
+    from_col=0, to_col=27 on line 1679. On 1.5.79 this wrote `= 450`."""
+    original = (eac7cacb / FILE).read_bytes()
+    cite = read(eac7cacb, start_line=1674, end_line=1685)["citation"]
+    got = apply(eac7cacb, [{"file": FILE, "from_col": 0, "from_line": 1679,
+                            "new_text": WANT, "sha": cite["sha"], "to_col": 27,
+                            "to_line": 1679}])
+    assert got["applied"] is False
+    assert NEW_ERROR in got["error"]
+    assert got["spans"][0]["text"] == "DEFAULT_TIMEOUT_SECONDS = 3"
+    assert got["spans"][0]["keeps_after"] == "0"
+    assert (eac7cacb / FILE).read_bytes() == original
 
 def test_host_run_eac7cacb_replayed_writes_the_line_it_meant(eac7cacb):
     """Same file (sha256 pinned above), same read (trace id 16: start_line

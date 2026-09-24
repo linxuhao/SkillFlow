@@ -56,6 +56,9 @@ def show(label, root, rel, number, res):
         print("  %-52s error: %s" % ("", res["error"]))
     if res.get("replaced"):
         print("  %-52s replaced: %r" % ("", res["replaced"][0]["replaced"]))
+    for span in res.get("spans") or []:
+        print("  %-52s span shown: text=%r keeps_before=%r keeps_after=%r"
+              % ("", span["text"], span["keeps_before"], span["keeps_after"]))
 
 
 # ---------------------------------------------------------------------------
@@ -81,8 +84,16 @@ print("  (trace id 17 served start_line 1675 end_line 1684 end_col 19 "
       "start_byte 49155 end_byte 49447)")
 legacy = {"file": A_REL, "from_col": 0, "from_line": 1679,          # trace id 22
           "new_text": A_WANT, "sha": cite["sha"], "to_col": 27, "to_line": 1679}
-show("A1 trace id 22 verbatim (to_col=27)", root, A_REL, 1679,
-     apply_code_patch("", Path(root), references=[legacy], run_id=RUN))
+res = apply_code_patch("", Path(root), references=[legacy], run_id=RUN)
+show("A1 trace id 22 verbatim (to_col=27)", root, A_REL, 1679, res)
+with open(os.path.join(root, A_REL), "rb") as fh:
+    print("  A1 file byte-identical to the original:", fh.read() == A_DATA)
+if res.get("spans"):
+    # A caller that, having been shown 'DEFAULT_TIMEOUT_SECONDS = 3' with '0'
+    # kept, resends anyway: the write is bound to exactly the bytes shown.
+    resent = apply_code_patch("", Path(root), references=[
+        {**legacy, "sha": res["spans"][0]["sha"]}], run_id=RUN)
+    show("A1' resent citing the span it was shown", root, A_REL, 1679, resent)
 
 root = fresh(A_REL, A_DATA)
 cite = a_read(root, 1674, 1685)["citation"]
@@ -133,7 +144,9 @@ legacy = {"file": B_REL, "from_col": 0, "from_line": 78,          # trace id 235
 res = apply_code_patch("", Path(root), references=[legacy], run_id=RUN)
 show("B1 trace id 2354 verbatim (to_col=58)", root, B_REL, 78, res)
 with open(os.path.join(root, B_REL), "rb") as fh:
-    print("  B1 file == commit 5ac8714e bytes:", fh.read() == COMMIT)
+    got = fh.read()
+    print("  B1 file == commit 5ac8714e bytes:", got == COMMIT)
+    print("  B1 file == pre-edit bytes:", got == B_DATA)
 
 root = fresh(B_REL, B_DATA)
 cite = unified_read(smap(root), B_REL, start_line=70, end_line=84,

@@ -1,0 +1,67 @@
+TREE_HEAD=d8c490a20a6684d50e7782365b4c0d8eb676dfa2 DIRTY_PATHS=10
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
+
+== test_reference_hunks::test_a_digest_the_read_issued_applies
+  original call: applied=False
+  error: apply_patch preflight: src/a.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 2:0..2:13, which cover '    value = 1' and leave '' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha 082fc9946ceea84b51f28f5bc80eda0636a8b034 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+  shown: reference 1 text='    value = 1' keeps_after=''
+  resent citing spans: applied=True replaced=['    value = 1']
+  final bytes sha256 32689e367fb70a32ab0bdc8565b4a27426ff20d5ad869cbafbce6cf53b32b3ae b'def answer():\n    value = 41\n    other = 2\n    return value\n\ndef helper():\n    return 0\n'
+
+== test_reference_hunks::test_reference_and_v4a_produce_the_same_bytes
+  original call: applied=False
+  error: apply_patch preflight: src/a.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 2:0..4:16, which cover '    value = 1\n    other = 2\n    return value' and leave '' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha bf0e670372798d1dc8ff22dc533ee3f597255379 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+  shown: reference 1 text='    value = 1\n    other = 2\n    return value' keeps_after=''
+  resent citing spans: applied=True replaced=['    value = 1\n    other = 2\n    return value']
+  final bytes sha256 4f2ec012200357620575989e174ef79f832836a2b6a5449b2a73be58adb74bb6 b'def answer():\n    value = 41\n    return value + 1\n\ndef helper():\n    return 0\n'
+
+== test_reference_hunks::test_one_word_cites_one_line_and_leaves_the_rest_alone
+  original call: applied=False
+  error: apply_patch preflight: src/a.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 7:11..7:12, which cover '0' and leave '    return ' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha a987ca224f0897f28f1ec6e2b94fc4bc32b7c6f7 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+  shown: reference 1 text='0' keeps_after=''
+  resent citing spans: applied=True replaced=['0']
+  final bytes sha256 a2485f03d8e81cdb56524bc9909196e02abe86c2a0c6cab6993e5649798c4c58 b'def answer():\n    value = 1\n    other = 2\n    return value\n\ndef helper():\n    return 7\n'
+
+== test_reference_hunks::test_unordered_references_match_descending_ones_byte_for_byte
+  original call: applied=False
+  error: apply_patch preflight: src/a.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 3 names columns 2:4..2:13, which cover 'value = 1' and leave '    ' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha a77aacd4b7298ddef0f67c5d973f5fafc1d942d4 (in `spans`); reference 1 names columns 4:4..4:16, which cover 'return value' and leave '    ' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha 20fc9fc2b983a58ded71bf0fee580b90fb0db48d (in `spans`); reference 2 names columns 7:4..7:12, which cover 'return 0' and leave '    ' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha 7d71ebd4a35816c9137d163292dd0d8d6a0345e5 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+  shown: reference 3 text='value = 1' keeps_after=''
+  shown: reference 1 text='return value' keeps_after=''
+  shown: reference 2 text='return 0' keeps_after=''
+  resent citing spans: applied=True replaced=['value = 1', 'return value', 'return 0']
+  final bytes sha256 bb622c35da37952c0fe3d13ac0897d6a2a28c1ebaa2444bd0be195945311045a b'def answer():\n    value = 111\n    other = 2\n    return value * 2\n\ndef helper():\n    return 99\n'
+
+== test_output_targets::test_reference_mode_runs_end_to_end_through_the_engine
+  original call: applied=False
+  error: apply_patch preflight: original.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 2 names columns 1:9..1:10, which cover '1' and leave 'answer = ' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha 29dd5a26c1e47ffc9b0990073c7b78bc95e41a7c (in `spans`); reference 1 names columns 3:7..3:8, which cover '3' and leave 'last = ' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha 0e2aae85141144862da3db9f2f8dd20f6c74f7a7 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+  shown: reference 2 text='1' keeps_after=''
+  shown: reference 1 text='3' keeps_after=''
+  resent citing spans: applied=True replaced=['1', '3']
+  original call: applied=False
+  error: apply_patch preflight: original.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 2:8..2:9, which cover '2' and leave 'other = ' before it and '' after it on their lines; if that is exactly the text to replace, resend this reference with sha 9777cbdc9fc593a0b915862a35c5d30364c0383c (in `spans`). To replace whole lines instead, omit from_col and to_col.
+  shown: reference 1 text='2' keeps_after=''
+  resent citing spans: applied=True replaced=['2']
+  final bytes sha256 3abb78fa137b7caf6c6e70cc536751c8d319a296e7898844e7941656d0f1ca9c b'answer = 11111\nother = 22\nlast = 33\n'
+
+== test_a_successful_write::test_citing_inside_a_span_this_run_replaced_is_refused_by_name
+  original call: applied=False
+  error: apply_patch preflight: src/a.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 3:4..3:10, which cover 'second' and leave '    ' before it and ' = 2' after it on their lines; if that is exactly the text to replace, resend this reference with sha cca74d4f899430afc3e08e5a04549ac806cb9438 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+  shown: reference 1 text='second' keeps_after=' = 2'
+  resent citing spans: applied=True replaced=['second']
+  final bytes sha256 112556c5f2a9b2786ae0f866467f2843e7f073be13dd7006b50e55b39014d9fe b'def answer():\n    first = 1\n    SECOND = 2\n    third = 3\n    fourth = 4\n    return first\n\ndef helper():\n    return 0\n'
+
+== test_a_successful_write::test_the_result_says_what_it_replaced
+  original call: applied=False
+  error: apply_patch preflight: src/a.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 2:4..2:9, which cover 'first' and leave '    ' before it and ' = 1' after it on their lines; if that is exactly the text to replace, resend this reference with sha cd7db0ebd4ea0fd23d0f5164c61616659253249e (in `spans`). To replace whole lines instead, omit from_col and to_col.
+  shown: reference 1 text='first' keeps_after=' = 1'
+  resent citing spans: applied=True replaced=['first']
+  final bytes sha256 f61579521a786c3f4d4c42d3d61060fa8f054e7bee7f08028f9bbba7d057335b b'def answer():\n        first = 1  # noted = 1\n    second = 2\n    third = 3\n    fourth = 4\n    return first\n\ndef helper():\n    return 0\n'
+
+== test_a_successful_write::test_the_privacy_r2_corruption_shape
+  original call: applied=False
+  error: apply_patch preflight: src/a.py: a column the caller counted has nothing to check it against, so columns must cite a span citation issued for exactly those coordinates. Nothing was written. reference 1 names columns 1:17..1:40, which cover 'if action in _covered_a' and leave '                 ' before it and 'ctions() else []),' after it on their lines; if that is exactly the text to replace, resend this reference with sha e45044dc108310148a2b4196432f442381f34451 (in `spans`). To replace whole lines instead, omit from_col and to_col.
+  shown: reference 1 text='if action in _covered_a' keeps_after='ctions() else []),'
+  resent citing spans: applied=True replaced=['if action in _covered_a']
+  final bytes sha256 b2c35f943a80a744dde0e8ead2d66a407ab502074ee688431d70784efb25e5ab b'                 NEWctions() else []),\n'
+SCRIPT_RC=0
+DOCKER_RC=0

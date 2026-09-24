@@ -1,0 +1,11 @@
+# Mutation 3: delete the corroboration check. The branch still counts every
+# time it WOULD have refused, so a mutant that is never reached scores zero.
+p = "/home/linxuhao/coords-r1-scratch/mutant3/src/skillflow/strict_patch.py"
+s = open(p).read()
+old = ("    if pending:\n"
+       "        _refuse_uncorroborated(op, pending, run_id, joined, current_sha)\n")
+new = ("    if pending:\n"
+       "        open(\"/home/linxuhao/coords-r1-scratch/mutant3/IGNITIONS.txt\", \"a\").write(\"1\\n\")  # MUTANT: check deleted\n")
+assert s.count(old) == 1
+open(p, "w").write(s.replace(old, new))
+print("mutated")

@@ -1,0 +1,10 @@
+test_reference_hunks::test_a_digest_the_read_issued_applies base==candidate bytes: True  sha256 32689e367fb70a32
+test_reference_hunks::test_reference_and_v4a_produce_the_same_bytes base==candidate bytes: True  sha256 4f2ec01220035762
+test_reference_hunks::test_one_word_cites_one_line_and_leaves_the_rest_alone base==candidate bytes: True  sha256 a2485f03d8e81cdb
+test_reference_hunks::test_unordered_references_match_descending_ones_byte_for_byte base==candidate bytes: True  sha256 bb622c35da37952c
+test_output_targets::test_reference_mode_runs_end_to_end_through_the_engine base==candidate bytes: True  sha256 3abb78fa137b7caf
+test_a_successful_write::test_citing_inside_a_span_this_run_replaced_is_refused_by_name base==candidate bytes: True  sha256 112556c5f2a9b278
+test_a_successful_write::test_the_result_says_what_it_replaced base==candidate bytes: True  sha256 f61579521a786c3f
+test_a_successful_write::test_the_privacy_r2_corruption_shape base==candidate bytes: True  sha256 b2c35f943a80a744
+IDENTICAL 8/8
+COMPARE_RC=0

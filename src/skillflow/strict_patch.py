@@ -25,6 +25,14 @@ class PatchError(ValueError):
     """Malformed, unsafe, stale or ambiguous input; never a fuzzy fallback."""
 
 
+class UncorroboratedColumns(PatchError):
+    """Columns named without a span citation; carries the spans to cite."""
+
+    def __init__(self, message: str, spans: list[dict]):
+        super().__init__(message)
+        self.spans = spans
+
+
 @dataclass(frozen=True)
 class Hunk:
     old: tuple[str, ...]
@@ -69,8 +77,18 @@ class Reference:
     cite that window and write no number at all. Here the caller's belief
     about a line's length has no field to travel in: the range written is the
     range read, which the caller was shown and the engine re-checks by sha.
-    Explicit lines narrow the window to whole lines, and explicit columns cut
-    inside a line; both are honoured exactly as stated.
+    Explicit lines narrow the window to whole lines.
+
+    Explicit COLUMNS must be corroborated. A reference that names a column
+    and cites a window is refused, nothing is written, and the refusal is the
+    preview: it shows the exact text those coordinates cover and what they
+    leave on either side, and hands back a span citation issued for exactly
+    that range (`skillflow.citations.issue_span`). Resending the reference with
+    that sha writes; the engine checks the sha names those same coordinates
+    and that they still cover the text it showed. A caller that counted 27
+    for a 28-character line is shown `DEFAULT_TIMEOUT_SECONDS = 3` with `0`
+    left behind before anything is written, and the write it can then make is
+    bound to those bytes.
     """
     sha: str
     from_line: int | None
@@ -309,6 +327,102 @@ def _window_offset(op: Operation, number: int, record: dict, line_no: int,
 MAX_ECHO_CHARS = 240
 
 
+def _coords(from_line, from_col, to_line, to_col) -> str:
+    def col(value):
+        return "-" if value is None else str(value)
+    return f"{from_line}:{col(from_col)}..{to_line}:{col(to_col)}"
+
+
+def _shown(text: str) -> str:
+    """The span as shown to the caller: whole, or both ends when it is long.
+
+    A miscounted column moves an END of the span, so the ends are what must
+    never be cut from the preview.
+    """
+    if len(text) <= 2 * MAX_ECHO_CHARS:
+        return text
+    return text[:MAX_ECHO_CHARS] + "…" + text[-MAX_ECHO_CHARS:]
+
+
+def _span_range(op: Operation, number: int, ref: Reference, record: dict,
+                run_id: str, joined: str, current_sha: str) -> tuple[int, int]:
+    """Where a span citation's text sits now, or a refusal.
+
+    The reference must name the span's own coordinates (or none, meaning the
+    span), and those coordinates must still cover exactly the text the engine
+    showed when it issued the span. The text is located through the same
+    journal a window uses, so an edit elsewhere in the file does not stale it.
+    """
+    span = (record["start_line"], record["from_col"], record["end_line"],
+            record["to_col"])
+    named = (ref.from_line, ref.from_col, ref.to_line, ref.to_col)
+    if ref.from_line is not None and named != span:
+        raise PatchError(
+            f"{op.path} reference {number}: that sha is the span "
+            f"{_coords(*span)} and this reference names {_coords(*named)}; a "
+            "span citation corroborates only the coordinates it was issued for")
+    stale = PatchError(
+        f"{op.path} reference {number}: span {_coords(*span)} changed since "
+        "its citation was issued; resend the reference with the window's sha "
+        "to be shown the text it covers now")
+    if not citations.chain_intact(run_id, op.path, record.get("generation"),
+                                  record.get("file_sha", ""), current_sha):
+        raise stale
+    start = citations.remap(run_id, op.path, record["generation"],
+                            record["start_char"])
+    end = citations.remap(run_id, op.path, record["generation"],
+                          record["start_char"] + len(record["text"]))
+    if start is None or end is None or joined[start:end] != record["text"]:
+        raise stale
+    return start, end
+
+
+def _refuse_uncorroborated(op: Operation, pending: list, run_id: str,
+                           joined: str, current_sha: str) -> None:
+    """Refuse counted columns, showing what they cover and a sha for exactly it.
+
+    This refusal is the preview. It writes nothing; it shows the exact text
+    the named coordinates cover and what they leave on either side of it, and
+    issues a span citation for exactly those coordinates over exactly that
+    text. The caller that meant it resends the same reference with that sha.
+    """
+    spans: list[dict] = []
+    lines: list[str] = []
+    for start, end, _new, from_line, to_line, (number, ref, record) in pending:
+        text = joined[start:end]
+        line_start = joined.rfind("\n", 0, start) + 1
+        line_end = joined.find("\n", end)
+        if line_end < 0:
+            line_end = len(joined)
+        coords = (from_line, ref.from_col, to_line, ref.to_col)
+        issued = citations.issue_span(
+            run_id, path=op.path, source=record.get("source", ""),
+            from_line=from_line, from_col=ref.from_col, to_line=to_line,
+            to_col=ref.to_col, text=text, start_char=start,
+            file_sha=current_sha)
+        keeps_before = joined[line_start:start]
+        keeps_after = joined[end:line_end]
+        spans.append({
+            "file": op.path, "reference": number,
+            "from_line": from_line, "from_col": ref.from_col,
+            "to_line": to_line, "to_col": ref.to_col,
+            "sha": issued["sha"], "chars": len(text), "text": _shown(text),
+            "keeps_before": _shown(keeps_before), "keeps_after": _shown(keeps_after),
+        })
+        lines.append(
+            f"reference {number} names columns {_coords(*coords)}, which cover "
+            f"{_shown(text)!r} and leave {_shown(keeps_before)!r} before it and "
+            f"{_shown(keeps_after)!r} after it on their lines; if that is exactly "
+            f"the text to replace, resend this reference with sha "
+            f"{issued['sha']} (in `spans`)")
+    raise UncorroboratedColumns(
+        f"{op.path}: a column the caller counted has nothing to check it "
+        "against, so columns must cite a span citation issued for exactly "
+        "those coordinates. Nothing was written. " + "; ".join(lines)
+        + ". To replace whole lines instead, omit from_col and to_col.",
+        spans)
+
+
 def cited_bytes(before: bytes, op: Operation, run_id: str,
                 edits: list | None = None, echo: list | None = None) -> bytes:
     """Apply this file's reference hunks against ONE snapshot of its text.
@@ -358,7 +472,7 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
                 f"{line_no} ({len(line)} characters); reread the range")
         return starts[line_no - 1] + col
 
-    resolved: list[tuple[int, int, str, Reference]] = []
+    resolved: list[tuple] = []
     for number, ref in enumerate(op.refs, 1):
         record = citations.lookup(run_id, ref.sha)
         if record is None:
@@ -369,6 +483,12 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
             raise PatchError(
                 f"{op.path} reference {number}: that digest was issued for "
                 f"{record['path']!r}")
+        if record.get("kind") == "span":
+            start, end = _span_range(op, number, ref, record, run_id, joined,
+                                     current_sha)
+            resolved.append((start, end, ref.new_text.replace("\r\n", "\n"),
+                             record["start_line"], record["end_line"], None))
+            continue
         if ref.from_line is None:
             from_line, to_line = record["start_line"], record["end_line"]
         else:
@@ -414,16 +534,29 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
             end = _offset(to_line, ref.to_col, "to")
         if end < start:
             raise PatchError(f"{op.path} reference {number}: end precedes start")
+        # A column the caller counted and nothing corroborates. Resolved all
+        # the same, so every other refusal (outside the window, past the end
+        # of the line, stale, overlapping) keeps its own message and comes
+        # first; this one is raised only for a batch that is otherwise valid.
+        uncorroborated = ((number, ref, record)
+                          if ref.from_col is not None or ref.to_col is not None
+                          else None)
         resolved.append((start, end, ref.new_text.replace("\r\n", "\n"),
-                         from_line, to_line))
+                         from_line, to_line, uncorroborated))
     resolved.sort(key=lambda item: (item[0], item[1]))
     cursor = 0
-    pieces: list[str] = []
-    for number, (start, end, new_text, from_line, to_line) in enumerate(resolved, 1):
-        if start < cursor:
+    for number, item in enumerate(resolved, 1):
+        if item[0] < cursor:
             raise PatchError(
                 f"{op.path} reference {number}: overlaps an earlier reference; "
                 "cite disjoint ranges")
+        cursor = item[1]
+    pending = [item for item in resolved if item[5] is not None]
+    if pending:
+        _refuse_uncorroborated(op, pending, run_id, joined, current_sha)
+    cursor = 0
+    pieces: list[str] = []
+    for start, end, new_text, from_line, to_line, _ in resolved:
         pieces.append(joined[cursor:start])
         pieces.append(new_text)
         cursor = end
@@ -696,9 +829,12 @@ def apply_code_patch(patch: str, root: Path, references=None,
             result["replaced"] = replaced
         return result
     except (PatchError, OSError, UnicodeError) as exc:
-        return {"error": f"apply_patch {phase}: {exc}", "phase": phase,
-                "written": changed, "deleted": deleted, "applied": False,
-                "partial": bool(changed or deleted), "output_target": "code"}
+        refused = {"error": f"apply_patch {phase}: {exc}", "phase": phase,
+                   "written": changed, "deleted": deleted, "applied": False,
+                   "partial": bool(changed or deleted), "output_target": "code"}
+        if isinstance(exc, UncorroboratedColumns):
+            refused["spans"] = exc.spans
+        return refused
     finally:
         if root_fd is not None:
             os.close(root_fd)

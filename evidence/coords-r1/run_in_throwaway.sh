@@ -8,7 +8,7 @@ docker run --rm --init -m 3g --name "$NAME" -u 1000:1000 -e HOME=/tmp \
   -e PYTHONPATH="$TREE/src" -e PYTHONDONTWRITEBYTECODE=1 \
   -v /home/linxuhao/stepflow:/home/linxuhao/stepflow:ro \
   -v "$TREE:$TREE" -w "$TREE" aitelier:latest \
-  sh -c 'echo "TREE_HEAD=$(git rev-parse HEAD 2>/dev/null) DIRTY_PATHS=$(git status --porcelain 2>/dev/null | wc -l)"; sha256sum src/skillflow/strict_patch.py src/skillflow/read_tools.py src/skillflow/tools/apply_patch/tool.yaml 2>&1; python -c "import skillflow; print(\"IMPORT_PROOF\", skillflow.__file__)"; python -c "import pytest, pytest_asyncio; print(\"PYTEST\", pytest.__version__, \"ASYNCIO\", pytest_asyncio.__version__)"; python -m pytest -p no:cacheprovider -q -rfE "$@"; rc=$?; echo "PYTEST_RC=$rc"; exit $rc' sh "$@" > "$LOG" 2>&1
+  sh -c 'echo "TREE_HEAD=$(git rev-parse HEAD 2>/dev/null) DIRTY_PATHS=$(git status --porcelain 2>/dev/null | wc -l)"; sha256sum src/skillflow/strict_patch.py src/skillflow/citations.py src/skillflow/read_tools.py src/skillflow/tools/apply_patch/tool.yaml 2>&1; python -c "import skillflow; print(\"IMPORT_PROOF\", skillflow.__file__)"; python -c "import pytest, pytest_asyncio; print(\"PYTEST\", pytest.__version__, \"ASYNCIO\", pytest_asyncio.__version__)"; python -m pytest -p no:cacheprovider -q -rfE "$@"; rc=$?; echo "PYTEST_RC=$rc"; exit $rc' sh "$@" > "$LOG" 2>&1
 rc=$?
 echo "DOCKER_RC=$rc" >> "$LOG"
 exit $rc

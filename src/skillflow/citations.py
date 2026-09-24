@@ -168,6 +168,50 @@ def issue(run_id: str, *, path: str, source: str, start_line: int,
     return {**record, "citable": True}
 
 
+def issue_span(run_id: str, *, path: str, source: str, from_line: int,
+               from_col, to_line: int, to_col, text: str, start_char: int,
+               file_sha: str) -> dict:
+    """Record and return the citation for one exact sub-range of a file.
+
+    A window citation covers whole lines; a column names a cut inside one,
+    and a counted column has no redundancy: in a 28-character line 27 and 28
+    are both legal, and only the caller knows which it meant. A span citation
+    is the check that restores it. The engine issues one for the exact
+    coordinates a caller named, over the exact text they cover, and shows the
+    caller that text; an edit naming those columns must quote it back, and is
+    refused unless those coordinates still cover that text.
+
+    ``from_line``/``from_col``/``to_line``/``to_col`` are recorded exactly as
+    the caller named them (a column may be None), because the citation is
+    bound to that request. ``start_char`` and ``file_sha`` place the text in
+    the file's normalised text, as for a window, so a later edit elsewhere in
+    the file does not invalidate the span.
+    """
+    if not run_id:
+        return {"kind": "span", "path": path, "sha": "", "citable": False}
+    sha = _digest(run_id, path, f"{source}\x00span\x00{from_col}\x00{to_col}",
+                  from_line, to_line, text)
+    record = {
+        "kind": "span",
+        "path": path,
+        "source": source,
+        "start_line": from_line,
+        "end_line": to_line,
+        "from_col": from_col,
+        "to_col": to_col,
+        "sha": sha,
+    }
+    with _LOCK:
+        generation = _note_version_locked(run_id, path, file_sha)
+        bucket = _bucket(_LEDGER, run_id, create=True)
+        bucket[sha] = {**record, "text": text, "start_char": start_char,
+                       "file_sha": file_sha, "generation": generation}
+        bucket.move_to_end(sha)
+        while len(bucket) > MAX_CITATIONS_PER_RUN:
+            bucket.popitem(last=False)
+    return {**record, "citable": True}
+
+
 def lookup(run_id: str, sha: str) -> dict | None:
     """The record this run issued for ``sha``; None when it never issued one."""
     if not run_id or not isinstance(sha, str) or not sha:

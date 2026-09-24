@@ -21,20 +21,26 @@ description: |
     printed in its margin, still no columns:
       references: [{"file": "src/a.py", "sha": "<sha>", "from_line": 120,
                     "to_line": 123, "new_text": "    return 2"}]
-    Cut INSIDE a line — only then add columns:
+    Cut INSIDE a line — only then add columns, and it takes two calls:
       references: [{"file": "src/a.py", "sha": "<sha>", "from_line": 120,
                     "from_col": 11, "to_line": 120, "to_col": 12,
                     "new_text": "7"}]
+    The first call writes nothing. It is refused with `spans`: for each such
+    reference, the exact `text` those columns cover, what they leave on the
+    line (`keeps_before`/`keeps_after`), and a span `sha` issued for exactly
+    those coordinates. Check the text is what you meant; if it is, send the
+    same reference again with that span sha (or the span sha and new_text
+    alone). If it is not, fix the columns — or omit them.
   Lines are 1-based and must lie inside the cited window; give both or
-  neither. Columns are 0-based character offsets, `to_col` exclusive, and are
-  honoured exactly as written: a column one short of the line's end keeps the
-  line's last character. So to replace a whole line, omit the columns rather
-  than counting them; from == to inserts at a point. The result's `replaced`
-  says what each reference took out. Order does not matter and you never
-  compensate for line drift: every range in one call is resolved against the
-  same snapshot and the engine applies them. Ranges must not overlap. To
-  change one line, read or cite just that line — a reference is a hunk, not a
-  file rewrite.
+  neither. Columns are 0-based character offsets, `to_col` exclusive; a
+  column one short of the line's end keeps the line's last character, which
+  is why a column is never written until you have seen what it covers. To
+  replace whole lines, omit the columns. from == to inserts at a point. The
+  result's `replaced` says what each reference took out. Order does not
+  matter and you never compensate for line drift: every range in one call is
+  resolved against the same snapshot and the engine applies them. Ranges
+  must not overlap. To change one line, read or cite just that line — a
+  reference is a hunk, not a file rewrite.
   A sha this run's `read` did not issue is refused, and so is a cited window
   whose text has changed since: reread the range and cite the new sha. There
   is no fuzzy matching and no partial write.
@@ -81,6 +87,7 @@ parameters:
     description: >
       Reference hunks. Each is {file, sha, new_text}, optionally narrowed by
       from_line/to_line (whole lines) and then from_col/to_col (a cut inside a
-      line), and carries no original text — the sha, issued by this run's
-      read, is what identifies it; with no lines it replaces the whole cited
-      window. Any order; the engine resolves them against one snapshot.
+      line, which must cite the span sha a first call returns in `spans`),
+      and carries no original text — the sha, issued by this run's engine, is
+      what identifies it; with no lines it replaces the whole cited window or
+      span. Any order; the engine resolves them against one snapshot.
