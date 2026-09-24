@@ -52,11 +52,30 @@ class Reference:
     tail `]ctions() else []),` orphaned below it — a SyntaxError at collection,
     so the round's whole suite scored nothing. Column arithmetic the caller
     does not have to do is column arithmetic it cannot get wrong.
+
+    The lines are OPTIONAL too, and omitting both means the whole window the
+    citation was issued for: {file, sha, new_text} replaces exactly the text
+    that read served, with every coordinate taken from the citation. This is
+    the form that restores the check a copied original used to give. On
+    2026-09-21 host run eac7cacb cited the right sha on its first try and asked
+    for line 1679 columns 0..27 when the line `DEFAULT_TIMEOUT_SECONDS = 30`
+    is 28 characters long; 27 and 28 are both legal columns, so the engine
+    wrote `DEFAULT_TIMEOUT_SECONDS = 450` and reported success. A copied
+    original is a checksum because a wrong copy fails to match; a counted
+    column has no such redundancy. The only check a column can be given
+    without retyping the text is a digest of what it covers, and the only
+    digests a caller holds are the ones read issued for windows it served, so
+    a caller that holds the digest of exactly the text it means to replace can
+    cite that window and write no number at all. Here the caller's belief
+    about a line's length has no field to travel in: the range written is the
+    range read, which the caller was shown and the engine re-checks by sha.
+    Explicit lines narrow the window to whole lines, and explicit columns cut
+    inside a line; both are honoured exactly as stated.
     """
     sha: str
-    from_line: int
+    from_line: int | None
     from_col: int | None
-    to_line: int
+    to_line: int | None
     to_col: int | None
     new_text: str
 
@@ -154,8 +173,7 @@ def parse_patch(patch: str) -> tuple[Operation, ...]:
     return tuple(ops)
 
 
-_REQUIRED_REFERENCE_KEYS = frozenset(
-    {"file", "sha", "from_line", "to_line", "new_text"})
+_REQUIRED_REFERENCE_KEYS = frozenset({"file", "sha", "new_text"})
 
 
 def _int_field(raw: dict, key: str, index: int) -> int:
@@ -214,11 +232,24 @@ def parse_references(references) -> tuple[Operation, ...]:
             raise PatchError(f"reference {index}: new_text must be a string")
         if "\x00" in new_text:
             raise PatchError(f"reference {index}: new_text must not contain NUL")
-        from_line = _int_field(raw, "from_line", index)
-        to_line = _int_field(raw, "to_line", index)
-        if from_line < 1 or to_line < from_line:
+        lines_given = [raw.get(key) is not None for key in ("from_line", "to_line")]
+        if not any(lines_given):
+            # The whole cited window: every coordinate comes from the citation.
+            if raw.get("from_col") is not None or raw.get("to_col") is not None:
+                raise PatchError(
+                    f"reference {index}: from_col/to_col need from_line and "
+                    "to_line; omit all four to replace the whole cited window")
+            from_line = to_line = None
+        elif not all(lines_given):
             raise PatchError(
-                f"reference {index}: require 1 <= from_line <= to_line")
+                f"reference {index}: give both from_line and to_line, or "
+                "neither to replace the whole cited window")
+        else:
+            from_line = _int_field(raw, "from_line", index)
+            to_line = _int_field(raw, "to_line", index)
+            if from_line < 1 or to_line < from_line:
+                raise PatchError(
+                    f"reference {index}: require 1 <= from_line <= to_line")
         ref = Reference(sha.strip(), from_line,
                         _optional_col(raw, "from_col", index),
                         to_line, _optional_col(raw, "to_col", index), new_text)
@@ -338,9 +369,13 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
             raise PatchError(
                 f"{op.path} reference {number}: that digest was issued for "
                 f"{record['path']!r}")
-        if ref.from_line < record["start_line"] or ref.to_line > record["end_line"]:
+        if ref.from_line is None:
+            from_line, to_line = record["start_line"], record["end_line"]
+        else:
+            from_line, to_line = ref.from_line, ref.to_line
+        if from_line < record["start_line"] or to_line > record["end_line"]:
             raise PatchError(
-                f"{op.path} reference {number}: lines {ref.from_line}-{ref.to_line} "
+                f"{op.path} reference {number}: lines {from_line}-{to_line} "
                 f"fall outside the cited window {record['start_line']}-"
                 f"{record['end_line']}; cite the window that contains them")
         generation = record.get("generation")
@@ -350,9 +385,9 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
             and citations.chain_intact(run_id, op.path, generation,
                                        record.get("file_sha", ""), current_sha))
         if translatable:
-            local_from = _window_offset(op, number, record, ref.from_line,
+            local_from = _window_offset(op, number, record, from_line,
                                         ref.from_col, "from")
-            local_to = _window_offset(op, number, record, ref.to_line,
+            local_to = _window_offset(op, number, record, to_line,
                                       ref.to_col, "to")
             start = citations.remap(run_id, op.path, generation,
                                     window_start + local_from)
@@ -360,13 +395,13 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
                                   window_start + local_to)
             if start is None or end is None:
                 raise PatchError(
-                    f"{op.path} reference {number}: lines {ref.from_line}-"
-                    f"{ref.to_line} were themselves replaced by an earlier "
+                    f"{op.path} reference {number}: lines {from_line}-"
+                    f"{to_line} were themselves replaced by an earlier "
                     "edit in this run; reread that range and cite the new digest")
             if joined[start:end] != record["text"][local_from:local_to]:
                 raise PatchError(
-                    f"{op.path} reference {number}: lines {ref.from_line}-"
-                    f"{ref.to_line} changed since the digest was issued; "
+                    f"{op.path} reference {number}: lines {from_line}-"
+                    f"{to_line} changed since the digest was issued; "
                     "reread the range and cite the new digest")
         else:
             window = "\n".join(original[record["start_line"] - 1:record["end_line"]])
@@ -375,15 +410,16 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
                     f"{op.path} reference {number}: lines {record['start_line']}-"
                     f"{record['end_line']} changed since the digest was issued; "
                     "reread the range and cite the new digest")
-            start = _offset(ref.from_line, ref.from_col, "from")
-            end = _offset(ref.to_line, ref.to_col, "to")
+            start = _offset(from_line, ref.from_col, "from")
+            end = _offset(to_line, ref.to_col, "to")
         if end < start:
             raise PatchError(f"{op.path} reference {number}: end precedes start")
-        resolved.append((start, end, ref.new_text.replace("\r\n", "\n"), ref))
+        resolved.append((start, end, ref.new_text.replace("\r\n", "\n"),
+                         from_line, to_line))
     resolved.sort(key=lambda item: (item[0], item[1]))
     cursor = 0
     pieces: list[str] = []
-    for number, (start, end, new_text, ref) in enumerate(resolved, 1):
+    for number, (start, end, new_text, from_line, to_line) in enumerate(resolved, 1):
         if start < cursor:
             raise PatchError(
                 f"{op.path} reference {number}: overlaps an earlier reference; "
@@ -397,7 +433,7 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
             was = joined[start:end]
             echo.append({
                 "file": op.path,
-                "from_line": ref.from_line, "to_line": ref.to_line,
+                "from_line": from_line, "to_line": to_line,
                 "replaced_chars": len(was),
                 "replaced": (was if len(was) <= MAX_ECHO_CHARS
                              else was[:MAX_ECHO_CHARS] + "…"),

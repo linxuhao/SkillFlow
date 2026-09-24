@@ -1,0 +1,8 @@
+p = "/home/linxuhao/coords-r1-scratch/mutant1/src/skillflow/strict_patch.py"
+s = open(p).read()
+old = '            from_line, to_line = record["start_line"], record["end_line"]\n'
+new = ('            from_line, to_line = record["start_line"], record["start_line"]  # MUTANT: window truncated to its first line\n'
+       '            open("/home/linxuhao/coords-r1-scratch/mutant1/IGNITIONS.txt", "a").write("1\\n")\n')
+assert s.count(old) == 1
+open(p, "w").write(s.replace(old, new))
+print("mutated")

@@ -1,0 +1,46 @@
+TREE=101da5c44e23aadbb0dcf3a423a0ac43286453bc DIRTY=5
+IMPORT_PROOF /home/linxuhao/coords-r1-scratch/mutant1/src/skillflow/__init__.py
+..F.F................................................................... [ 72%]
+............................                                             [100%]
+=================================== FAILURES ===================================
+_____ test_the_whole_window_is_exactly_the_window_and_nothing_either_side ______
+
+repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_the_whole_window_is_exact0')
+
+    def test_the_whole_window_is_exactly_the_window_and_nothing_either_side(repo):
+        """A multi-line window: what was served goes, its neighbours stay."""
+        cite = read(repo, start_line=1, end_line=4)["citation"]
+        assert (cite["start_line"], cite["end_line"]) == (2, 4)
+        got = apply(repo, [{"file": FILE, "sha": cite["sha"], "new_text": "X"}])
+        assert got["applied"] is True, got
+>       assert (repo / FILE).read_bytes() == b"import os\nX\nDEBUG = False\n"
+E       AssertionError: assert b'import os\n...BUG = False\n' == b'import os\n...BUG = False\n'
+E         
+E         At index 14 diff: b'F' != b'B'
+E         Use -v to get more diff
+
+tests/test_the_coordinates_come_from_the_read.py:128: AssertionError
+______ test_a_whole_window_whose_text_changed_is_refused_not_overwritten _______
+
+repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_whole_window_whose_text0')
+
+    def test_a_whole_window_whose_text_changed_is_refused_not_overwritten(repo):
+        """The column-free form must not become a blind overwrite. A window this
+        run already edited inside is no longer the text the caller was shown."""
+        window = read(repo, start_line=1, end_line=4)["citation"]
+        line3 = read(repo, start_line=2, end_line=3)["citation"]
+        assert apply(repo, [{"file": FILE, "sha": line3["sha"],
+                             "new_text": WANT}])["applied"] is True
+        after = (repo / FILE).read_bytes()
+        got = apply(repo, [{"file": FILE, "sha": window["sha"], "new_text": "X"}])
+>       assert got["applied"] is False
+E       assert True is False
+
+tests/test_the_coordinates_come_from_the_read.py:158: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_the_coordinates_come_from_the_read.py::test_the_whole_window_is_exactly_the_window_and_nothing_either_side
+FAILED tests/test_the_coordinates_come_from_the_read.py::test_a_whole_window_whose_text_changed_is_refused_not_overwritten
+2 failed, 98 passed in 1.80s
+PYTEST_RC=1
+DOCKER_RC=1
+IGNITIONS=7 (lines appended by the mutated branch, /home/linxuhao/coords-r1-scratch/mutant1/IGNITIONS.txt)

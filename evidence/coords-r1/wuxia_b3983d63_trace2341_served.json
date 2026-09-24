@@ -1,0 +1,22 @@
+{
+ "trace_id": 2341,
+ "run": "b3983d63-3127-40d3-930d-e83f044acc2d",
+ "params": {
+  "path": "tests/unit_test_runner.gd",
+  "start_line": 70,
+  "end_line": 84
+ },
+ "content": "71\t\t# moves whenever this entry is dropped, so the wiring itself is observable.\n72\t\t\"res://tests/test_content_martial_arts_contract_runtime.gd\",\n73\t\t# martial-arts surface census rev 8: the card's prose carried four numbers (art ids,\n74\t\t# resolved ids, techniques, SkillData fields) that had only ever been quoted from an\n75\t\t# earlier round. This suite counts all four from the RUNNING product on every gate pass\n76\t\t# and prints them on the gate's stdout, so the delivery notes quote a measurement. No\n77\t\t# count is pinned to a literal; dropping this entry moves the gate's own unit count.\n78\t\t\"res://tests/\" + \"test_martial_arts_surface_census\" + \".gd\",\n79\t\t\"res://tests/test_authored_row_takes_written_values.gd\",\n80\t\t\"res://tests/test_qi_costs_match_design.gd\",\n81\t\t\"res://tests/test_skill_button_info.gd\",\n82\t\t\"res://tests/test_skill_button_no_energy.gd\",\n83\t\t\"res://tests/test_skill_button_states.gd\",\n84\t\t\"res://tests/test_settings_title_overlap.gd\",",
+ "citation": {
+  "path": "tests/unit_test_runner.gd",
+  "source": "repo",
+  "start_line": 71,
+  "end_line": 84,
+  "start_col": 0,
+  "end_col": 46,
+  "start_byte": 3989,
+  "end_byte": 4908,
+  "sha": "fefe793d9b5e399fd16b5783b9f634cea6704771",
+  "citable": true
+ }
+}

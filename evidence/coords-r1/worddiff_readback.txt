@@ -1,0 +1,916 @@
+diff --git a/evidence/coords-r1/delivery_notes.md b/evidence/coords-r1/delivery_notes.md
+new file mode 100644
+index 0000000..6ddf8d4
+--- /dev/null
++++ b/evidence/coords-r1/delivery_notes.md
+@@ -0,0 +1,208 @@
+{+# editing.the-coordinates-must-come-from-the-read-too (rev 2) — delivery notes+}
+
+{+Attempt `attempt-684a5e14cc2e4a638de437aff4b24961`, branch `director/coords-r1-20260924`,+}
+{+base `101da5c44e23aadbb0dcf3a423a0ac43286453bc` (release 1.5.79). Written 2026-09-24 (UTC).+}
+{+Evidence convention: this directory (`evidence/coords-r1/`); the repo had no delivery-note+}
+{+convention, only `evidence/artifact-revision-20260912/` wheel dumps. Every log is `.txt`.+}
+
+{+## What changed+}
+
+{+1. `src/skillflow/strict_patch.py` — a reference may omit `from_line`/`to_line`. With both+}
+{+   omitted, `{file, sha, new_text}` replaces exactly the window the citation was issued for;+}
+{+   every coordinate comes from the citation's record (start_line..end_line, column 0 to the+}
+{+   end of the last line), on both the translated (journal) path and the strict path. Half a+}
+{+   range is refused: one line without the other, or columns without lines. The echo+}
+{+   (`replaced`) reports the resolved lines. Explicit lines and explicit columns are unchanged.+}
+{+2. `src/skillflow/tools/apply_patch/tool.yaml` — the reference-mode contract now leads with+}
+{+   the forms that carry no counted number (sha only; lines from the read's margin), puts+}
+{+   columns under "cut INSIDE a line", and says a column is honoured as written (one short+}
+{+   keeps the last character).+}
+{+3. `src/skillflow/read_tools.py` — the read description says the sha with only `new_text`+}
+{+   replaces exactly that window.+}
+{+4. `tests/test_the_coordinates_come_from_the_read.py` (14 tests) and+}
+{+   `tests/fixtures/eac7cacb_app_settings.py.txt` (the exact file host run eac7cacb edited).+}
+
+{+## Route chosen, and the discriminating reason (criterion 1 asks for this)+}
+
+{+Route: **the whole-window write** — the range written is the range read.+}
+
+{+Discriminating reason. The digest route needs the caller to attach a digest of the text it+}
+{+believes it is replacing. A caller cannot compute one: the citation digest is keyed with a+}
+{+process-private secret, and a model cannot hash text by hand, so any digest it attaches+}
+{+must have been issued by the engine. The engine issues digests only for windows a read+}
+{+served. So a caller that holds the digest of exactly the text it means to replace already+}
+{+holds a citation of that text, and can cite it with no number at all — the digest route,+}
+{+taken to its end, is the whole-window route. For a sub-line span there is no digest the+}
+{+caller can hold without a preview round trip in which the engine shows it the span first.+}
+
+{+Why a miscounted column can no longer write silently in the new writing: the new writing+}
+{+has no column (and, in its sha-only form, no line number either). The caller in eac7cacb+}
+{+believed line 1679 was 27 characters long; in `{file, sha, new_text}` that belief has no+}
+{+field to travel in. The text replaced is the text the read showed, and the engine re-checks+}
+{+it by sha before writing (refused if it changed: `test_a_whole_window_whose_text_changed_is_refused_not_overwritten`).+}
+{+This is not a citation that carries more lengths so the caller can count better (the+}
+{+forbidden non-fix (a)); it removes the count. It is not a retype either (forbidden (b)):+}
+{+the reference still has no field that could hold the original+}
+{+(`test_a_reference_hunk_has_nowhere_to_put_the_original` stays green, and parse still+}
+{+refuses `old_text`/`context`/`old_str`).+}
+
+{+## a-mis-specified-range-cannot-write-silently+}
+
+{+Pole 1 — the len-1 mistake reproduced, new writing: `test_the_len_minus_one_belief_has_no_field_to_travel_in`+}
+{+(reference asserted to contain none of from_line/to_line/from_col/to_col; line 3 written as+}
+{+`DEFAULT_TIMEOUT_SECONDS = 45`, asserted `!= ... = 450`). Log: `new_tests_candidate.txt`+}
+{+(14 passed, PYTEST_RC=0, DOCKER_RC=0). Actual product, from `replay_candidate.txt` part C:+}
+
+{+    sha + new_text only (read line 3)   applied=True   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 45'+}
+{+    product bytes b'import os\n\nDEFAULT_TIMEOUT_SECONDS = 45\n\nDEBUG = False\n'+}
+
+{+Pole 2 — len+1 still loud, word for word: `test_the_len_plus_one_error_is_still_loud_and_word_for_word`.+}
+{+Actual error, `replay_candidate.txt` part C (director's probe shape, strict path):+}
+
+{+    to_col = len+1 (0..29)   applied=False   line 3 = 'DEFAULT_TIMEOUT_SECONDS = 30'+}
+{+    error: apply_patch preflight: app/settings.py: to column 29 is past the end of line 3 (28 characters); reread the range+}
+
+{+Through a real read (translated path) the same test also pins+}
+{+`to column 29 is past the end of line 3 as the read served it (28 characters)`.+}
+
+{+Without the change: the same 14 tests run against base `strict_patch.py`+}
+{+(`mutation2_base_strict_patch.txt`): 11 failed, 89 passed, PYTEST_RC=1 — including pole 1+}
+{+(`missing field(s) ['from_line', 'to_line']` on base, also visible in `replay_base.txt`).+}
+
+{+## prove-it-on-the-edit-that-actually-went-wrong+}
+
+{+Source: host run eac7cacb, `/tmp/refmode-3r_9rvh9/sf.db` trace ids 16/17 (read) and 22/23+}
+{+(apply_patch), copied verbatim to `eac7cacb_trace_16_17_22_23.txt`. The file is+}
+{+`/tmp/refmode-3r_9rvh9/repo` HEAD `1674e5f` `app/settings.py`, git blob+}
+{+`a1f2b73a72018708afc0230a05f177d478802158`, sha256+}
+{+`036440eb37d4428cd72f43650cdb1750abdddd86f67b026610afa941fdac0ffe`, 49,447 bytes; the+}
+{+committed fixture has the same blob id and sha256 (the test asserts the sha256).+}
+
+{+The replay re-issues the same read (`start_line=1674, end_line=1685`) and gets the window+}
+{+the agent got — `start_line 1675, end_line 1684, end_col 19, start_byte 49155, end_byte 49447`,+}
+{+equal to trace id 17 — then writes the same line with the same intent+}
+{+(`replay_candidate.txt`, SCRIPT_RC=0, DOCKER_RC=0):+}
+
+{+    A2 same read, same line, no columns   applied=True   line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 45'+}
+{+    A2 rest of file byte-identical: True+}
+{+    A3 sha + new_text only                applied=True   line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 45'+}
+
+{+Tests: `test_host_run_eac7cacb_replayed_writes_the_line_it_meant`,+}
+{+`test_host_run_eac7cacb_replayed_with_the_sha_alone` (the plan's own verification: the file+}
+{+is otherwise byte-identical).+}
+
+{+Second real case (not a substitute): wuxia run b3983d63, trace ids 2340/2341 (read+}
+{+`start_line=70,end_line=84`) and 2354/2355 (apply_patch `to_col=58` on a 61-character+}
+{+line), commit `5ac8714e` holds the result (blob `0eae2c14ca33fac6a762779d24ecf17278ea68db`,+}
+{+copied to `wuxia_5ac8714e_unit_test_runner.gd.txt`). The replay reconstructs line 78 as it+}
+{+was before id 2354, re-issues the read and gets the same content, range and bytes as trace+}
+{+id 2341 (`True`), then:+}
+
+{+    B1 trace id 2354 verbatim (to_col=58)  line 78 = '\t"res://tests/test_martial_arts_surface_census.gd",d",'+}
+{+    B1 file == commit 5ac8714e bytes: True+}
+{+    B2 same read, same line, no columns    line 78 = '\t"res://tests/test_martial_arts_surface_census.gd",'+}
+{+    B3 sha + new_text only                 line 78 = '\t"res://tests/test_martial_arts_surface_census.gd",'+}
+
+{+B1 ran on 1.5.79, whose result already echoed `replaced` (trace id 2358 shows the+}
+{+58-character echo ending in `".g`), and the round's next call was `focused_check`.+}
+{+An echo returned after the write did not stop it.+}
+
+{+The 73 delivered reference-mode tests (`test_reference_hunks` + `test_strict_patch_parser`+}
+{++ `test_output_targets`), unchanged: candidate 73 passed, PYTEST_RC=0, DOCKER_RC=0+}
+{+(`reference73_candidate.txt`); base 73 passed, PYTEST_RC=0 (`reference73_base.txt`).+}
+
+{+## replace-what-was-read-without-naming-a-column+}
+
+{+Pole 1 — `test_citing_the_sha_alone_replaces_the_line_that_was_read`: the director's+}
+{+28-character line, read alone, cited as `{file, sha, new_text}` (asserted to be exactly those+}
+{+three keys). Product bytes asserted equal to+}
+{+`b'import os\n\nDEFAULT_TIMEOUT_SECONDS = 45\n\nDEBUG = False\n'`; the echo says it replaced+}
+{+all 28 characters `DEFAULT_TIMEOUT_SECONDS = 30`. Same bytes printed in `replay_candidate.txt`.+}
+
+{+Pole 2 — `test_a_narrowed_sub_range_is_still_honoured_as_written`: whole lines inside a+}
+{+wider window (`from_line=3,to_line=3`) and a column cut (`3:26..3:28` -> `45`, echo `30`)+}
+{+each produce the same bytes. The director's own `to_col=27` sub-range still does what it+}
+{+says (`replay_candidate.txt` part C, `to_col = len-1 (0..27)` -> `= 450`, echo+}
+{+`DEFAULT_TIMEOUT_SECONDS = 3`).+}
+
+{+Also covered: a multi-line window replaces exactly the window+}
+{+(`test_the_whole_window_is_exactly_the_window_and_nothing_either_side`); a whole-window+}
+{+citation still lands after this run edits elsewhere in the file (journal translation);+}
+{+half a range is refused, 4 shapes; an unissued sha is still refused.+}
+
+{+## Whole suite+}
+
+{+| tree | result | bare RC | log |+}
+{+|---|---|---|---|+}
+{+| base 101da5c | 1209 passed, 3 skipped | PYTEST_RC=0, DOCKER_RC=0 | `suite_base.txt` |+}
+{+| candidate | 1223 passed, 3 skipped | PYTEST_RC=0, DOCKER_RC=0 | `suite_candidate.txt` |+}
+
+{+1223 = 1209 + the 14 new tests; no red added. The card's figure of 1183 is older than this+}
+{+base; 1209 is measured here. Import proof in each log: base+}
+{+`IMPORT_PROOF /home/linxuhao/stepflow-coords-r1-base/src/skillflow/__init__.py`, candidate+}
+{+`IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py`. Each log also+}
+{+prints the sha256 of the three changed source files as the container saw them (candidate+}
+{+`strict_patch.py` da8027a3…, base 5340112d…); the candidate runs were taken on the+}
+{+working tree before the commit, so compare those hashes with the committed files.+}
+{+Runner: `run_in_throwaway.sh` (`docker run --rm --init -m 3g`, worktree `src/` first on+}
+{+`PYTHONPATH`, pytest's exit code captured bare, never piped).+}
+
+{+## Mutations (throwaway copies, not the worktree)+}
+
+{+1. `mutation1_window_truncated.txt` — the whole-window default truncated to the window's+}
+{+   first line (`mutation1_patch.py.txt`). IGNITIONS=7. Red: 2 —+}
+{+   `test_the_whole_window_is_exactly_the_window_and_nothing_either_side`,+}
+{+   `test_a_whole_window_whose_text_changed_is_refused_not_overwritten`. The other+}
+{+   whole-window tests cite one-line windows, where the truncation is the identity; that is+}
+{+   the coverage of this mutation: 7 firings across 6 whole-window tests x 1 mutant.+}
+{+2. `mutation2_base_strict_patch.txt` — base `strict_patch.py` under the candidate's tests.+}
+{+   Red: 11 of the 14 new tests (listed in the log); the 3 that stay green are the ones whose+}
+{+   forms already existed on base (lines-only replay, narrowed sub-range, len+1).+}
+
+{+## What this does not do — stated plainly+}
+
+{+- **An explicit column is still executed as written, including a miscounted one.** The+}
+{+  eac7cacb call verbatim (`to_col=27`) still writes `DEFAULT_TIMEOUT_SECONDS = 450` on the+}
+{+  candidate, exactly as on base (`replay_candidate.txt` A1, `replay_base.txt` A1), and the+}
+{+  wuxia call verbatim still writes the `d",` tail (B1). The guarantee above holds for the+}
+{+  new writing only. Closing the explicit-column channel needs redundancy on every explicit+}
+{+  cut, and the only redundancy a caller can supply without retyping is an engine-issued+}
+{+  digest obtained through a preview round trip. Making that mandatory conflicts with three+}
+{+  of the 73 delivered tests this card requires green —+}
+{+  `test_one_word_cites_one_line_and_leaves_the_rest_alone`,+}
+{+  `test_unordered_references_match_descending_ones_byte_for_byte`,+}
+{+  `test_reference_mode_runs_end_to_end_through_the_engine` — and, elsewhere in the suite,+}
+{+  `test_the_result_says_what_it_replaced`,+}
+{+  `test_citing_inside_a_span_this_run_replaced_is_refused_by_name` and+}
+{+  `test_the_privacy_r2_corruption_shape`: each sends a sub-line cut with no corroboration in+}
+{+  one call and asserts `applied` is true. That list is read from the test sources; it was+}
+{+  not run as a mutant.+}
+{+  A token-boundary rule would refuse all three recorded incidents (27 splits `30`, 58 splits+}
+{+  `gd`, privacy r2's 40 splits `_covered_actions`), but it judges whether a column looks+}
+{+  right, which the card rules out, and `to_col=26` would still write `= 4530`. This+}
+{+  conflict is the director's to rule on.+}
+{+- **The host prompt still teaches columns.** `~/AItelier/templates/coding_impl.md` (the+}
+{+  coding_impl template that eac7cacb's prompt came from) says `(L,0)..(M,len(line M))`+}
+{+  replaces whole lines. That file is in the AItelier repo, outside this round.+}
+{+- **The whole-window form moves the choice of range into the read's arguments**, which are+}
+{+  0-based. In eac7cacb's own trace (id 36/37) the agent asked `read(1679,1680)` meaning line+}
+{+  1679 and was served line 1680. The served text and line prefix are in the result, but a+}
+{+  caller that cites a mis-aimed read without looking at it replaces the line it was shown.+}
+{+- The lines-only form (`from_line`/`to_line`, no columns) already existed on base 1.5.79;+}
+{+  the replay's A2/B2 lines pass on base too. What is new is the sha-only form, the refusal+}
+{+  of half ranges, and the contract text.+}
+{+- Not done, by instruction: no tag, no version bump, no build, no PyPI upload, no AItelier+}
+{+  pin change, no State DAG write.+}
+
+{+## Read-back+}
+
+{+`worddiff_readback.txt` is `git diff --word-diff` of every changed or added non-log text+}
+{+file in this commit (the three sources, the new test, `replay_real_edits.py`,+}
+{+`run_in_throwaway.sh`, this note), taken before the commit. The two copied data files are+}
+{+identified by blob id instead of a word diff, because each is a byte copy of a file named+}
+{+above: `tests/fixtures/eac7cacb_app_settings.py.txt` = `a1f2b73a…` and+}
+{+`wuxia_5ac8714e_unit_test_runner.gd.txt` = `0eae2c14…`; `wuxia_b3983d63_trace2341_served.json`+}
+{+and `eac7cacb_trace_16_17_22_23.txt` are extracts of the two trace databases, and+}
+{+`mutation1_patch.py.txt` is the mutation script as run. The edited regions were read back+}
+{+for splice damage (duplicated adjacent lines, fused lines, cut sentences, stale tails);+}
+{+none found.+}
+diff --git a/evidence/coords-r1/replay_real_edits.py b/evidence/coords-r1/replay_real_edits.py
+new file mode 100644
+index 0000000..d306bb4
+--- /dev/null
++++ b/evidence/coords-r1/replay_real_edits.py
+@@ -0,0 +1,185 @@
+{+# -*- coding: utf-8 -*-+}
+{+"""Replay the two real reference edits that wrote the wrong bytes.+}
+
+{+Run with the tree under test first on PYTHONPATH; the first line printed is the+}
+{+imported module's path. Every case prints the product line and the error text.+}
+
+{+  A. host run eac7cacb (2026-09-21), trace ids 16/17 (read) and 22/23+}
+{+     (apply_patch): line 1679 `DEFAULT_TIMEOUT_SECONDS = 30`, 28 characters,+}
+{+     cited with to_col=27.+}
+{+  B. wuxia run b3983d63 (2026-09-24), trace ids 2340/2341 (read) and 2354/2355+}
+{+     (apply_patch): tests/unit_test_runner.gd line 78, 61 characters, cited+}
+{+     with to_col=58; commit 5ac8714e holds the result.+}
+{+  C. the director's probe (reports/tocol-redundancy/probe.py), part C, plus+}
+{+     the same intent in the column-free writing.+}
+{+"""+}
+{+import hashlib+}
+{+import json+}
+{+import os+}
+{+import sys+}
+{+import tempfile+}
+{+from pathlib import Path+}
+
+{+import skillflow+}
+{+from skillflow import citations+}
+{+from skillflow.read_tools import unified_read+}
+{+from skillflow.strict_patch import apply_code_patch+}
+
+{+HERE = os.path.dirname(os.path.abspath(__file__))+}
+{+TREE = os.path.dirname(os.path.dirname(HERE))+}
+{+print("IMPORT_PROOF", skillflow.__file__)+}
+{+RUN = "replay-run"+}
+
+
+{+def smap(root):+}
+{+    return {"working_tree": [("repo", root)], "named": {}, "allowed": set()}+}
+
+
+{+def fresh(rel, data):+}
+{+    root = tempfile.mkdtemp(prefix="coords-replay-")+}
+{+    os.makedirs(os.path.join(root, os.path.dirname(rel)))+}
+{+    with open(os.path.join(root, rel), "wb") as fh:+}
+{+        fh.write(data)+}
+{+    citations.forget_run(RUN)+}
+{+    return root+}
+
+
+{+def line_of(root, rel, number):+}
+{+    with open(os.path.join(root, rel), "rb") as fh:+}
+{+        return fh.read().decode().split("\n")[number - 1]+}
+
+
+{+def show(label, root, rel, number, res):+}
+{+    print("  %-52s applied=%s" % (label, res.get("applied")))+}
+{+    print("  %-52s line %d = %r" % ("", number, line_of(root, rel, number)))+}
+{+    if res.get("error"):+}
+{+        print("  %-52s error: %s" % ("", res["error"]))+}
+{+    if res.get("replaced"):+}
+{+        print("  %-52s replaced: %r" % ("", res["replaced"][0]["replaced"]))+}
+
+
+{+# ---------------------------------------------------------------------------+}
+{+print("\n=== A. host run eac7cacb ===")+}
+{+A_REL = "app/settings.py"+}
+{+A_DATA = open(os.path.join(TREE, "tests", "fixtures",+}
+{+                           "eac7cacb_app_settings.py.txt"), "rb").read()+}
+{+print("  fixture sha256", hashlib.sha256(A_DATA).hexdigest(), "bytes", len(A_DATA))+}
+{+A_WANT = "DEFAULT_TIMEOUT_SECONDS = 45"+}
+
+
+{+def a_read(root, start, end):+}
+{+    return unified_read(smap(root), A_REL, start_line=start, end_line=end,+}
+{+                        run_id=RUN)+}
+
+
+{+root = fresh(A_REL, A_DATA)+}
+{+served = a_read(root, 1674, 1685)                       # trace id 16+}
+{+cite = served["citation"]+}
+{+print("  read(1674,1685) citation", {k: cite[k] for k in (+}
+{+    "start_line", "end_line", "start_col", "end_col", "start_byte", "end_byte")})+}
+{+print("  (trace id 17 served start_line 1675 end_line 1684 end_col 19 "+}
+{+      "start_byte 49155 end_byte 49447)")+}
+{+legacy = {"file": A_REL, "from_col": 0, "from_line": 1679,          # trace id 22+}
+{+          "new_text": A_WANT, "sha": cite["sha"], "to_col": 27, "to_line": 1679}+}
+{+show("A1 trace id 22 verbatim (to_col=27)", root, A_REL, 1679,+}
+{+     apply_code_patch("", Path(root), references=[legacy], run_id=RUN))+}
+
+{+root = fresh(A_REL, A_DATA)+}
+{+cite = a_read(root, 1674, 1685)["citation"]+}
+{+res = apply_code_patch("", Path(root), references=[{+}
+{+    "file": A_REL, "sha": cite["sha"], "from_line": 1679, "to_line": 1679,+}
+{+    "new_text": A_WANT}], run_id=RUN)+}
+{+show("A2 same read, same line, no columns", root, A_REL, 1679, res)+}
+{+with open(os.path.join(root, A_REL), "rb") as fh:+}
+{+    after = fh.read()+}
+{+print("  A2 rest of file byte-identical:",+}
+{+      after == A_DATA.replace(b"DEFAULT_TIMEOUT_SECONDS = 30\n",+}
+{+                              A_WANT.encode() + b"\n"))+}
+
+{+root = fresh(A_REL, A_DATA)+}
+{+served = a_read(root, 1678, 1679)+}
+{+print("  read(1678,1679) content %r" % served["content"])+}
+{+res = apply_code_patch("", Path(root), references=[{+}
+{+    "file": A_REL, "sha": served["citation"]["sha"], "new_text": A_WANT}],+}
+{+    run_id=RUN)+}
+{+show("A3 sha + new_text only", root, A_REL, 1679, res)+}
+
+{+# ---------------------------------------------------------------------------+}
+{+print("\n=== B. wuxia run b3983d63 ===")+}
+{+B_REL = "tests/unit_test_runner.gd"+}
+{+COMMIT = open(os.path.join(HERE, "wuxia_5ac8714e_unit_test_runner.gd.txt"),+}
+{+              "rb").read()+}
+{+SERVED = json.load(open(os.path.join(HERE, "wuxia_b3983d63_trace2341_served.json")))+}
+{+STALE = '\t"res://tests/test_martial_arts_surface_census.gd",d",'+}
+{+BEFORE_LINE = '\t"res://tests/" + "test_martial_arts_surface_census" + ".gd",'+}
+{+B_WANT = '\t"res://tests/test_martial_arts_surface_census.gd",'+}
+{+lines = COMMIT.decode().split("\n")+}
+{+assert lines[77] == STALE, lines[77]+}
+{+lines[77] = BEFORE_LINE+}
+{+B_DATA = "\n".join(lines).encode()+}
+{+print("  commit 5ac8714e line 78 %r" % STALE)+}
+{+print("  reconstructed pre-edit line 78 %r (%d characters)"+}
+{+      % (BEFORE_LINE, len(BEFORE_LINE)))+}
+
+{+root = fresh(B_REL, B_DATA)+}
+{+served = unified_read(smap(root), B_REL, start_line=70, end_line=84, run_id=RUN)+}
+{+cite = served["citation"]+}
+{+same = (served["content"] == SERVED["content"]+}
+{+        and all(cite[k] == SERVED["citation"][k] for k in (+}
+{+            "start_line", "end_line", "end_col", "start_byte", "end_byte")))+}
+{+print("  read(70,84) reproduces trace id 2341 (content + range + bytes):", same)+}
+{+legacy = {"file": B_REL, "from_col": 0, "from_line": 78,          # trace id 2354+}
+{+          "new_text": B_WANT, "sha": cite["sha"], "to_col": 58, "to_line": 78}+}
+{+res = apply_code_patch("", Path(root), references=[legacy], run_id=RUN)+}
+{+show("B1 trace id 2354 verbatim (to_col=58)", root, B_REL, 78, res)+}
+{+with open(os.path.join(root, B_REL), "rb") as fh:+}
+{+    print("  B1 file == commit 5ac8714e bytes:", fh.read() == COMMIT)+}
+
+{+root = fresh(B_REL, B_DATA)+}
+{+cite = unified_read(smap(root), B_REL, start_line=70, end_line=84,+}
+{+                    run_id=RUN)["citation"]+}
+{+res = apply_code_patch("", Path(root), references=[{+}
+{+    "file": B_REL, "sha": cite["sha"], "from_line": 78, "to_line": 78,+}
+{+    "new_text": B_WANT}], run_id=RUN)+}
+{+show("B2 same read, same line, no columns", root, B_REL, 78, res)+}
+
+{+root = fresh(B_REL, B_DATA)+}
+{+served = unified_read(smap(root), B_REL, start_line=77, end_line=78, run_id=RUN)+}
+{+res = apply_code_patch("", Path(root), references=[{+}
+{+    "file": B_REL, "sha": served["citation"]["sha"], "new_text": B_WANT}],+}
+{+    run_id=RUN)+}
+{+show("B3 sha + new_text only", root, B_REL, 78, res)+}
+
+{+# ---------------------------------------------------------------------------+}
+{+print("\n=== C. director probe shape (strict path, citation issued by hand) ===")+}
+{+LINE = "DEFAULT_TIMEOUT_SECONDS = 30"+}
+{+BODY = "import os\n\n%s\n\nDEBUG = False\n" % LINE+}
+{+C_REL = "app/settings.py"+}
+
+
+{+def probe_cite():+}
+{+    return citations.issue(RUN, path=C_REL, source="code", start_line=1,+}
+{+                           end_line=len(BODY.splitlines()), start_byte=0,+}
+{+                           end_byte=len(BODY.encode()),+}
+{+                           text="\n".join(BODY.splitlines()))+}
+
+
+{+print("  len(%r) = %d" % (LINE, len(LINE)))+}
+{+for label, extra in [("to_col = len   (0..28)", {"from_col": 0, "to_col": 28}),+}
+{+                     ("to_col = len-1 (0..27)", {"from_col": 0, "to_col": 27}),+}
+{+                     ("to_col = len+1 (0..29)", {"from_col": 0, "to_col": 29}),+}
+{+                     ("no columns (lines 3..3)", {})]:+}
+{+    root = fresh(C_REL, BODY.encode())+}
+{+    res = apply_code_patch("", Path(root), references=[{+}
+{+        "file": C_REL, "sha": probe_cite()["sha"], "from_line": 3,+}
+{+        "to_line": 3, "new_text": A_WANT, **extra}], run_id=RUN)+}
+{+    show(label, root, C_REL, 3, res)+}
+{+root = fresh(C_REL, BODY.encode())+}
+{+served = unified_read(smap(root), C_REL, start_line=2, end_line=3, run_id=RUN)+}
+{+res = apply_code_patch("", Path(root), references=[{+}
+{+    "file": C_REL, "sha": served["citation"]["sha"], "new_text": A_WANT}],+}
+{+    run_id=RUN)+}
+{+show("sha + new_text only (read line 3)", root, C_REL, 3, res)+}
+{+with open(os.path.join(root, C_REL), "rb") as fh:+}
+{+    print("  product bytes %r" % fh.read())+}
+{+sys.exit(0)+}
+diff --git a/evidence/coords-r1/run_in_throwaway.sh b/evidence/coords-r1/run_in_throwaway.sh
+new file mode 100755
+index 0000000..7566ac3
+--- /dev/null
++++ b/evidence/coords-r1/run_in_throwaway.sh
+@@ -0,0 +1,14 @@
+{+#!/bin/sh+}
+{+# usage: run_in_throwaway.sh <tree> <container-name> <log> [pytest args...]+}
+{+# Runs pytest in a throwaway --init container with <tree>/src first on the+}
+{+# import path, and logs the import proof, the tree state and the hashes of the+}
+{+# files this round changes. The exit code is pytest's, captured bare.+}
+{+TREE=$1; NAME=$2; LOG=$3; shift 3+}
+{+docker run --rm --init -m 3g --name "$NAME" -u 1000:1000 -e HOME=/tmp \+}
+{+  -e PYTHONPATH="$TREE/src" -e PYTHONDONTWRITEBYTECODE=1 \+}
+{+  -v /home/linxuhao/stepflow:/home/linxuhao/stepflow:ro \+}
+{+  -v "$TREE:$TREE" -w "$TREE" aitelier:latest \+}
+{+  sh -c 'echo "TREE_HEAD=$(git rev-parse HEAD 2>/dev/null) DIRTY_PATHS=$(git status --porcelain 2>/dev/null | wc -l)"; sha256sum src/skillflow/strict_patch.py src/skillflow/read_tools.py src/skillflow/tools/apply_patch/tool.yaml 2>&1; python -c "import skillflow; print(\"IMPORT_PROOF\", skillflow.__file__)"; python -c "import pytest, pytest_asyncio; print(\"PYTEST\", pytest.__version__, \"ASYNCIO\", pytest_asyncio.__version__)"; python -m pytest -p no:cacheprovider -q -rfE "$@"; rc=$?; echo "PYTEST_RC=$rc"; exit $rc' sh "$@" > "$LOG" 2>&1+}
+{+rc=$?+}
+{+echo "DOCKER_RC=$rc" >> "$LOG"+}
+{+exit $rc+}
+diff --git a/src/skillflow/read_tools.py b/src/skillflow/read_tools.py
+index 4c51e31..5cf56e8 100644
+--- a/src/skillflow/read_tools.py
++++ b/src/skillflow/read_tools.py
+@@ -407,7 +407,9 @@ def generate_read_tool_schemas(
+                "`citation` — the path, the 1-based inclusive line range, the "
+                "byte offsets and a `sha` this engine issued for exactly that "
+                "text. Quote that sha to apply_patch's `references` to edit "
+                "inside this window without copying any of it [-back.-]{+back; the sha "+}
+{+                "with only `new_text` replaces exactly this window, no line "+}
+{+                "or column numbers needed.+} A "
+                "citation's line and column numbers stay valid AFTER your own "
+                "writes land: the engine translates them through the edits it "
+                "published, so do not reread a file just because you edited "
+diff --git a/src/skillflow/strict_patch.py b/src/skillflow/strict_patch.py
+index ece297d..2fbe5a9 100644
+--- a/src/skillflow/strict_patch.py
++++ b/src/skillflow/strict_patch.py
+@@ -52,11 +52,30 @@ class Reference:
+    tail `]ctions() else []),` orphaned below it — a SyntaxError at collection,
+    so the round's whole suite scored nothing. Column arithmetic the caller
+    does not have to do is column arithmetic it cannot get wrong.
+
+    {+The lines are OPTIONAL too, and omitting both means the whole window the+}
+{+    citation was issued for: {file, sha, new_text} replaces exactly the text+}
+{+    that read served, with every coordinate taken from the citation. This is+}
+{+    the form that restores the check a copied original used to give. On+}
+{+    2026-09-21 host run eac7cacb cited the right sha on its first try and asked+}
+{+    for line 1679 columns 0..27 when the line `DEFAULT_TIMEOUT_SECONDS = 30`+}
+{+    is 28 characters long; 27 and 28 are both legal columns, so the engine+}
+{+    wrote `DEFAULT_TIMEOUT_SECONDS = 450` and reported success. A copied+}
+{+    original is a checksum because a wrong copy fails to match; a counted+}
+{+    column has no such redundancy. The only check a column can be given+}
+{+    without retyping the text is a digest of what it covers, and the only+}
+{+    digests a caller holds are the ones read issued for windows it served, so+}
+{+    a caller that holds the digest of exactly the text it means to replace can+}
+{+    cite that window and write no number at all. Here the caller's belief+}
+{+    about a line's length has no field to travel in: the range written is the+}
+{+    range read, which the caller was shown and the engine re-checks by sha.+}
+{+    Explicit lines narrow the window to whole lines, and explicit columns cut+}
+{+    inside a line; both are honoured exactly as stated.+}
+    """
+    sha: str
+    from_line: int {+| None+}
+    from_col: int | None
+    to_line: int {+| None+}
+    to_col: int | None
+    new_text: str
+
+@@ -154,8 +173,7 @@ def parse_patch(patch: str) -> tuple[Operation, ...]:
+    return tuple(ops)
+
+
+_REQUIRED_REFERENCE_KEYS = [-frozenset(-]
+[-    {"file",-]{+frozenset({"file",+} "sha",[-"from_line", "to_line",-] "new_text"})
+
+
+def _int_field(raw: dict, key: str, index: int) -> int:
+@@ -214,11 +232,24 @@ def parse_references(references) -> tuple[Operation, ...]:
+            raise PatchError(f"reference {index}: new_text must be a string")
+        if "\x00" in new_text:
+            raise PatchError(f"reference {index}: new_text must not contain NUL")
+        [-from_line = _int_field(raw, "from_line", index)-]
+[-        to_line-]{+lines_given+} = [-_int_field(raw, "to_line", index)-]{+[raw.get(key) is not None for key in ("from_line", "to_line")]+}
+        if [-from_line < 1-]{+not any(lines_given):+}
+{+            # The whole cited window: every coordinate comes from the citation.+}
+{+            if raw.get("from_col") is not None+} or {+raw.get("to_col") is not None:+}
+{+                raise PatchError(+}
+{+                    f"reference {index}: from_col/to_col need from_line and "+}
+{+                    "to_line; omit all four to replace the whole cited window")+}
+{+            from_line =+} to_line [-< from_line:-]{+= None+}
+{+        elif not all(lines_given):+}
+            raise PatchError(
+                f"reference {index}: {+give both from_line and to_line, or "+}
+{+                "neither to replace the whole cited window")+}
+{+        else:+}
+{+            from_line = _int_field(raw, "from_line", index)+}
+{+            to_line = _int_field(raw, "to_line", index)+}
+{+            if from_line < 1 or to_line < from_line:+}
+{+                raise PatchError(+}
+{+                    f"reference {index}:+} require 1 <= from_line <= to_line")
+        ref = Reference(sha.strip(), from_line,
+                        _optional_col(raw, "from_col", index),
+                        to_line, _optional_col(raw, "to_col", index), new_text)
+@@ -338,9 +369,13 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
+            raise PatchError(
+                f"{op.path} reference {number}: that digest was issued for "
+                f"{record['path']!r}")
+        if ref.from_line {+is None:+}
+{+            from_line, to_line = record["start_line"], record["end_line"]+}
+{+        else:+}
+{+            from_line, to_line = ref.from_line, ref.to_line+}
+{+        if from_line+} < record["start_line"] or [-ref.to_line-]{+to_line+} > record["end_line"]:
+            raise PatchError(
+                f"{op.path} reference {number}: lines [-{ref.from_line}-{ref.to_line}-]{+{from_line}-{to_line}+} "
+                f"fall outside the cited window {record['start_line']}-"
+                f"{record['end_line']}; cite the window that contains them")
+        generation = record.get("generation")
+@@ -350,9 +385,9 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
+            and citations.chain_intact(run_id, op.path, generation,
+                                       record.get("file_sha", ""), current_sha))
+        if translatable:
+            local_from = _window_offset(op, number, record, [-ref.from_line,-]{+from_line,+}
+                                        ref.from_col, "from")
+            local_to = _window_offset(op, number, record, [-ref.to_line,-]{+to_line,+}
+                                      ref.to_col, "to")
+            start = citations.remap(run_id, op.path, generation,
+                                    window_start + local_from)
+@@ -360,13 +395,13 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
+                                  window_start + local_to)
+            if start is None or end is None:
+                raise PatchError(
+                    f"{op.path} reference {number}: lines [-{ref.from_line}-"-]
+[-                    f"{ref.to_line}-]{+{from_line}-"+}
+{+                    f"{to_line}+} were themselves replaced by an earlier "
+                    "edit in this run; reread that range and cite the new digest")
+            if joined[start:end] != record["text"][local_from:local_to]:
+                raise PatchError(
+                    f"{op.path} reference {number}: lines [-{ref.from_line}-"-]
+[-                    f"{ref.to_line}-]{+{from_line}-"+}
+{+                    f"{to_line}+} changed since the digest was issued; "
+                    "reread the range and cite the new digest")
+        else:
+            window = "\n".join(original[record["start_line"] - 1:record["end_line"]])
+@@ -375,15 +410,16 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
+                    f"{op.path} reference {number}: lines {record['start_line']}-"
+                    f"{record['end_line']} changed since the digest was issued; "
+                    "reread the range and cite the new digest")
+            start = [-_offset(ref.from_line,-]{+_offset(from_line,+} ref.from_col, "from")
+            end = [-_offset(ref.to_line,-]{+_offset(to_line,+} ref.to_col, "to")
+        if end < start:
+            raise PatchError(f"{op.path} reference {number}: end precedes start")
+        resolved.append((start, end, ref.new_text.replace("\r\n", "\n"),
+                         [-ref))-]{+from_line, to_line))+}
+    resolved.sort(key=lambda item: (item[0], item[1]))
+    cursor = 0
+    pieces: list[str] = []
+    for number, (start, end, new_text, [-ref)-]{+from_line, to_line)+} in enumerate(resolved, 1):
+        if start < cursor:
+            raise PatchError(
+                f"{op.path} reference {number}: overlaps an earlier reference; "
+@@ -397,7 +433,7 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
+            was = joined[start:end]
+            echo.append({
+                "file": op.path,
+                "from_line": [-ref.from_line,-]{+from_line,+} "to_line": [-ref.to_line,-]{+to_line,+}
+                "replaced_chars": len(was),
+                "replaced": (was if len(was) <= MAX_ECHO_CHARS
+                             else was[:MAX_ECHO_CHARS] + "…"),
+diff --git a/src/skillflow/tools/apply_patch/tool.yaml b/src/skillflow/tools/apply_patch/tool.yaml
+index 0c047bb..5a2ff55 100644
+--- a/src/skillflow/tools/apply_patch/tool.yaml
++++ b/src/skillflow/tools/apply_patch/tool.yaml
+@@ -12,17 +12,29 @@ description: |
+  read sent you. Quote it back and supply ONLY the new text; the engine does
+  the copying. You never retype the original, so you never have to wonder
+  whether your copy of it is still accurate.
+  {+Address the edit with the fewest numbers that say what you mean; every+}
+{+  number you leave out is taken from the citation, not counted by you:+}
+{+    Replace exactly what that read served — no line or column numbers:+}
+      references: [{"file": "src/a.py", "sha": "<the sha that read returned>",
+                    {+"new_text": "    return 2"}]+}
+{+    Replace whole lines L..M inside a wider window — the line numbers the read+}
+{+    printed in its margin, still no columns:+}
+{+      references: [{"file": "src/a.py", "sha": "<sha>",+} "from_line": 120,[-"from_col": 0,-]
+                    "to_line": 123,[-"to_col": 18,-] "new_text": "    return 2"}]
+    {+Cut INSIDE a line — only then add columns:+}
+{+      references: [{"file": "src/a.py", "sha": "<sha>", "from_line": 120,+}
+{+                    "from_col": 11, "to_line": 120, "to_col": 12,+}
+{+                    "new_text": "7"}]+}
+  Lines are 1-based and must lie inside the cited window; [-columns-]{+give both or+}
+{+  neither. Columns+} are 0-based character [-offsets and-]{+offsets,+} `to_col`[-is-] exclusive,[-so (L,0)..(M,len(line M)) means-]
+[-  "replace lines L..M"-] and {+are+}
+{+  honoured exactly as written: a column one short of the line's end keeps the+}
+{+  line's last character. So to replace a whole line, omit the columns rather+}
+{+  than counting them;+} from == to inserts at a point. {+The result's `replaced`+}
+{+  says what each reference took out.+} Order does not matter and you never
+  compensate for line drift: every range in one call is resolved against the
+  same snapshot and the engine applies them. Ranges must not overlap. [-Change one word by citing-]{+To+}
+{+  change+} one {+line, read or cite just that+} line — a reference is a hunk, not a
+  file rewrite.
+  A sha this run's `read` did not issue is refused, and so is a cited window
+  whose text has changed since: reread the range and cite the new sha. There
+  is no fuzzy matching and no partial write.
+@@ -67,7 +79,8 @@ parameters:
+    type: array
+    required: false
+    description: >
+      Reference hunks. Each is {file, sha, [-from_line, from_col, to_line, to_col, new_text}-]{+new_text}, optionally narrowed by+}
+{+      from_line/to_line (whole lines) and then from_col/to_col (a cut inside a+}
+{+      line),+} and carries no original text — the sha, issued by this run's
+      read, is what identifies [-it.-]{+it; with no lines it replaces the whole cited+}
+{+      window.+} Any order; the engine resolves them against one snapshot.
+diff --git a/tests/test_the_coordinates_come_from_the_read.py b/tests/test_the_coordinates_come_from_the_read.py
+new file mode 100644
+index 0000000..f72c610
+--- /dev/null
++++ b/tests/test_the_coordinates_come_from_the_read.py
+@@ -0,0 +1,292 @@
+{+"""The range written is the range read: no coordinate the caller had to count.+}
+
+{+A copied original is a checksum. The director measured it on 2026-09-21+}
+{+(`~/.AItelier/director/reports/tocol-redundancy/`, skillflow 1.5.78): a V4A+}
+{+hunk whose original is miscopied by one character is refused 4 times out of 4,+}
+{+while a reference whose `to_col` is one short writes `DEFAULT_TIMEOUT_SECONDS =+}
+{+450` and reports success. 27 and 28 are both legal columns in a 28-character+}
+{+line, so no check the engine runs on the number can tell them apart.+}
+
+{+It happened on the only real trial. Host run eac7cacb (trace ids 17 -> 22 -> 24)+}
+{+cited the right sha on its first try and asked for line 1679 columns 0..27; the+}
+{+line is 28 characters long. It noticed on turn 4, spent turns 5-9 counting, and+}
+{+fixed it on turn 7 by abandoning references for a V4A retype (id 48).+}
+
+{+The fix here is not a check on the number. It is a form of the edit that has no+}
+{+number in it: a reference that carries only {file, sha, new_text} replaces the+}
+{+whole window the citation was issued for, and one that names lines without+}
+{+columns replaces those whole lines. The caller's belief about how long a line+}
+{+is has no field to travel in, and the text replaced is the text the read showed+}
+{+it, re-checked by sha. Explicit columns still cut inside a line exactly as+}
+{+written; that is the narrowed form, and it stays.+}
+{+"""+}
+{+import hashlib+}
+{+import shutil+}
+{+from pathlib import Path+}
+
+{+import pytest+}
+
+{+from skillflow import citations+}
+{+from skillflow.read_tools import unified_read+}
+{+from skillflow.strict_patch import PatchError, apply_code_patch, parse_references+}
+
+{+RUN = "run-coordinates-from-the-read"+}
+{+LINE = "DEFAULT_TIMEOUT_SECONDS = 30"+}
+{+WANT = "DEFAULT_TIMEOUT_SECONDS = 45"+}
+{+FILE = "app/settings.py"+}
+{+# The director's probe body, byte for byte.+}
+{+BODY = "import os\n\n%s\n\nDEBUG = False\n" % LINE+}
+{+FIXTURE = Path(__file__).parent / "fixtures" / "eac7cacb_app_settings.py.txt"+}
+{+# /tmp/refmode-3r_9rvh9/repo at HEAD 1674e5f, app/settings.py: the exact file+}
+{+# host run eac7cacb edited.+}
+{+FIXTURE_SHA256 = "036440eb37d4428cd72f43650cdb1750abdddd86f67b026610afa941fdac0ffe"+}
+
+
+{+def smap_for(root):+}
+{+    return {"working_tree": [("repo", str(root))], "named": {}, "allowed": set()}+}
+
+
+{+def read(root, **kw):+}
+{+    return unified_read(smap_for(root), FILE, run_id=RUN, **kw)+}
+
+
+{+def apply(root, references):+}
+{+    return apply_code_patch("", root, references=references, run_id=RUN)+}
+
+
+{+@pytest.fixture+}
+{+def repo(tmp_path):+}
+{+    (tmp_path / "app").mkdir()+}
+{+    (tmp_path / FILE).write_text(BODY)+}
+{+    citations.forget_run(RUN)+}
+{+    yield tmp_path+}
+{+    citations.forget_run(RUN)+}
+
+
+{+@pytest.fixture+}
+{+def eac7cacb(tmp_path):+}
+{+    assert hashlib.sha256(FIXTURE.read_bytes()).hexdigest() == FIXTURE_SHA256+}
+{+    (tmp_path / "app").mkdir()+}
+{+    shutil.copyfile(FIXTURE, tmp_path / FILE)+}
+{+    citations.forget_run(RUN)+}
+{+    yield tmp_path+}
+{+    citations.forget_run(RUN)+}
+
+
+{+# ===========================================================================+}
+{+# replace-what-was-read-without-naming-a-column+}
+{+# ===========================================================================+}
+
+{+def test_citing_the_sha_alone_replaces_the_line_that_was_read(repo):+}
+{+    """Pole 1: the real shape, and not one column computed anywhere."""+}
+{+    served = read(repo, start_line=2, end_line=3)+}
+{+    assert served["content"] == "3\t" + LINE+}
+{+    cite = served["citation"]+}
+{+    assert (cite["start_line"], cite["end_line"]) == (3, 3)+}
+{+    ref = {"file": FILE, "sha": cite["sha"], "new_text": WANT}+}
+{+    assert set(ref) == {"file", "sha", "new_text"}+}
+{+    got = apply(repo, [ref])+}
+{+    assert got["applied"] is True, got+}
+{+    assert (repo / FILE).read_bytes() == (+}
+{+        b"import os\n\nDEFAULT_TIMEOUT_SECONDS = 45\n\nDEBUG = False\n")+}
+{+    assert got["replaced"] == [{"file": FILE, "from_line": 3, "to_line": 3,+}
+{+                                "replaced_chars": 28, "replaced": LINE}]+}
+
+
+{+def test_a_narrowed_sub_range_is_still_honoured_as_written(repo):+}
+{+    """Pole 2: adding the whole-window form must not take away the cut.+}
+
+{+    Same file, same intent, two narrower writings: whole lines inside a wider+}
+{+    window, and a column cut inside the line. Both land the same bytes.+}
+{+    """+}
+{+    want = b"import os\n\nDEFAULT_TIMEOUT_SECONDS = 45\n\nDEBUG = False\n"+}
+
+{+    cite = read(repo)["citation"]+}
+{+    assert (cite["start_line"], cite["end_line"]) == (1, 5)+}
+{+    lines = apply(repo, [{"file": FILE, "sha": cite["sha"], "from_line": 3,+}
+{+                          "to_line": 3, "new_text": WANT}])+}
+{+    assert lines["applied"] is True, lines+}
+{+    assert (repo / FILE).read_bytes() == want+}
+
+{+    (repo / FILE).write_text(BODY)+}
+{+    citations.forget_run(RUN)+}
+{+    cite = read(repo)["citation"]+}
+{+    cut = apply(repo, [{"file": FILE, "sha": cite["sha"], "from_line": 3,+}
+{+                        "from_col": 26, "to_line": 3, "to_col": 28,+}
+{+                        "new_text": "45"}])+}
+{+    assert cut["applied"] is True, cut+}
+{+    assert (repo / FILE).read_bytes() == want+}
+{+    assert cut["replaced"][0]["replaced"] == "30"+}
+
+
+{+def test_the_whole_window_is_exactly_the_window_and_nothing_either_side(repo):+}
+{+    """A multi-line window: what was served goes, its neighbours stay."""+}
+{+    cite = read(repo, start_line=1, end_line=4)["citation"]+}
+{+    assert (cite["start_line"], cite["end_line"]) == (2, 4)+}
+{+    got = apply(repo, [{"file": FILE, "sha": cite["sha"], "new_text": "X"}])+}
+{+    assert got["applied"] is True, got+}
+{+    assert (repo / FILE).read_bytes() == b"import os\nX\nDEBUG = False\n"+}
+{+    assert got["replaced"][0]["from_line"] == 2+}
+{+    assert got["replaced"][0]["to_line"] == 4+}
+{+    assert got["replaced"][0]["replaced"] == "\n" + LINE + "\n"+}
+
+
+{+def test_a_whole_window_survives_an_edit_elsewhere_in_the_file(repo):+}
+{+    """The frozen frame applies to the column-free form too: an earlier write+}
+{+    OUTSIDE the window moves the window's offsets, and the citation still+}
+{+    lands on the text it was issued for."""+}
+{+    whole = read(repo)["citation"]+}
+{+    line3 = read(repo, start_line=2, end_line=3)["citation"]+}
+{+    first = apply(repo, [{"file": FILE, "sha": whole["sha"], "from_line": 1,+}
+{+                          "to_line": 1, "new_text": "import os, sys  # grew"}])+}
+{+    assert first["applied"] is True, first+}
+{+    second = apply(repo, [{"file": FILE, "sha": line3["sha"], "new_text": WANT}])+}
+{+    assert second["applied"] is True, second+}
+{+    assert (repo / FILE).read_text() == (+}
+{+        "import os, sys  # grew\n\n" + WANT + "\n\nDEBUG = False\n")+}
+
+
+{+def test_a_whole_window_whose_text_changed_is_refused_not_overwritten(repo):+}
+{+    """The column-free form must not become a blind overwrite. A window this+}
+{+    run already edited inside is no longer the text the caller was shown."""+}
+{+    window = read(repo, start_line=1, end_line=4)["citation"]+}
+{+    line3 = read(repo, start_line=2, end_line=3)["citation"]+}
+{+    assert apply(repo, [{"file": FILE, "sha": line3["sha"],+}
+{+                         "new_text": WANT}])["applied"] is True+}
+{+    after = (repo / FILE).read_bytes()+}
+{+    got = apply(repo, [{"file": FILE, "sha": window["sha"], "new_text": "X"}])+}
+{+    assert got["applied"] is False+}
+{+    assert "2-4" in got["error"]+}
+{+    assert got["written"] == [] and got["partial"] is False+}
+{+    assert (repo / FILE).read_bytes() == after+}
+
+{+    # And a write from outside the engine to the cited line is refused too.+}
+{+    fresh = read(repo, start_line=0, end_line=1)["citation"]+}
+{+    outside = (repo / FILE).read_text().replace("import os", "import sys")+}
+{+    (repo / FILE).write_text(outside)+}
+{+    got = apply(repo, [{"file": FILE, "sha": fresh["sha"], "new_text": "Y"}])+}
+{+    assert got["applied"] is False+}
+{+    assert "changed since the digest was issued" in got["error"]+}
+{+    assert (repo / FILE).read_text() == outside+}
+
+
+{+@pytest.mark.parametrize("partial,message", [+}
+{+    ({"from_line": 3}, "give both from_line and to_line"),+}
+{+    ({"to_line": 3}, "give both from_line and to_line"),+}
+{+    ({"to_col": 27}, "from_col/to_col need from_line and to_line"),+}
+{+    ({"from_col": 0}, "from_col/to_col need from_line and to_line"),+}
+{+])+}
+{+def test_half_a_range_is_refused_rather_than_completed_by_guess(repo, partial,+}
+{+                                                                message):+}
+{+    cite = read(repo)["citation"]+}
+{+    with pytest.raises(PatchError, match=message):+}
+{+        parse_references([{"file": FILE, "sha": cite["sha"],+}
+{+                           "new_text": WANT, **partial}])+}
+{+    got = apply(repo, [{"file": FILE, "sha": cite["sha"], "new_text": WANT,+}
+{+                        **partial}])+}
+{+    assert got["applied"] is False and message in got["error"]+}
+{+    assert (repo / FILE).read_text() == BODY+}
+
+
+{+def test_the_sha_is_still_required_and_still_checked(repo):+}
+{+    read(repo)+}
+{+    with pytest.raises(PatchError, match=r"missing field\(s\) \['sha'\]"):+}
+{+        parse_references([{"file": FILE, "new_text": WANT}])+}
+{+    got = apply(repo, [{"file": FILE, "sha": "0" * 40, "new_text": WANT}])+}
+{+    assert got["applied"] is False and "never issued" in got["error"]+}
+{+    assert (repo / FILE).read_text() == BODY+}
+
+
+{+# ===========================================================================+}
+{+# a-mis-specified-range-cannot-write-silently+}
+{+# ===========================================================================+}
+
+{+def _probe_citation():+}
+{+    """The director's probe issues its citation this way (strict path)."""+}
+{+    lines = BODY.splitlines()+}
+{+    return citations.issue(RUN, path=FILE, source="code", start_line=1,+}
+{+                           end_line=len(lines), start_byte=0,+}
+{+                           end_byte=len(BODY.encode()), text="\n".join(lines))+}
+
+
+{+def test_the_len_minus_one_belief_has_no_field_to_travel_in(repo):+}
+{+    """Pole 1. The caller that wrote to_col=27 believed the line was 27 long.+}
+{+    In the new writing that belief is not sent: the request is the sha of the+}
+{+    line the read served plus the new text, so `= 450` cannot be produced by+}
+{+    it — there is no number in it to be one short."""+}
+{+    served = read(repo, start_line=2, end_line=3)+}
+{+    ref = {"file": FILE, "sha": served["citation"]["sha"], "new_text": WANT}+}
+{+    assert not {"from_line", "to_line", "from_col", "to_col"} & set(ref)+}
+{+    got = apply(repo, [ref])+}
+{+    assert got["applied"] is True, got+}
+{+    written = (repo / FILE).read_text().splitlines()[2]+}
+{+    assert written == "DEFAULT_TIMEOUT_SECONDS = 45"+}
+{+    assert written != "DEFAULT_TIMEOUT_SECONDS = 450"+}
+
+
+{+def test_the_len_plus_one_error_is_still_loud_and_word_for_word(repo):+}
+{+    """Pole 2. The polarity that already refused keeps refusing, with the+}
+{+    message the director measured — not widened into an accept to make the+}
+{+    two directions look alike."""+}
+{+    cite = _probe_citation()+}
+{+    got = apply(repo, [{"file": FILE, "sha": cite["sha"], "from_line": 3,+}
+{+                        "from_col": 0, "to_line": 3, "to_col": len(LINE) + 1,+}
+{+                        "new_text": WANT}])+}
+{+    assert got["applied"] is False+}
+{+    assert ("to column 29 is past the end of line 3 (28 characters)"+}
+{+            in got["error"])+}
+{+    assert (repo / FILE).read_text() == BODY+}
+
+{+    # Through a real read (the translated path) the same refusal says which+}
+{+    # text it measured against.+}
+{+    citations.forget_run(RUN)+}
+{+    cite = read(repo)["citation"]+}
+{+    got = apply(repo, [{"file": FILE, "sha": cite["sha"], "from_line": 3,+}
+{+                        "from_col": 0, "to_line": 3, "to_col": 29,+}
+{+                        "new_text": WANT}])+}
+{+    assert got["applied"] is False+}
+{+    assert ("to column 29 is past the end of line 3 as the read served it "+}
+{+            "(28 characters)" in got["error"])+}
+{+    assert (repo / FILE).read_text() == BODY+}
+
+
+{+# ===========================================================================+}
+{+# prove-it-on-the-edit-that-actually-went-wrong+}
+{+# ===========================================================================+}
+
+{+def test_host_run_eac7cacb_replayed_writes_the_line_it_meant(eac7cacb):+}
+{+    """Same file (sha256 pinned above), same read (trace id 16: start_line+}
+{+    1674, end_line 1685), same line, same intent: the whole of line 1679+}
+{+    becomes `= 45`, and nothing else in the 49,447-byte file moves."""+}
+{+    original = (eac7cacb / FILE).read_bytes()+}
+{+    served = read(eac7cacb, start_line=1674, end_line=1685)+}
+{+    cite = served["citation"]+}
+{+    # The window the agent was served (trace id 17), reproduced.+}
+{+    assert (cite["start_line"], cite["end_line"]) == (1675, 1684)+}
+{+    assert (cite["start_byte"], cite["end_byte"]) == (49155, 49447)+}
+{+    assert cite["end_col"] == 19+}
+{+    assert "1679\t" + LINE in served["content"]+}
+
+{+    got = apply(eac7cacb, [{"file": FILE, "sha": cite["sha"], "from_line": 1679,+}
+{+                            "to_line": 1679, "new_text": WANT}])+}
+{+    assert got["applied"] is True, got+}
+{+    after = (eac7cacb / FILE).read_bytes()+}
+{+    assert after.decode().splitlines()[1678] == "DEFAULT_TIMEOUT_SECONDS = 45"+}
+{+    # The plan's own verification: otherwise byte-identical.+}
+{+    assert after == original.replace(b"\n" + LINE.encode() + b"\n",+}
+{+                                     b"\n" + WANT.encode() + b"\n")+}
+{+    assert original.count(LINE.encode()) == 1+}
+
+
+{+def test_host_run_eac7cacb_replayed_with_the_sha_alone(eac7cacb):+}
+{+    """The same edit with no number in the reference at all: read line 1679+}
+{+    (0-based args, as the read tool takes them), cite its sha, give the text."""+}
+{+    original = (eac7cacb / FILE).read_bytes()+}
+{+    served = read(eac7cacb, start_line=1678, end_line=1679)+}
+{+    assert served["content"] == "1679\t" + LINE+}
+{+    got = apply(eac7cacb, [{"file": FILE, "sha": served["citation"]["sha"],+}
+{+                            "new_text": WANT}])+}
+{+    assert got["applied"] is True, got+}
+{+    after = (eac7cacb / FILE).read_bytes()+}
+{+    assert after.decode().splitlines()[1678] == "DEFAULT_TIMEOUT_SECONDS = 45"+}
+{+    assert after == original.replace(LINE.encode(), WANT.encode())+}

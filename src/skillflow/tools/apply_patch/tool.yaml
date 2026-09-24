@@ -12,17 +12,29 @@ description: |
   read sent you. Quote it back and supply ONLY the new text; the engine does
   the copying. You never retype the original, so you never have to wonder
   whether your copy of it is still accurate.
-    references: [{"file": "src/a.py", "sha": "<the sha that read returned>",
-                  "from_line": 120, "from_col": 0,
-                  "to_line": 123, "to_col": 18,
-                  "new_text": "    return 2"}]
-  Lines are 1-based and must lie inside the cited window; columns are 0-based
-  character offsets and `to_col` is exclusive, so (L,0)..(M,len(line M)) means
-  "replace lines L..M" and from == to inserts at a point. Order does not
-  matter and you never compensate for line drift: every range in one call is
-  resolved against the same snapshot and the engine applies them. Ranges must
-  not overlap. Change one word by citing one line — a reference is a hunk, not
-  a file rewrite.
+  Address the edit with the fewest numbers that say what you mean; every
+  number you leave out is taken from the citation, not counted by you:
+    Replace exactly what that read served — no line or column numbers:
+      references: [{"file": "src/a.py", "sha": "<the sha that read returned>",
+                    "new_text": "    return 2"}]
+    Replace whole lines L..M inside a wider window — the line numbers the read
+    printed in its margin, still no columns:
+      references: [{"file": "src/a.py", "sha": "<sha>", "from_line": 120,
+                    "to_line": 123, "new_text": "    return 2"}]
+    Cut INSIDE a line — only then add columns:
+      references: [{"file": "src/a.py", "sha": "<sha>", "from_line": 120,
+                    "from_col": 11, "to_line": 120, "to_col": 12,
+                    "new_text": "7"}]
+  Lines are 1-based and must lie inside the cited window; give both or
+  neither. Columns are 0-based character offsets, `to_col` exclusive, and are
+  honoured exactly as written: a column one short of the line's end keeps the
+  line's last character. So to replace a whole line, omit the columns rather
+  than counting them; from == to inserts at a point. The result's `replaced`
+  says what each reference took out. Order does not matter and you never
+  compensate for line drift: every range in one call is resolved against the
+  same snapshot and the engine applies them. Ranges must not overlap. To
+  change one line, read or cite just that line — a reference is a hunk, not a
+  file rewrite.
   A sha this run's `read` did not issue is refused, and so is a cited window
   whose text has changed since: reread the range and cite the new sha. There
   is no fuzzy matching and no partial write.
@@ -67,7 +79,8 @@ parameters:
     type: array
     required: false
     description: >
-      Reference hunks. Each is
-      {file, sha, from_line, from_col, to_line, to_col, new_text} and carries
-      no original text — the sha, issued by this run's read, is what identifies
-      it. Any order; the engine resolves them against one snapshot.
+      Reference hunks. Each is {file, sha, new_text}, optionally narrowed by
+      from_line/to_line (whole lines) and then from_col/to_col (a cut inside a
+      line), and carries no original text — the sha, issued by this run's
+      read, is what identifies it; with no lines it replaces the whole cited
+      window. Any order; the engine resolves them against one snapshot.

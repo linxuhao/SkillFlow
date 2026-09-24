@@ -1,0 +1,21 @@
+TREE_HEAD=101da5c44e23aadbb0dcf3a423a0ac43286453bc DIRTY_PATHS=6
+da8027a350d9556e79d72ec8ab698ba5434cdcaedad3d65f92e23fe958858cf0  src/skillflow/strict_patch.py
+ae3f970353da500ad552fe63325c7b839eb9f67cc8a318df940c0c12e65714b2  src/skillflow/read_tools.py
+d5ed6c2e9de249255f99daee2c49bb38c8dcca208476a25ec4dfea3c6b3e8d13  src/skillflow/tools/apply_patch/tool.yaml
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
+PYTEST 9.1.1 ASYNCIO 1.4.0
+============================= test session starts ==============================
+platform linux -- Python 3.12.14, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/linxuhao/stepflow-coords-r1
+configfile: pyproject.toml
+plugins: anyio-4.15.1, asyncio-1.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 73 items
+
+tests/test_reference_hunks.py .............                              [ 17%]
+tests/test_strict_patch_parser.py ......................                 [ 47%]
+tests/test_output_targets.py ......................................      [100%]
+
+============================== 73 passed in 1.57s ==============================
+PYTEST_RC=0
+DOCKER_RC=0

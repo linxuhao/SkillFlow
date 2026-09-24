@@ -1,0 +1,218 @@
+TREE=101da5c44e23aadbb0dcf3a423a0ac43286453bc DIRTY=4
+IMPORT_PROOF /home/linxuhao/coords-r1-scratch/mutant2/src/skillflow/__init__.py
+F.FFFFFFFFF..F.......................................................... [ 72%]
+............................                                             [100%]
+=================================== FAILURES ===================================
+__________ test_citing_the_sha_alone_replaces_the_line_that_was_read ___________
+
+repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_citing_the_sha_alone_repl0')
+
+    def test_citing_the_sha_alone_replaces_the_line_that_was_read(repo):
+        """Pole 1: the real shape, and not one column computed anywhere."""
+        served = read(repo, start_line=2, end_line=3)
+        assert served["content"] == "3\t" + LINE
+        cite = served["citation"]
+        assert (cite["start_line"], cite["end_line"]) == (3, 3)
+        ref = {"file": FILE, "sha": cite["sha"], "new_text": WANT}
+        assert set(ref) == {"file", "sha", "new_text"}
+        got = apply(repo, [ref])
+>       assert got["applied"] is True, got
+E       AssertionError: {'error': "apply_patch preflight: reference 1: missing field(s) ['from_line', 'to_line']", 'phase': 'preflight', 'written': [], 'deleted': [], ...}
+E       assert False is True
+
+tests/test_the_coordinates_come_from_the_read.py:89: AssertionError
+_____ test_the_whole_window_is_exactly_the_window_and_nothing_either_side ______
+
+repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_the_whole_window_is_exact0')
+
+    def test_the_whole_window_is_exactly_the_window_and_nothing_either_side(repo):
+        """A multi-line window: what was served goes, its neighbours stay."""
+        cite = read(repo, start_line=1, end_line=4)["citation"]
+        assert (cite["start_line"], cite["end_line"]) == (2, 4)
+        got = apply(repo, [{"file": FILE, "sha": cite["sha"], "new_text": "X"}])
+>       assert got["applied"] is True, got
+E       AssertionError: {'error': "apply_patch preflight: reference 1: missing field(s) ['from_line', 'to_line']", 'phase': 'preflight', 'written': [], 'deleted': [], ...}
+E       assert False is True
+
+tests/test_the_coordinates_come_from_the_read.py:127: AssertionError
+__________ test_a_whole_window_survives_an_edit_elsewhere_in_the_file __________
+
+repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_whole_window_survives_a0')
+
+    def test_a_whole_window_survives_an_edit_elsewhere_in_the_file(repo):
+        """The frozen frame applies to the column-free form too: an earlier write
+        OUTSIDE the window moves the window's offsets, and the citation still
+        lands on the text it was issued for."""
+        whole = read(repo)["citation"]
+        line3 = read(repo, start_line=2, end_line=3)["citation"]
+        first = apply(repo, [{"file": FILE, "sha": whole["sha"], "from_line": 1,
+                              "to_line": 1, "new_text": "import os, sys  # grew"}])
+        assert first["applied"] is True, first
+        second = apply(repo, [{"file": FILE, "sha": line3["sha"], "new_text": WANT}])
+>       assert second["applied"] is True, second
+E       AssertionError: {'error': "apply_patch preflight: reference 1: missing field(s) ['from_line', 'to_line']", 'phase': 'preflight', 'written': [], 'deleted': [], ...}
+E       assert False is True
+
+tests/test_the_coordinates_come_from_the_read.py:144: AssertionError
+______ test_a_whole_window_whose_text_changed_is_refused_not_overwritten _______
+
+repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_whole_window_whose_text0')
+
+    def test_a_whole_window_whose_text_changed_is_refused_not_overwritten(repo):
+        """The column-free form must not become a blind overwrite. A window this
+        run already edited inside is no longer the text the caller was shown."""
+        window = read(repo, start_line=1, end_line=4)["citation"]
+        line3 = read(repo, start_line=2, end_line=3)["citation"]
+>       assert apply(repo, [{"file": FILE, "sha": line3["sha"],
+                             "new_text": WANT}])["applied"] is True
+E       assert False is True
+
+tests/test_the_coordinates_come_from_the_read.py:154: AssertionError
+_ test_half_a_range_is_refused_rather_than_completed_by_guess[partial0-give both from_line and to_line] _
+
+repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_half_a_range_is_refused_r0')
+partial = {'from_line': 3}, message = 'give both from_line and to_line'
+
+    @pytest.mark.parametrize("partial,message", [
+        ({"from_line": 3}, "give both from_line and to_line"),
+        ({"to_line": 3}, "give both from_line and to_line"),
+        ({"to_col": 27}, "from_col/to_col need from_line and to_line"),
+        ({"from_col": 0}, "from_col/to_col need from_line and to_line"),
+    ])
+    def test_half_a_range_is_refused_rather_than_completed_by_guess(repo, partial,
+                                                                    message):
+        cite = read(repo)["citation"]
+>       with pytest.raises(PatchError, match=message):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'give both from_line and to_line'
+E         Actual message: "reference 1: missing field(s) ['to_line']"
+
+tests/test_the_coordinates_come_from_the_read.py:182: AssertionError
+_ test_half_a_range_is_refused_rather_than_completed_by_guess[partial1-give both from_line and to_line] _
+
+repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_half_a_range_is_refused_r1')
+partial = {'to_line': 3}, message = 'give both from_line and to_line'
+
+    @pytest.mark.parametrize("partial,message", [
+        ({"from_line": 3}, "give both from_line and to_line"),
+        ({"to_line": 3}, "give both from_line and to_line"),
+        ({"to_col": 27}, "from_col/to_col need from_line and to_line"),
+        ({"from_col": 0}, "from_col/to_col need from_line and to_line"),
+    ])
+    def test_half_a_range_is_refused_rather_than_completed_by_guess(repo, partial,
+                                                                    message):
+        cite = read(repo)["citation"]
+>       with pytest.raises(PatchError, match=message):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'give both from_line and to_line'
+E         Actual message: "reference 1: missing field(s) ['from_line']"
+
+tests/test_the_coordinates_come_from_the_read.py:182: AssertionError
+_ test_half_a_range_is_refused_rather_than_completed_by_guess[partial2-from_col/to_col need from_line and to_line] _
+
+repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_half_a_range_is_refused_r2')
+partial = {'to_col': 27}, message = 'from_col/to_col need from_line and to_line'
+
+    @pytest.mark.parametrize("partial,message", [
+        ({"from_line": 3}, "give both from_line and to_line"),
+        ({"to_line": 3}, "give both from_line and to_line"),
+        ({"to_col": 27}, "from_col/to_col need from_line and to_line"),
+        ({"from_col": 0}, "from_col/to_col need from_line and to_line"),
+    ])
+    def test_half_a_range_is_refused_rather_than_completed_by_guess(repo, partial,
+                                                                    message):
+        cite = read(repo)["citation"]
+>       with pytest.raises(PatchError, match=message):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'from_col/to_col need from_line and to_line'
+E         Actual message: "reference 1: missing field(s) ['from_line', 'to_line']"
+
+tests/test_the_coordinates_come_from_the_read.py:182: AssertionError
+_ test_half_a_range_is_refused_rather_than_completed_by_guess[partial3-from_col/to_col need from_line and to_line] _
+
+repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_half_a_range_is_refused_r3')
+partial = {'from_col': 0}
+message = 'from_col/to_col need from_line and to_line'
+
+    @pytest.mark.parametrize("partial,message", [
+        ({"from_line": 3}, "give both from_line and to_line"),
+        ({"to_line": 3}, "give both from_line and to_line"),
+        ({"to_col": 27}, "from_col/to_col need from_line and to_line"),
+        ({"from_col": 0}, "from_col/to_col need from_line and to_line"),
+    ])
+    def test_half_a_range_is_refused_rather_than_completed_by_guess(repo, partial,
+                                                                    message):
+        cite = read(repo)["citation"]
+>       with pytest.raises(PatchError, match=message):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: 'from_col/to_col need from_line and to_line'
+E         Actual message: "reference 1: missing field(s) ['from_line', 'to_line']"
+
+tests/test_the_coordinates_come_from_the_read.py:182: AssertionError
+_______________ test_the_sha_is_still_required_and_still_checked _______________
+
+repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_the_sha_is_still_required0')
+
+    def test_the_sha_is_still_required_and_still_checked(repo):
+        read(repo)
+>       with pytest.raises(PatchError, match=r"missing field\(s\) \['sha'\]"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: Regex pattern did not match.
+E         Expected regex: "missing field\\(s\\) \\['sha'\\]"
+E         Actual message: "reference 1: missing field(s) ['from_line', 'sha', 'to_line']"
+
+tests/test_the_coordinates_come_from_the_read.py:193: AssertionError
+___________ test_the_len_minus_one_belief_has_no_field_to_travel_in ____________
+
+repo = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_the_len_minus_one_belief_0')
+
+    def test_the_len_minus_one_belief_has_no_field_to_travel_in(repo):
+        """Pole 1. The caller that wrote to_col=27 believed the line was 27 long.
+        In the new writing that belief is not sent: the request is the sha of the
+        line the read served plus the new text, so `= 450` cannot be produced by
+        it — there is no number in it to be one short."""
+        served = read(repo, start_line=2, end_line=3)
+        ref = {"file": FILE, "sha": served["citation"]["sha"], "new_text": WANT}
+        assert not {"from_line", "to_line", "from_col", "to_col"} & set(ref)
+        got = apply(repo, [ref])
+>       assert got["applied"] is True, got
+E       AssertionError: {'error': "apply_patch preflight: reference 1: missing field(s) ['from_line', 'to_line']", 'phase': 'preflight', 'written': [], 'deleted': [], ...}
+E       assert False is True
+
+tests/test_the_coordinates_come_from_the_read.py:221: AssertionError
+______________ test_host_run_eac7cacb_replayed_with_the_sha_alone ______________
+
+eac7cacb = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_host_run_eac7cacb_replaye1')
+
+    def test_host_run_eac7cacb_replayed_with_the_sha_alone(eac7cacb):
+        """The same edit with no number in the reference at all: read line 1679
+        (0-based args, as the read tool takes them), cite its sha, give the text."""
+        original = (eac7cacb / FILE).read_bytes()
+        served = read(eac7cacb, start_line=1678, end_line=1679)
+        assert served["content"] == "1679\t" + LINE
+        got = apply(eac7cacb, [{"file": FILE, "sha": served["citation"]["sha"],
+                                "new_text": WANT}])
+>       assert got["applied"] is True, got
+E       AssertionError: {'error': "apply_patch preflight: reference 1: missing field(s) ['from_line', 'to_line']", 'phase': 'preflight', 'written': [], 'deleted': [], ...}
+E       assert False is True
+
+tests/test_the_coordinates_come_from_the_read.py:289: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_the_coordinates_come_from_the_read.py::test_citing_the_sha_alone_replaces_the_line_that_was_read
+FAILED tests/test_the_coordinates_come_from_the_read.py::test_the_whole_window_is_exactly_the_window_and_nothing_either_side
+FAILED tests/test_the_coordinates_come_from_the_read.py::test_a_whole_window_survives_an_edit_elsewhere_in_the_file
+FAILED tests/test_the_coordinates_come_from_the_read.py::test_a_whole_window_whose_text_changed_is_refused_not_overwritten
+FAILED tests/test_the_coordinates_come_from_the_read.py::test_half_a_range_is_refused_rather_than_completed_by_guess[partial0-give both from_line and to_line]
+FAILED tests/test_the_coordinates_come_from_the_read.py::test_half_a_range_is_refused_rather_than_completed_by_guess[partial1-give both from_line and to_line]
+FAILED tests/test_the_coordinates_come_from_the_read.py::test_half_a_range_is_refused_rather_than_completed_by_guess[partial2-from_col/to_col need from_line and to_line]
+FAILED tests/test_the_coordinates_come_from_the_read.py::test_half_a_range_is_refused_rather_than_completed_by_guess[partial3-from_col/to_col need from_line and to_line]
+FAILED tests/test_the_coordinates_come_from_the_read.py::test_the_sha_is_still_required_and_still_checked
+FAILED tests/test_the_coordinates_come_from_the_read.py::test_the_len_minus_one_belief_has_no_field_to_travel_in
+FAILED tests/test_the_coordinates_come_from_the_read.py::test_host_run_eac7cacb_replayed_with_the_sha_alone
+11 failed, 89 passed in 1.92s
+PYTEST_RC=1
+DOCKER_RC=1

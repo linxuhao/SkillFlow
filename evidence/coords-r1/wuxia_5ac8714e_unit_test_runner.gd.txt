@@ -1,0 +1,405 @@
+## Static unit-test collector for the Godot test gate.
+##
+## Run from the repo root (project autoloads are loaded by -s mode; this runner
+## calls into none of them, but it does wait one frame for their deferred
+## bootstrap to flush before the first suite runs — see _run()):
+##   godot --headless --path . -s res://tests/unit_test_runner.gd
+##
+## Contract of every collected file: a top-level `static func run() -> bool`
+## that push_error()s on failure and returns true iff all checks passed.
+## The SceneTree-style integration tests (test_save_manager.gd,
+## test_game_manager_fsm.gd, test_coop_lan_entry_reconnect.gd) are NOT collected
+## here — each is driven by its own `-s` invocation, because they need a full
+## deferred SceneTree lifecycle and their own quit() exit codes. The coop one
+## waits on frames for a queue_free() to land, which a synchronous collector
+## cannot do:
+##   godot --headless --path . -s res://tests/test_coop_lan_entry_reconnect.gd
+##
+## Suites that measure RENDERED geometry are not in TESTS: they are listed in
+## RENDER_REQUIRED, executed by the render gate (see that constant), and this
+## runner reports them as unjudged rather than passed or skipped.
+##
+## Load order is the explicit TESTS registry below (deterministic, no
+## reflection/scanning). A file that fails to load, whose run() returns false,
+## or whose run() raises a runtime error (the call then yields null -> FAIL)
+## makes the whole gate exit 1.
+## This round appends the §3.B2 click-priority and Defect-C hover-preview
+## pins (test_click_priority.gd, test_trait_hover_preview.gd) to the registry.
+extends SceneTree
+
+const TESTS: Array[String] = [
+	"res://tests/test_battle_setup.gd",
+	"res://tests/test_card_data.gd",
+	"res://tests/test_click_priority.gd",
+	"res://tests/test_creation_info_texts.gd",
+	"res://tests/test_event_data.gd",
+	"res://tests/test_gongfa_cascade.gd",
+	"res://tests/test_growth_allocation.gd",
+	"res://tests/test_growth_allocation_slice.gd",
+	"res://tests/test_growth_coop_allocate.gd",
+	"res://tests/test_growth_profile_allocation.gd",
+	"res://tests/test_growth_storage.gd",
+	"res://tests/test_monthly_plan_journal_storage.gd",
+	"res://tests/test_appearance_profile_storage.gd",
+	# art.modular-shrimp rev 4 runtime half 2026-09-19: criterion 1 -- the composed
+	# part set survives a real save and a real reload, and the comparison names the
+	# slot that was swapped (both poles). Criterion 3 -- the same part set,
+	# engine-resolved relative anchor and z order render in the portrait and
+	# tactical paths, with a one-path change reported by part and path (both poles).
+	# Geometry and bytes only: no visual acceptance is claimed by either suite.
+	"res://tests/test_appearance_composition_persistence.gd",
+	"res://tests/test_appearance_render_paths.gd",
+	"res://tests/test_profile_decoder_ownership.gd",
+	"res://tests/test_detached_save_candidate.gd",
+	"res://tests/test_save_envelope_missing_profile.gd",
+	"res://tests/test_monthly_training_step.gd",
+	"res://tests/test_monthly_training_commit.gd",
+	"res://tests/test_map_data.gd",
+	"res://tests/test_map_node_event.gd",
+	"res://tests/test_player_profile.gd",
+	"res://tests/test_progression_gongfa_data.gd",
+	# martial-arts contract rev 6: the authored-row read-back runs the real GDScript
+	# consumption in the engine gate (no Python mirror), asserting every written field
+	# takes its written value and every unwritten key takes the SkillData class default.
+	# content.martial-arts contract rev 7: the contract PACKAGE under
+	# contracts/content.martial-arts/ is a standalone Godot sub-project with its own
+	# run.gd, and the /script stage discovers res://tests/*.gd only — so its
+	# assertions ran nowhere and its 0/1/2 exit code had no reader. This suite loads
+	# the package's own fake.gd / profile.gd / vectors.json by res:// path and
+	# executes its conformance vectors and reverse control inside this gate: the
+	# contract is now judged by the gate that authorizes delivery. The unit count
+	# moves whenever this entry is dropped, so the wiring itself is observable.
+	"res://tests/test_content_martial_arts_contract_runtime.gd",
+	# martial-arts surface census rev 8: the card's prose carried four numbers (art ids,
+	# resolved ids, techniques, SkillData fields) that had only ever been quoted from an
+	# earlier round. This suite counts all four from the RUNNING product on every gate pass
+	# and prints them on the gate's stdout, so the delivery notes quote a measurement. No
+	# count is pinned to a literal; dropping this entry moves the gate's own unit count.
+	"res://tests/test_martial_arts_surface_census.gd",d",
+	"res://tests/test_authored_row_takes_written_values.gd",
+	"res://tests/test_qi_costs_match_design.gd",
+	"res://tests/test_skill_button_info.gd",
+	"res://tests/test_skill_button_no_energy.gd",
+	"res://tests/test_skill_button_states.gd",
+	"res://tests/test_settings_title_overlap.gd",
+	"res://tests/test_theme_font.gd",
+	"res://tests/test_trait_data.gd",
+	"res://tests/test_trait_effects.gd",
+	"res://tests/test_trait_hover_preview.gd",
+	"res://tests/test_visibility_probe_canvas_layer.gd",
+	"res://tests/test_facility_data.gd",
+	# touch-reach 2026-08-29: the map screen's click-delegate buttons
+	# (TravelButton{i} / EventOptionButton{i} / the three facility delegates)
+	# and the FacilityEnterButton guard mirror, proven handler-side.
+	"res://tests/test_map_facility_buttons.gd",
+	# roster 2026-08-30: pure _compose_body / resolver / read-only pins
+	# for the read-only roster panel (scripts/ui/roster_panel.gd).
+	"res://tests/test_roster_panel.gd",
+	# equipment 2026-08-31: the tier->effect formula module (EquipmentData)
+	# and the PlayerProfile.equipped slots (round-trip / hostile / validation).
+	"res://tests/test_equipment_data.gd",
+	"res://tests/test_player_profile_equipment.gd",
+	# equipment battle layer 2026-08-31: BattleSetup.derive_stats with gear
+	# bonuses (legacy equality, direction matrix, reversibility, build_character
+	# mirrors, tutorial-shape CharacterData defaults).
+	"res://tests/test_battle_setup_equipment.gd",
+	# map battle 2026-08-31: the huashan_duel roster module (MapBattleData) —
+	# exact five-greats roster, unknown-id fail-safe, position invariants.
+	"res://tests/test_map_battle_data.gd",
+	# R3 deeds schema 2026-09-01: PlayerProfile.deeds choice ledger (default
+	# zeros, round-trip, legacy repair, corrupted/negative coercion, JSON).
+	"res://tests/test_deeds_persistence.gd",
+	# R3 progression math 2026-09-01: the pure-static single numeric source
+	# (GRADE_POINTS / mastered_count / mastery_points / work_income /
+	# deed_score / readiness_power) — monotonicity + differential asserts only.
+	"res://tests/test_progression_math.gd",
+	# R3 action rebalance M1 2026-09-01: the per-action yield-curve instrument
+	# (36 seeded months × 5 strategies) — prints the yield table and asserts
+	# structural facts only (finite/non-negative, mastered-heavy work income >
+	# fresh, travel <= 36 events). Never balance literals.
+	"res://tests/test_action_yield_curves.gd",
+	# M2 fidelity 2026-09-05: the two month bodies the cultivation screen and
+	# the yield instrument now SHARE (EventLogic.apply_practice_month /
+	# resolve_event_month) — feeding-attribute ownership, target fallback, the
+	# no-target zero-charge caller contract, and the clamped travel deed.
+	"res://tests/test_practice_month_fidelity.gd",
+	# R3 fortune reroll 2026-09-01: the pure-static budget curve
+	# (fortune 0/5 -> 1, 10 -> 1, 20 -> 2, 30 -> 3; deep_fortune adds exactly 1).
+	"res://tests/test_fortune_budget.gd",
+	# R3 huashan winnable 2026-09-01: derive_stats mastery terms (mp==0 legacy,
+	# strict increase, texture preserved, gear additivity) + readiness verdict
+	# (single-source power, weak<even<strong band ordering).
+	"res://tests/test_battle_setup_readiness.gd",
+	# R3 ending logic 2026-09-01: the multi-axis EndingLogic.evaluate (shape,
+	# legacy-empty deeds, divergence, monotonicity) + MapData.ending_tier_score
+	# (row-order scan, floor 1, ending_tier removed — no dead dual path).
+	"res://tests/test_ending_logic.gd",
+	"res://tests/test_shelter_chain.gd",
+	# M2 chain 2 2026-09-05: the 封缄之托 state machine, calendar gates, the
+	# atomic delivery receipt, the defensive save coupling and the gorge
+	# encounter's pending/resolved lifecycle. Pure headless, zero rng.
+	"res://tests/test_seal_chain.gd",
+	# M2 chain 2 save-retry 2026-09-05: the bounded persistence retry — the
+	# transient gate spends no attempt, a persistent IO failure is capped and
+	# cadenced, the pending flag survives every failure, success clears once, and
+	# a profile boundary can never carry a retry into a new profile.
+	"res://tests/test_seal_persist_retry.gd",
+	# M1 prologue 2026-09-05: 「托壳之夜」 data shape (the ward is damageable and
+	# cannot act) + the derived damage arithmetic + the intercept rule as a pure
+	# predicate. The live wiring and the ward-death ordering need a SceneTree and
+	# live in tests/test_prologue.gd, which run_tests.sh drives with its own -s.
+	"res://tests/test_prologue_rules.gd",
+	# storage identity 2026-09-05: the one-time import of the two
+	# pre-rename user directories (scratch dirs only, no real save).
+	"res://tests/test_user_storage.gd",
+	# M1 visual foundation 2026-09-05: the missing-texture placeholder body
+	# (pure geometry + data — no font metrics, so `-s` judges it correctly).
+	"res://tests/test_enemy_placeholder_body.gd",
+	# M1 visual foundation, tidebreak round 2026-09-09: the prologue's three
+	# original-cast bodies are authored wider than the 64px tile, so the
+	# authored draw_height made them overlap adjacent tiles. This suite pins
+	# the fit-based scaling (aspect + foot anchor retained, one-tile fit),
+	# the still-working placeholder fallback, and the prologue-only scope
+	# (general enemies keep their authored draw_height).
+	"res://tests/test_prologue_body_readability.gd",
+	# M1 terrain atlas 2026-09-05: the 2x1 tile atlas really carries the floor
+	# and border art. Both blit_rect() calls used to abort natively on
+	# `format != p_src->format` (RGB8 tiles into an RGBA8 atlas) and the gate's
+	# GDScript error parser classifies no native error, so the transparent
+	# terrain shipped under a PASS. Pure image data, no rendered geometry.
+	"res://tests/test_terrain_atlas.gd",
+	# M1 backdrop fit 2026-09-05: the board fit crops the painting to the
+	# board aspect (Sprite2D.region_rect) and scales it by ONE factor, and
+	# board_aligned measures the VISIBLE cropped quad — the previous fit
+	# stretched each axis independently and the observable read true
+	# because of the stretch. Resource + transform data, no renderer.
+	"res://tests/test_backdrop_board_fit.gd",
+	# M2 map settlement 2026-09-05: the node-event settlement ledger is per-RUN
+	# and PERSISTED (PlayerProfile.settled_node_events). Pins the profile schema
+	# (round trip, legacy-empty migration, hostile data), the run isolation, and
+	# the end-to-end property through the real save/load path in a scratch
+	# user:// root: apply -> save -> load -> revisit pays nothing, while the
+	# same-session guard, the refusal (never settled) and the seen-bag channel
+	# are unchanged.
+	"res://tests/test_map_settlement_persistence.gd",
+	# co-op model 2026-09-05 (design/05_coop_prototype.md A): the isolated
+	# 1-4 player campaign/plan/month reducer. Model contracts only — it is
+	# wired to no entry point, save or battle, and a green run here is not
+	# evidence about four people playing.
+	"res://tests/test_damage_scale.gd",
+	"res://tests/test_training_bout.gd",
+	"res://tests/test_coop_campaign.gd",
+	"res://tests/test_coop_phase_rules.gd",
+	# co-op exterior 2026-09-06: movement, trader, equipment and the paid drill
+	# a teammate uses while somebody else holds a battle turn.
+	"res://tests/test_coop_exterior.gd",
+	# co-op interface 2026-09-05 (design/05_coop_prototype.md B): the read
+	# model and the single command path one player's interface uses. Headless
+	# — it says nothing about how the interface looks or about four players.
+	"res://tests/test_coop_view_model.gd",
+	# co-op interface, VIEW level 2026-09-05: the consent path the product
+	# uses runs through _render() and the button handlers, so it is driven
+	# here rather than through the view model alone. Built off-tree.
+	"res://tests/test_coop_player_view.gd",
+	# the exterior panel's own controls, driven through the real view.
+	"res://tests/test_coop_exterior_view.gd",
+	# co-op LAN C1 2026-09-05: the authority contracts a wire has to obey —
+	# one route into the campaign, admission, dedup, session establishment.
+	# Headless; it says nothing about whether two processes actually talked.
+	"res://tests/test_coop_lan_authority.gd",
+	# co-op LAN C1 wiring 2026-09-05: the half the authority suite cannot see —
+	# host-local moves through the authority, host receipts across a redraw,
+	# repeat admission, and the transport gates observed at the VIEW.
+	"res://tests/test_coop_lan_wiring.gd",
+	"res://tests/test_coop_entry_table.gd",
+	"res://tests/test_coop_lan_retry.gd",
+	# co-op observation seams 2026-09-06: the link's record of what it
+	# submitted (so a same-id retry is observed, not inferred), the rule that
+	# a command enters the dedup ledger only after its write lands, and the
+	# bounded one-shot delayed reply that makes an in-flight second press
+	# testable at all. Diagnostics only; debug builds only.
+	"res://tests/test_coop_observer_seams.gd",
+	# co-op receipt guidance 2026-09-06: the month's controls close while this
+	# seat has an unread result, and the reason now says so beside them.
+	"res://tests/test_coop_receipt_guidance.gd",
+	# co-op persistence 2026-09-06 (cards P1/P2/P5): the settlement ledger inside
+	# the checkpoint, the host envelope that keeps seat ownership and each seat's
+	# read watermark across a reopen, and the rule that a receipt is acknowledged
+	# one step at a time and only forwards. Model + service only — no transport,
+	# no interface, and nothing in the game saves or loads a table yet.
+	"res://tests/test_coop_persistence.gd",
+	# co-op persistence, product half 2026-09-06 (card P4 core): the durable path
+	# refused where it is SET, the first file landing before anything is
+	# advertised, one file per identity, the label, the continue list, a rule
+	# refusal told apart from a disk failure, and a client reusing its command id
+	# after a host that could not save. No window, no socket, no second process.
+	"res://tests/test_coop_persistence_product.gd",
+	# co-op retry, REAL CONTROLS 2026-09-06 (review F1/F2/F3): a second press
+	# while an answer is owed, the failure box bound to its own command, and a
+	# retry that will not re-send a consent on terms that moved. Real Buttons on
+	# a real CoopPlayerView through a link that holds its answers — a helper that
+	# called _can_command() could not see any of it.
+	"res://tests/test_coop_retry_controls.gd",
+	# co-op encounter adapter 2026-09-06: two independent encounters over the
+	# REAL combat entities — real player/enemy scenes, real GridManager board,
+	# every point of damage CombatManager's. It owns turn order, budgets, holds
+	# and the experimental first-arrival opportunity, and no combat arithmetic.
+	# P2 damage extraction: the pure rules, asked directly with no bodies.
+	"res://tests/test_combat_rules_pure.gd",
+	"res://tests/test_coop_encounter.gd",
+	"res://tests/test_coop_session_runtime.gd",
+	# growth.reward-ledger STORAGE slice 2026-09-09: the durable half of a solo
+	# reward credit — the envelope-owned receipt history beside growth_tx, the
+	# reward-only branch of the existing candidate writer (no invented
+	# allocation receipt, no seq bump), the damaged-history latch, the legacy
+	# empty-ledger migration and the injected write/publish/restore failures.
+	# Every credit in it is SUPPLIED BY THE TEST: no gameplay source produces
+	# one, no rate or eligibility is asserted, and a green run here is not
+	# evidence that a player can earn anything.
+	"res://tests/test_reward_storage.gd",
+	# solo campaign identity STORAGE slice 2026-09-10: the optional profile field
+	# {version:1, campaign_id:<32 lowercase hex>, actor_id:"solo"} - the real
+	# new_profile mint (two same-seed campaigns, two different ids, one identical
+	# seed/RNG/deck state), the fail-closed empty mint, the legacy absence that is
+	# never minted over on load/autosave/reload/copy, and the shared save and
+	# candidate validators refusing a present malformed identity before adoption.
+	# STORAGE ONLY: nothing binds this identity to a journal, a save-select entry,
+	# a migration or a co-op seat yet, and it is not authentication.
+	"res://tests/test_solo_campaign_identity.gd",
+	# solo monthly training-plan SEAL 2026-09-10: the durable first seal of a
+	# month plan - the editor contract validating a supplied draft against a
+	# supplied resolved edit policy, campaign/actor/month bound from the stored
+	# solo identity and the real calendar (never from the caller), deterministic
+	# per-slot action ids that exclude target/kind/revision, one commit through
+	# the shipped candidate writer, and an existing bound journal that RESUMES
+	# its cursor/receipts/pending instead of resealing. Refusals: legacy or
+	# malformed identity, wrong phase, wrong month/owner, unreadable journal,
+	# unsupported kinds (work/travel), and a forced atomic failure. Every policy
+	# in that suite is a PROVISIONAL FIXTURE: no slot count, rate or yield is
+	# approved here, and sealing a plan grants nothing.
+	"res://tests/test_monthly_plan_seal.gd",
+	"res://tests/test_month_barrier_no_downgrade_r5.gd",
+	# shared attribute conversion 2026-09-10: the ONE exact attribute-progress ->
+	# attribute-point projection and its composition by BOTH growth routes -
+	# directed training preparation and the raw-pool allocation path down to the
+	# real disk confirm. Named arithmetic vectors, the ramp/flat/linear shapes, an
+	# idempotent repeat, bulk (billion-point) arithmetic and bounded refusal that
+	# never truncates a grant, the trait/equipment independence of a permanent base
+	# attribute, one debit and one mint per confirm, a pin bound to the policy's
+	# CONTENTS, and a forced write failure that grants nothing live or on disk.
+	# Every policy in it is a CALLER-SUPPLIED FIXTURE: no exchange rate, ramp or
+	# threshold is approved here, and no production path resolves one yet.
+	"res://tests/test_growth_attribute_conversion.gd",
+	# monthly plan v2 2026-09-10: the EXPERIMENTAL multi-action month — the
+	# version-2 journal codec, the pilot policy's rate resolution, the work /
+	# travel / training slot boundaries over a real SaveManager, the ordinary-
+	# event growth mapping, and the month's own completion and calendar advance
+	# (12 / 24 / 36). The controller that mounts this loop is driven by its own
+	# `-s` suite, tests/test_cultivation_monthly_loop.gd, which is NOT collected
+	# here because it needs the full deferred SceneTree and its own quit() code.
+	"res://tests/test_monthly_plan_v2.gd",
+	"res://tests/test_facility_purchase.gd",
+	"res://tests/test_growth_training_kernel.gd",
+	"res://tests/test_growth_training_prep.gd",
+]
+
+## Suites whose assertions MEASURE RENDERED GEOMETRY (font metrics, laid-out
+## sizes). `-s` resolves the right theme and the right FontFile and then answers
+## Font.get_height() with a synthetic value — measured twice in this repo, at
+## two sizes, EXACTLY 3x the requested size both times: 27 at size 9 against 14
+## rendered (widget 39 vs 26 — director/reports/m0-fixture-runtime/delivery.md
+## §3) and 42 at size 14 against 22 rendered
+## (director/reports/m1-runtime-wave3/raw/arts-layout-2d4160b-script.json). A
+## real face is ~1.57x its size. hud.tscn cannot be instantiated under `-s` at
+## all. Two fixture attempts tried to reproduce the player's metrics here and
+## could not. The 3rd entry is the sect-screen text fit: run in script mode it
+## reported 13 failures on a tree the renderer draws correctly.
+##
+## They are therefore NOT executed in script mode and NOT counted as passed OR
+## as skipped-green: this runner has no verdict on them. RENDER_GATE_SCENARIO
+## executes their own run() inside a normally started game.
+const RENDER_REQUIRED: Array[String] = [
+	"res://tests/test_health_bar.gd",
+	"res://tests/test_health_bar_text.gd",
+	"res://tests/test_sect_select_text_fit.gd",
+]
+
+## The play-test scenario (and the scene it boots) that DOES judge them.
+const RENDER_GATE_SCENARIO: String = "rendered_health_suites"
+const RENDER_GATE_SCENE: String = "res://tests/rendered_health_gate.tscn"
+
+
+func _initialize() -> void:
+	# Deferred so the root tree and every autoload node exists. NOT sufficient on
+	# its own — see the frame wait at the top of _run().
+	call_deferred("_run")
+
+
+func _run() -> void:
+	# Autoload _ready() callbacks queue deferred work of their OWN. GameManager
+	# defers _connect_save_signals() (game_manager.gd:302) — the only site that
+	# connects SaveManager.profile_created / .loaded — because GameManager is
+	# registered before SaveManager (project.godot [autoload]). A lone
+	# call_deferred put _run in that same message-queue pass, so a suite could
+	# run while a run boundary still had no listener. Measured on 6d3345f
+	# (2026-09-05): SaveManager.new_profile() emitted profile_created with the
+	# handler unconnected and GameManager.facility_use_count_this_month stayed 2,
+	# carrying a previous suite's monthly-cap state into the next one.
+	# One await lets that flush drain first — the same idiom, for the same
+	# reason, as tests/test_encounter.gd:118-129. TESTS is untouched: this
+	# delays the start, it does not change what any suite asserts.
+	await process_frame
+	var passed := 0
+	var failed := 0
+	for path in TESTS:
+		var script: GDScript = load(path)
+		if script == null:
+			push_error("unit_test_runner: failed to load " + path)
+			print("FAIL " + path.get_file().get_basename())
+			failed += 1
+			continue
+		# Static func run() -> bool, invoked directly on the GDScript resource.
+		# If run() raises at runtime, Godot logs the error and the call yields
+		# null here, which is falsy -> counted as FAIL (exit 1).
+		var ok = script.run()
+		# Flush suite-owned queued frees before the next suite injects input.
+		await process_frame
+		if ok == true:
+			print("PASS " + path.get_file().get_basename())
+			passed += 1
+		else:
+			print("FAIL " + path.get_file().get_basename())
+	print("UNIT TESTS (script-executed): %d passed, %d failed" % [passed, failed])
+	# The martial-arts surface census, repeated in the runner's OWN tail. The census suite
+	# prints its numbers where it runs, mid-list, but a sidecar that keeps only the last
+	# 4000 bytes of a script's stdout would drop them; these lines sit after the unit count,
+	# so the four numbers are inside whatever window the gate records. No number is pinned:
+	# every one is read from the census suite's own derivations over the shipping product.
+	var census_script: GDScript = load("res://tests/test_martial_arts_surface_census.gd")
+	if census_script != null:
+		var counted: Dictionary = census_script.census()
+		var counted_fields: Array = census_script.skill_fields()
+		print("MARTIAL-ARTS SURFACE CENSUS (runner tail, recorded with the gate count)")
+		print("  art ids the ladder expresses ... %d" % (counted["ids"] as Array).size())
+		print("  ... resolved by the product ... %d" % (counted["resolved"] as Array).size())
+		print("  ... refused (null from art_by_id) %d" % (counted["refused"] as Array).size())
+		print("  techniques across those arts .. %d" % int(counted["techniques"]))
+		print("  arts with no techniques ...... %d" % (counted["empty"] as Array).size())
+		print("  SkillData fields (live class) . %d" % counted_fields.size())
+	else:
+		print("MARTIAL-ARTS SURFACE CENSUS: the census suite did not load")
+	# Named, not hidden: a reader of this log must be able to see that two suites
+	# were neither run nor judged here, and where their verdict comes from.
+	var pending: PackedStringArray = []
+	for path in RENDER_REQUIRED:
+		pending.append(path.get_file().get_basename())
+	print("RENDER-REQUIRED (not executed in script mode, NO verdict here): %s"
+			% ", ".join(pending))
+	print("  judged by play-test scenario %s (%s)"
+			% [RENDER_GATE_SCENARIO, RENDER_GATE_SCENE])
+	print("COMBINED VERIFICATION: INCOMPLETE from script mode alone — it needs "
+			+ "the render gate's result as well.")
+	# The exit code covers exactly what this runner executed. The render gate is
+	# a separate gate in run_tests.sh's play-test step; claiming its result here
+	# would be the green-over-absence this split exists to remove.
+	quit(0 if failed == 0 else 1)
