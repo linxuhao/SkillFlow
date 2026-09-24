@@ -1,0 +1,35 @@
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
+EDITS 78 PROBES 512 TRANSLATIONS_BOTH_FORMATS 1024
+WRONG_PLACE 0
+FALSE_REFUSALS 31
+  FALSE one-insert0-'x' ('window', 0) ['x'] lines 1-1 changed since the digest was issued; reread the ra
+  FALSE one-insert0-'' ('window', 0) ['x'] lines 1-1 changed since the digest was issued; reread the ra
+  FALSE one-insert0-'N' ('window', 0) ['x'] lines 1-1 changed since the digest was issued; reread the ra
+  FALSE two-insert0-'x' ('window', 0) ['x', 'x'] lines 1-1 changed since the digest was issued; reread the ra
+  FALSE two-insert0-'' ('window', 0) ['x', 'x'] lines 1-1 changed since the digest was issued; reread the ra
+  FALSE two-insert0-'N' ('window', 0) ['x', 'x'] lines 1-1 changed since the digest was issued; reread the ra
+  FALSE three-insert0-'x' ('window', 0) ['x', 'x', 'x'] lines 1-1 changed since the digest was issued; reread the ra
+  FALSE three-insert0-'' ('window', 0) ['x', 'x', 'x'] lines 1-1 changed since the digest was issued; reread the ra
+  FALSE three-insert0-'N' ('window', 0) ['x', 'x', 'x'] lines 1-1 changed since the digest was issued; reread the ra
+  FALSE blank_between-insert0-'x' ('window', 0) ['x', '', 'x'] lines 1-1 changed since the digest was issued; reread the ra
+  FALSE blank_between-insert0-'' ('window', 0) ['x', '', 'x'] lines 1-1 changed since the digest was issued; reread the ra
+  FALSE blank_between-insert0-'N' ('window', 0) ['x', '', 'x'] lines 1-1 changed since the digest was issued; reread the ra
+  FALSE blank_between-insert2-'x' ('window', 1) ['x', '', 'x'] line 2 is blank and an earlier edit in this run covered, beg
+  FALSE blank_between-insert2-'' ('window', 1) ['x', '', 'x'] line 2 is blank and an earlier edit in this run covered, beg
+  FALSE blank_between-insert2-'N' ('window', 1) ['x', '', 'x'] line 2 is blank and an earlier edit in this run covered, beg
+  FALSE blank_between-delete0-None ('window', 1) ['x', '', 'x'] line 2 is blank and an earlier edit in this run covered, beg
+  FALSE blank_between-delete2-None ('window', 1) ['x', '', 'x'] line 2 is blank and an earlier edit in this run covered, beg
+  FALSE two_blanks-insert0-'x' ('window', 0) ['', ''] line 1 is blank and an earlier edit in this run covered, beg
+  FALSE two_blanks-insert0-'' ('window', 0) ['', ''] line 1 is blank and an earlier edit in this run covered, beg
+  FALSE two_blanks-insert0-'N' ('window', 0) ['', ''] line 1 is blank and an earlier edit in this run covered, beg
+  FALSE two_blanks-insert1-'x' ('window', 0) ['', ''] line 1 is blank and an earlier edit in this run covered, beg
+  FALSE two_blanks-insert1-'' ('window', 0) ['', ''] line 1 is blank and an earlier edit in this run covered, beg
+  FALSE two_blanks-insert1-'N' ('window', 0) ['', ''] line 1 is blank and an earlier edit in this run covered, beg
+  FALSE two_blanks-insert2-'x' ('window', 1) ['', ''] line 2 is blank and an earlier edit in this run covered, beg
+  FALSE two_blanks-insert2-'' ('window', 1) ['', ''] line 2 is blank and an earlier edit in this run covered, beg
+  FALSE two_blanks-insert2-'N' ('window', 1) ['', ''] line 2 is blank and an earlier edit in this run covered, beg
+  FALSE two_blanks-delete0-None ('window', 1) ['', ''] line 2 is blank and an earlier edit in this run covered, beg
+  FALSE two_blanks-delete1-None ('window', 0) ['', ''] line 1 is blank and an earlier edit in this run covered, beg
+  FALSE run_in_context-insert0-'x' ('window', 0) ['a', 'x', 'x', 'b'] lines 1-1 changed since the digest was issued; reread the ra
+  FALSE run_in_context-insert0-'' ('window', 0) ['a', 'x', 'x', 'b'] lines 1-1 changed since the digest was issued; reread the ra
+  FALSE run_in_context-insert0-'N' ('window', 0) ['a', 'x', 'x', 'b'] lines 1-1 changed since the digest was issued; reread the ra

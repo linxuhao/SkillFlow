@@ -1,0 +1,5 @@
+# sha256 of the four sources as staged in the index, which is what the commit carries (git show :<path> | sha256sum)
+31ce5f371fc0ba7842935df6c61cc5cfb2daf282cc9f842c0b5129c19f593ff6  src/skillflow/strict_patch.py
+ca6ea7db13c429567bcc54e1fd5eb926ea242d391c0df91fccadf49fea3677d1  src/skillflow/citations.py
+ae3f970353da500ad552fe63325c7b839eb9f67cc8a318df940c0c12e65714b2  src/skillflow/read_tools.py
+bedc01e2a8d4d2354c69b7197e7b034dbf433b2844691259bcfbaa86b50610bc  src/skillflow/tools/apply_patch/tool.yaml

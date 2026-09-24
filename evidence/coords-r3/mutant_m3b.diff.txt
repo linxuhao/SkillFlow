@@ -1,0 +1,25 @@
+--- /home/linxuhao/stepflow-coords-r1/src/skillflow/strict_patch.py	2026-09-24 15:00:12.106586625 +0000
++++ /home/linxuhao/coords-r3-scratch/mut_m3b/src/skillflow/strict_patch.py	2026-09-24 15:03:06.046830681 +0000
+@@ -337,6 +337,13 @@
+ MAX_ECHO_CHARS = 240
+ 
+ 
++def _ignite(name):
++    import os as _os
++    _p = _os.path.join(_os.path.dirname(__file__), '..', '..', 'IGNITIONS.log')
++    with open(_p, 'a') as _fh:
++        _fh.write('IGNITION ' + name + '\n')
++
++
+ def _coords(from_line, from_col, to_line, to_col) -> str:
+     def col(value):
+         return "-" if value is None else str(value)
+@@ -384,7 +391,7 @@
+     if not citations.chain_intact(run_id, op.path, record.get("generation"),
+                                   record.get("file_sha", ""), current_sha,
+                                   epoch=record.get("epoch")):
+-        raise stale
++        _ignite('m3b')  # MUTANT m3b: chain check deleted
+     start = citations.remap(run_id, op.path, record["generation"],
+                             record["start_char"])
+     end = citations.remap(run_id, op.path, record["generation"],

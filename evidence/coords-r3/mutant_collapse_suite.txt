@@ -1,0 +1,2504 @@
+TREE_HEAD= DIRTY_PATHS=0
+801425031350cb3dc81e46ab27c20c2f435194fbb8a3f3291ce364130ba47a1f  src/skillflow/strict_patch.py
+ca6ea7db13c429567bcc54e1fd5eb926ea242d391c0df91fccadf49fea3677d1  src/skillflow/citations.py
+ae3f970353da500ad552fe63325c7b839eb9f67cc8a318df940c0c12e65714b2  src/skillflow/read_tools.py
+bedc01e2a8d4d2354c69b7197e7b034dbf433b2844691259bcfbaa86b50610bc  src/skillflow/tools/apply_patch/tool.yaml
+IMPORT_PROOF /home/linxuhao/coords-r3-scratch/mut_collapse/src/skillflow/__init__.py
+PYTEST 9.1.1 ASYNCIO 1.4.0
+..................s......ss............................................. [  5%]
+........................................................................ [ 10%]
+........................................................................ [ 15%]
+........................................................................ [ 20%]
+........................................................................ [ 25%]
+........................................................................ [ 30%]
+........................................................................ [ 35%]
+........................................................................ [ 40%]
+........................................................................ [ 45%]
+........................................................................ [ 50%]
+........................................................................ [ 56%]
+........................................................................ [ 61%]
+........................................................................ [ 66%]
+............................................FFF.FF.F..F......F..FFF...F. [ 71%]
+F..FFFFFF...FF.F..FFFFFF.......F.FFF........FFFFFFFFF....F..F......F..FF [ 76%]
+F...F.F..FFFFFF...FF.F..FFFFFF.......F.FFF........FFFFFFFFF....F........ [ 81%]
+........................................................................ [ 86%]
+........................................................................ [ 91%]
+........................................................................ [ 96%]
+............................................                             [100%]
+=================================== FAILURES ===================================
+_ test_H1_a_span_on_the_shown_line_after_v4a_inserted_an_identical_line_above __
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_H1_a_span_on_the_shown_li0')
+
+    def test_H1_a_span_on_the_shown_line_after_v4a_inserted_an_identical_line_above(root):
+        """probe4.py H1."""
+        put(root, b"a\nx\nb\n")
+        w = rd(root, 0, 3)["citation"]["sha"]
+        sx = span(root, w, 2, 0, 2, 1)
+        r = ap(root, patch=v4a(" a\n+x\n x\n b\n"))
+        assert r["applied"] is True and (root / REL).read_bytes() == b"a\nx\nx\nb\n"
+        res = ap(root, [{"file": REL, "sha": sx, "new_text": "Y"}])
+        assert res["applied"] is True, res
+>       assert (root / REL).read_bytes() == b"a\nx\nY\nb\n"
+E       AssertionError: assert b'a\nY\nx\nb\n' == b'a\nx\nY\nb\n'
+E         
+E         At index 2 diff: b'Y' != b'x'
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:81: AssertionError
+_____ test_H2_a_sha_only_window_on_the_shown_line_after_the_same_insertion _____
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_H2_a_sha_only_window_on_t0')
+
+    def test_H2_a_sha_only_window_on_the_shown_line_after_the_same_insertion(root):
+        """probe4.py H2."""
+        put(root, b"a\nx\nb\n")
+        wx = rd(root, 1, 2)["citation"]["sha"]
+        ap(root, patch=v4a(" a\n+x\n x\n b\n"))
+        res = ap(root, [{"file": REL, "sha": wx, "new_text": "Y"}])
+        assert res["applied"] is True, res
+>       assert (root / REL).read_bytes() == b"a\nx\nY\nb\n"
+E       AssertionError: assert b'a\nY\nx\nb\n' == b'a\nx\nY\nb\n'
+E         
+E         At index 2 diff: b'Y' != b'x'
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:91: AssertionError
+_ test_H3_an_insertion_shown_before_a_blank_line_after_v4a_inserted_a_blank_above _
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_H3_an_insertion_shown_bef0')
+
+    def test_H3_an_insertion_shown_before_a_blank_line_after_v4a_inserted_a_blank_above(root):
+        """probe4.py H3."""
+        put(root, b"a\n\nb\n")
+        w = rd(root, 0, 3)["citation"]["sha"]
+        ins = span(root, w, 2, 0, 2, 0)
+        ap(root, patch=v4a(" a\n+\n \n b\n"))
+        assert (root / REL).read_bytes() == b"a\n\n\nb\n"
+        res = ap(root, [{"file": REL, "sha": ins, "new_text": "# note\n"}])
+        assert res["applied"] is True, res
+>       assert (root / REL).read_bytes() == b"a\n\n# note\n\nb\n"
+E       AssertionError: assert b'a\n# note\n\n\nb\n' == b'a\n\n# note\n\nb\n'
+E         
+E         At index 2 diff: b'#' != b'\n'
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:103: AssertionError
+_ test_H5_explicit_lines_on_the_shown_line_after_v4a_inserted_an_identical_line_above _
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_H5_explicit_lines_on_the_0')
+
+    def test_H5_explicit_lines_on_the_shown_line_after_v4a_inserted_an_identical_line_above(root):
+        """probe5.py H5."""
+        put(root, b"a\nx\nb\n")
+        wx = rd(root, 1, 2)["citation"]["sha"]
+        r = ap(root, patch=v4a(" a\n+x\n x\n b\n"))
+        assert r["applied"] is True and (root / REL).read_bytes() == b"a\nx\nx\nb\n"
+        res = ap(root, [{"file": REL, "sha": wx, "from_line": 2, "to_line": 2,
+                         "new_text": "Y"}])
+        assert res["applied"] is True, res
+>       assert (root / REL).read_bytes() == b"a\nx\nY\nb\n"
+E       AssertionError: assert b'a\nY\nx\nb\n' == b'a\nx\nY\nb\n'
+E         
+E         At index 2 diff: b'Y' != b'x'
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:126: AssertionError
+_________ test_H6_a_window_on_a_line_this_run_s_v4a_deleted_is_refused _________
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_H6_a_window_on_a_line_thi0')
+
+    def test_H6_a_window_on_a_line_this_run_s_v4a_deleted_is_refused(root):
+        """probe5.py H6. The hunk deletes line 2 and keeps line 3; before this the
+        journal recorded line 3 as the one deleted and wrote `a\\nY\\nb\\n`."""
+        put(root, b"a\nx\nx\nb\n")
+        w2 = rd(root, 1, 2)["citation"]["sha"]
+        r = ap(root, patch=v4a(" a\n-x\n x\n b\n"))
+        assert r["applied"] is True and (root / REL).read_bytes() == b"a\nx\nb\n"
+        res = ap(root, [{"file": REL, "sha": w2, "from_line": 2, "to_line": 2,
+                         "new_text": "Y"}])
+>       assert res["applied"] is False
+E       assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:143: AssertionError
+_______ test_a_window_on_a_blank_line_this_run_s_v4a_deleted_is_refused ________
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_a_window_on_a_blank_line_0')
+
+    def test_a_window_on_a_blank_line_this_run_s_v4a_deleted_is_refused(root):
+        """H6 with the identical lines blank. A blank line's range is zero-width
+        and its empty text matches anywhere, so the text check cannot catch the
+        move; before this the window wrote `Y` into old line 3."""
+        put(root, b"a\n\n\nb\n")
+        w2 = rd(root, 1, 2)["citation"]["sha"]
+        r = ap(root, patch=v4a(" a\n-\n \n b\n"))
+        assert r["applied"] is True and (root / REL).read_bytes() == b"a\n\nb\n"
+        res = ap(root, [{"file": REL, "sha": w2, "from_line": 2, "to_line": 2,
+                         "new_text": "Y"}])
+>       assert res["applied"] is False
+E       assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:177: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[one-insert0-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal0')
+shape = 'one', edit = ('insert', 0, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(1, 1, 2)], [(0, 0, 2)])
+E       assert [(1, 1, 2)] == [(0, 0, 2)]
+E         
+E         At index 0 diff: (1, 1, 2) != (0, 0, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two-insert0-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal7')
+shape = 'two', edit = ('insert', 0, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(3, 3, 2)], [(0, 0, 2)])
+E       assert [(3, 3, 2)] == [(0, 0, 2)]
+E         
+E         At index 0 diff: (3, 3, 2) != (0, 0, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two-insert1-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal10')
+shape = 'two', edit = ('insert', 1, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(3, 3, 2)], [(1, 1, 2)])
+E       assert [(3, 3, 2)] == [(1, 1, 2)]
+E         
+E         At index 0 diff: (3, 3, 2) != (1, 1, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two-insert1-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal11')
+shape = 'two', edit = ('insert', 1, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(2, 2, 1)], [(1, 1, 1)])
+E       assert [(2, 2, 1)] == [(1, 1, 1)]
+E         
+E         At index 0 diff: (2, 2, 1) != (1, 1, 1)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two-insert1-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal12')
+shape = 'two', edit = ('insert', 1, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(2, 2, 2)], [(1, 1, 2)])
+E       assert [(2, 2, 2)] == [(1, 1, 2)]
+E         
+E         At index 0 diff: (2, 2, 2) != (1, 1, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two-delete0-None] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal16')
+shape = 'two', edit = ('delete', 0, None)
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(1, 3, 0)], [(0, 2, 0)])
+E       assert [(1, 3, 0)] == [(0, 2, 0)]
+E         
+E         At index 0 diff: (1, 3, 0) != (0, 2, 0)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-insert0-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal18')
+shape = 'three', edit = ('insert', 0, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(5, 5, 2)], [(0, 0, 2)])
+E       assert [(5, 5, 2)] == [(0, 0, 2)]
+E         
+E         At index 0 diff: (5, 5, 2) != (0, 0, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-insert1-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal21')
+shape = 'three', edit = ('insert', 1, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(5, 5, 2)], [(1, 1, 2)])
+E       assert [(5, 5, 2)] == [(1, 1, 2)]
+E         
+E         At index 0 diff: (5, 5, 2) != (1, 1, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-insert1-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal22')
+shape = 'three', edit = ('insert', 1, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(2, 2, 1)], [(1, 1, 1)])
+E       assert [(2, 2, 1)] == [(1, 1, 1)]
+E         
+E         At index 0 diff: (2, 2, 1) != (1, 1, 1)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-insert1-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal23')
+shape = 'three', edit = ('insert', 1, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(2, 2, 2)], [(1, 1, 2)])
+E       assert [(2, 2, 2)] == [(1, 1, 2)]
+E         
+E         At index 0 diff: (2, 2, 2) != (1, 1, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-insert2-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal24')
+shape = 'three', edit = ('insert', 2, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(5, 5, 2)], [(3, 3, 2)])
+E       assert [(5, 5, 2)] == [(3, 3, 2)]
+E         
+E         At index 0 diff: (5, 5, 2) != (3, 3, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-insert2-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal25')
+shape = 'three', edit = ('insert', 2, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(4, 4, 1)], [(3, 3, 1)])
+E       assert [(4, 4, 1)] == [(3, 3, 1)]
+E         
+E         At index 0 diff: (4, 4, 1) != (3, 3, 1)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-insert2-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal26')
+shape = 'three', edit = ('insert', 2, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(4, 4, 2)], [(3, 3, 2)])
+E       assert [(4, 4, 2)] == [(3, 3, 2)]
+E         
+E         At index 0 diff: (4, 4, 2) != (3, 3, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-delete0-None] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal30')
+shape = 'three', edit = ('delete', 0, None)
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(3, 5, 0)], [(0, 2, 0)])
+E       assert [(3, 5, 0)] == [(0, 2, 0)]
+E         
+E         At index 0 diff: (3, 5, 0) != (0, 2, 0)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-delete1-None] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal31')
+shape = 'three', edit = ('delete', 1, None)
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(3, 5, 0)], [(2, 4, 0)])
+E       assert [(3, 5, 0)] == [(2, 4, 0)]
+E         
+E         At index 0 diff: (3, 5, 0) != (2, 4, 0)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[blank_between-insert0-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal33')
+shape = 'blank_between', edit = ('insert', 0, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(2, 2, 2)], [(0, 0, 2)])
+E       assert [(2, 2, 2)] == [(0, 0, 2)]
+E         
+E         At index 0 diff: (2, 2, 2) != (0, 0, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[blank_between-insert1-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal36')
+shape = 'blank_between', edit = ('insert', 1, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(2, 2, 2)], [(1, 1, 2)])
+E       assert [(2, 2, 2)] == [(1, 1, 2)]
+E         
+E         At index 0 diff: (2, 2, 2) != (1, 1, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[blank_between-insert1-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal37')
+shape = 'blank_between', edit = ('insert', 1, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(3, 3, 1)], [(1, 1, 1)])
+E       assert [(3, 3, 1)] == [(1, 1, 1)]
+E         
+E         At index 0 diff: (3, 3, 1) != (1, 1, 1)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[blank_between-insert1-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal38')
+shape = 'blank_between', edit = ('insert', 1, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(2, 2, 2)], [(1, 1, 2)])
+E       assert [(2, 2, 2)] == [(1, 1, 2)]
+E         
+E         At index 0 diff: (2, 2, 2) != (1, 1, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[blank_between-insert2-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal39')
+shape = 'blank_between', edit = ('insert', 2, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(4, 4, 2)], [(2, 2, 2)])
+E       assert [(4, 4, 2)] == [(2, 2, 2)]
+E         
+E         At index 0 diff: (4, 4, 2) != (2, 2, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[blank_between-insert2-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal40')
+shape = 'blank_between', edit = ('insert', 2, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(3, 3, 1)], [(2, 2, 1)])
+E       assert [(3, 3, 1)] == [(2, 2, 1)]
+E         
+E         At index 0 diff: (3, 3, 1) != (2, 2, 1)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[blank_between-insert2-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal41')
+shape = 'blank_between', edit = ('insert', 2, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(3, 3, 2)], [(2, 2, 2)])
+E       assert [(3, 3, 2)] == [(2, 2, 2)]
+E         
+E         At index 0 diff: (3, 3, 2) != (2, 2, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two_blanks-insert0-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal49')
+shape = 'two_blanks', edit = ('insert', 0, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(1, 1, 1)], [(0, 0, 1)])
+E       assert [(1, 1, 1)] == [(0, 0, 1)]
+E         
+E         At index 0 diff: (1, 1, 1) != (0, 0, 1)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two_blanks-insert1-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal51')
+shape = 'two_blanks', edit = ('insert', 1, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(1, 1, 2)], [(0, 0, 2)])
+E       assert [(1, 1, 2)] == [(0, 0, 2)]
+E         
+E         At index 0 diff: (1, 1, 2) != (0, 0, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two_blanks-insert1-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal52')
+shape = 'two_blanks', edit = ('insert', 1, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(1, 1, 1)], [(0, 0, 1)])
+E       assert [(1, 1, 1)] == [(0, 0, 1)]
+E         
+E         At index 0 diff: (1, 1, 1) != (0, 0, 1)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two_blanks-insert1-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal53')
+shape = 'two_blanks', edit = ('insert', 1, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(1, 1, 2)], [(0, 0, 2)])
+E       assert [(1, 1, 2)] == [(0, 0, 2)]
+E         
+E         At index 0 diff: (1, 1, 2) != (0, 0, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert1-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal62')
+shape = 'run_in_context', edit = ('insert', 1, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(6, 6, 2)], [(1, 1, 2)])
+E       assert [(6, 6, 2)] == [(1, 1, 2)]
+E         
+E         At index 0 diff: (6, 6, 2) != (1, 1, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert1-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal63')
+shape = 'run_in_context', edit = ('insert', 1, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(2, 2, 1)], [(1, 1, 1)])
+E       assert [(2, 2, 1)] == [(1, 1, 1)]
+E         
+E         At index 0 diff: (2, 2, 1) != (1, 1, 1)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert1-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal64')
+shape = 'run_in_context', edit = ('insert', 1, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(2, 2, 2)], [(1, 1, 2)])
+E       assert [(2, 2, 2)] == [(1, 1, 2)]
+E         
+E         At index 0 diff: (2, 2, 2) != (1, 1, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert2-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal65')
+shape = 'run_in_context', edit = ('insert', 2, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(6, 6, 2)], [(3, 3, 2)])
+E       assert [(6, 6, 2)] == [(3, 3, 2)]
+E         
+E         At index 0 diff: (6, 6, 2) != (3, 3, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert2-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal66')
+shape = 'run_in_context', edit = ('insert', 2, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(4, 4, 1)], [(3, 3, 1)])
+E       assert [(4, 4, 1)] == [(3, 3, 1)]
+E         
+E         At index 0 diff: (4, 4, 1) != (3, 3, 1)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert2-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal67')
+shape = 'run_in_context', edit = ('insert', 2, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(4, 4, 2)], [(3, 3, 2)])
+E       assert [(4, 4, 2)] == [(3, 3, 2)]
+E         
+E         At index 0 diff: (4, 4, 2) != (3, 3, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert3-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal68')
+shape = 'run_in_context', edit = ('insert', 3, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(6, 6, 2)], [(5, 5, 2)])
+E       assert [(6, 6, 2)] == [(5, 5, 2)]
+E         
+E         At index 0 diff: (6, 6, 2) != (5, 5, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert3-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal69')
+shape = 'run_in_context', edit = ('insert', 3, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(6, 6, 1)], [(5, 5, 1)])
+E       assert [(6, 6, 1)] == [(5, 5, 1)]
+E         
+E         At index 0 diff: (6, 6, 1) != (5, 5, 1)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert3-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal70')
+shape = 'run_in_context', edit = ('insert', 3, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(6, 6, 2)], [(5, 5, 2)])
+E       assert [(6, 6, 2)] == [(5, 5, 2)]
+E         
+E         At index 0 diff: (6, 6, 2) != (5, 5, 2)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-delete1-None] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_v4a_and_reference_journal75')
+shape = 'run_in_context', edit = ('delete', 1, None)
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(
+            tmp_path, shape, edit):
+        """Same spans in the journal; every older citation gets the same outcome:
+        the same bytes, or refused with the same message."""
+        lines = SHAPES[shape]
+        _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")
+        _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")
+>       assert j_v4a == j_ref, (j_v4a, j_ref)
+E       AssertionError: ([(4, 6, 0)], [(2, 4, 0)])
+E       assert [(4, 6, 0)] == [(2, 4, 0)]
+E         
+E         At index 0 diff: (4, 6, 0) != (2, 4, 0)
+E         Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:338: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[one-insert0-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w0')
+shape = 'one', edit = ('insert', 0, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+>                   assert applied is False, (probe, applied, error, result)
+E                   AssertionError: (('window', 0), True, None, ['Y', 'x'])
+E                   assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:376: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[two-insert0-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w7')
+shape = 'two', edit = ('insert', 0, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+>                   assert applied is False, (probe, applied, error, result)
+E                   AssertionError: (('window', 0), True, None, ['Y', 'x', 'x'])
+E                   assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:376: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[two-insert1-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w10')
+shape = 'two', edit = ('insert', 1, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 1), None)
+E                   assert (True, ['x', 'Y', 'x']) == (True, ['x', 'x', 'Y'])
+E                     
+E                     At index 1 diff: ['x', 'Y', 'x'] != ['x', 'x', 'Y']
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[two-insert1-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w11')
+shape = 'two', edit = ('insert', 1, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 1), 'apply_patch preflight: f.py reference 1: lines 2-2 changed since the digest was issued; reread the range and cite the new digest')
+E                   assert (False, ['x', '', 'x']) == (True, ['x', '', 'Y'])
+E                     
+E                     At index 0 diff: False != True
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[two-insert1-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w12')
+shape = 'two', edit = ('insert', 1, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 1), 'apply_patch preflight: f.py reference 1: lines 2-2 changed since the digest was issued; reread the range and cite the new digest')
+E                   assert (False, ['x', 'N', 'x']) == (True, ['x', 'N', 'Y'])
+E                     
+E                     At index 0 diff: False != True
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[two-delete0-None] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w16')
+shape = 'two', edit = ('delete', 0, None)
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+>                   assert applied is False, (probe, applied, error, result)
+E                   AssertionError: (('window', 0), True, None, ['Y'])
+E                   assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:364: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[three-insert0-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w18')
+shape = 'three', edit = ('insert', 0, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+>                   assert applied is False, (probe, applied, error, result)
+E                   AssertionError: (('window', 0), True, None, ['Y', 'x', 'x', 'x'])
+E                   assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:376: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[three-insert1-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w21')
+shape = 'three', edit = ('insert', 1, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 1), None)
+E                   assert (True, ['x', 'Y', 'x', 'x']) == (True, ['x', 'x', 'Y', 'x'])
+E                     
+E                     At index 1 diff: ['x', 'Y', 'x', 'x'] != ['x', 'x', 'Y', 'x']
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[three-insert1-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w22')
+shape = 'three', edit = ('insert', 1, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 1), 'apply_patch preflight: f.py reference 1: lines 2-2 changed since the digest was issued; reread the range and cite the new digest')
+E                   assert (False, ['x', '', 'x', 'x']) == (True, ['x', '', 'Y', 'x'])
+E                     
+E                     At index 0 diff: False != True
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[three-insert1-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w23')
+shape = 'three', edit = ('insert', 1, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 1), 'apply_patch preflight: f.py reference 1: lines 2-2 changed since the digest was issued; reread the range and cite the new digest')
+E                   assert (False, ['x', 'N', 'x', 'x']) == (True, ['x', 'N', 'Y', 'x'])
+E                     
+E                     At index 0 diff: False != True
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[three-insert2-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w24')
+shape = 'three', edit = ('insert', 2, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 2), None)
+E                   assert (True, ['x', 'x', 'Y', 'x']) == (True, ['x', 'x', 'x', 'Y'])
+E                     
+E                     At index 1 diff: ['x', 'x', 'Y', 'x'] != ['x', 'x', 'x', 'Y']
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[three-insert2-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w25')
+shape = 'three', edit = ('insert', 2, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 2), 'apply_patch preflight: f.py reference 1: lines 3-3 changed since the digest was issued; reread the range and cite the new digest')
+E                   assert (False, ['x', 'x', '', 'x']) == (True, ['x', 'x', '', 'Y'])
+E                     
+E                     At index 0 diff: False != True
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[three-insert2-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w26')
+shape = 'three', edit = ('insert', 2, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 2), 'apply_patch preflight: f.py reference 1: lines 3-3 changed since the digest was issued; reread the range and cite the new digest')
+E                   assert (False, ['x', 'x', 'N', 'x']) == (True, ['x', 'x', 'N', 'Y'])
+E                     
+E                     At index 0 diff: False != True
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[three-delete0-None] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w30')
+shape = 'three', edit = ('delete', 0, None)
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+>                   assert applied is False, (probe, applied, error, result)
+E                   AssertionError: (('window', 0), True, None, ['Y', 'x'])
+E                   assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:364: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[three-delete1-None] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w31')
+shape = 'three', edit = ('delete', 1, None)
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+>                   assert applied is False, (probe, applied, error, result)
+E                   AssertionError: (('window', 1), True, None, ['x', 'Y'])
+E                   assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:364: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[blank_between-insert0-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w33')
+shape = 'blank_between', edit = ('insert', 0, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+>                   assert applied is False, (probe, applied, error, result)
+E                   AssertionError: (('window', 0), True, None, ['Y', 'x', '', 'x'])
+E                   assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:376: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[blank_between-insert1-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w36')
+shape = 'blank_between', edit = ('insert', 1, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+                    assert (applied, result) == (True, expected), (probe, error)
+            elif kind == "insert":
+                expected = list(after)
+                if i < n:
+                    # A point at the top stays at offset 0, before a top insertion.
+                    at = 0 if (k == 0 and i == 0) else moved[i]
+                else:
+                    at = moved[n - 1] + 1
+                expected.insert(at, "P")
+>               assert (applied, result) == (True, expected), (probe, error)
+E               AssertionError: (('point', 1), None)
+E               assert (True, ['x', ...'x', '', 'x']) == (True, ['x', ...'P', '', 'x'])
+E                 
+E                 At index 1 diff: ['x', 'P', 'x', '', 'x'] != ['x', 'x', 'P', '', 'x']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:389: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[blank_between-insert1-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w37')
+shape = 'blank_between', edit = ('insert', 1, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 1), None)
+E                   assert (True, ['x', 'Y', '', 'x']) == (True, ['x', '', 'Y', 'x'])
+E                     
+E                     At index 1 diff: ['x', 'Y', '', 'x'] != ['x', '', 'Y', 'x']
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[blank_between-insert1-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w38')
+shape = 'blank_between', edit = ('insert', 1, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+                    assert (applied, result) == (True, expected), (probe, error)
+            elif kind == "insert":
+                expected = list(after)
+                if i < n:
+                    # A point at the top stays at offset 0, before a top insertion.
+                    at = 0 if (k == 0 and i == 0) else moved[i]
+                else:
+                    at = moved[n - 1] + 1
+                expected.insert(at, "P")
+>               assert (applied, result) == (True, expected), (probe, error)
+E               AssertionError: (('point', 1), None)
+E               assert (True, ['x', ...'N', '', 'x']) == (True, ['x', ...'P', '', 'x'])
+E                 
+E                 At index 1 diff: ['x', 'P', 'N', '', 'x'] != ['x', 'N', 'P', '', 'x']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:389: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[blank_between-insert2-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w39')
+shape = 'blank_between', edit = ('insert', 2, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 2), None)
+E                   assert (True, ['x', '', 'Y', 'x']) == (True, ['x', '', 'x', 'Y'])
+E                     
+E                     At index 1 diff: ['x', '', 'Y', 'x'] != ['x', '', 'x', 'Y']
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[blank_between-insert2-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w40')
+shape = 'blank_between', edit = ('insert', 2, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 2), 'apply_patch preflight: f.py reference 1: lines 3-3 changed since the digest was issued; reread the range and cite the new digest')
+E                   assert (False, ['x', '', '', 'x']) == (True, ['x', '', '', 'Y'])
+E                     
+E                     At index 0 diff: False != True
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[blank_between-insert2-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w41')
+shape = 'blank_between', edit = ('insert', 2, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 2), 'apply_patch preflight: f.py reference 1: lines 3-3 changed since the digest was issued; reread the range and cite the new digest')
+E                   assert (False, ['x', '', 'N', 'x']) == (True, ['x', '', 'N', 'Y'])
+E                     
+E                     At index 0 diff: False != True
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[two_blanks-insert0-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w49')
+shape = 'two_blanks', edit = ('insert', 0, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+>                   assert applied is False, (probe, applied, error, result)
+E                   AssertionError: (('window', 0), True, None, ['Y', '', ''])
+E                   assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:376: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[two_blanks-insert1-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w51')
+shape = 'two_blanks', edit = ('insert', 1, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+                    assert (applied, result) == (True, expected), (probe, error)
+            elif kind == "insert":
+                expected = list(after)
+                if i < n:
+                    # A point at the top stays at offset 0, before a top insertion.
+                    at = 0 if (k == 0 and i == 0) else moved[i]
+                else:
+                    at = moved[n - 1] + 1
+                expected.insert(at, "P")
+>               assert (applied, result) == (True, expected), (probe, error)
+E               AssertionError: (('point', 1), None)
+E               assert (True, ['', 'P', 'x', '']) == (True, ['', 'x', 'P', ''])
+E                 
+E                 At index 1 diff: ['', 'P', 'x', ''] != ['', 'x', 'P', '']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:389: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[two_blanks-insert1-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w52')
+shape = 'two_blanks', edit = ('insert', 1, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+                    assert (applied, result) == (True, expected), (probe, error)
+            elif kind == "insert":
+                expected = list(after)
+                if i < n:
+                    # A point at the top stays at offset 0, before a top insertion.
+                    at = 0 if (k == 0 and i == 0) else moved[i]
+                else:
+                    at = moved[n - 1] + 1
+                expected.insert(at, "P")
+>               assert (applied, result) == (True, expected), (probe, error)
+E               AssertionError: (('point', 1), None)
+E               assert (True, ['', 'P', '', '']) == (True, ['', '', 'P', ''])
+E                 
+E                 At index 1 diff: ['', 'P', '', ''] != ['', '', 'P', '']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:389: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[two_blanks-insert1-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w53')
+shape = 'two_blanks', edit = ('insert', 1, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+                    assert (applied, result) == (True, expected), (probe, error)
+            elif kind == "insert":
+                expected = list(after)
+                if i < n:
+                    # A point at the top stays at offset 0, before a top insertion.
+                    at = 0 if (k == 0 and i == 0) else moved[i]
+                else:
+                    at = moved[n - 1] + 1
+                expected.insert(at, "P")
+>               assert (applied, result) == (True, expected), (probe, error)
+E               AssertionError: (('point', 1), None)
+E               assert (True, ['', 'P', 'N', '']) == (True, ['', 'N', 'P', ''])
+E                 
+E                 At index 1 diff: ['', 'P', 'N', ''] != ['', 'N', 'P', '']
+E                 Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:389: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert1-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w62')
+shape = 'run_in_context', edit = ('insert', 1, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 1), None)
+E                   assert (True, ['a', ...x', 'x', 'b']) == (True, ['a', ...Y', 'x', 'b'])
+E                     
+E                     At index 1 diff: ['a', 'Y', 'x', 'x', 'b'] != ['a', 'x', 'Y', 'x', 'b']
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert1-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w63')
+shape = 'run_in_context', edit = ('insert', 1, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 1), 'apply_patch preflight: f.py reference 1: lines 2-2 changed since the digest was issued; reread the range and cite the new digest')
+E                   assert (False, ['a',...x', 'x', 'b']) == (True, ['a', ...Y', 'x', 'b'])
+E                     
+E                     At index 0 diff: False != True
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert1-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w64')
+shape = 'run_in_context', edit = ('insert', 1, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 1), 'apply_patch preflight: f.py reference 1: lines 2-2 changed since the digest was issued; reread the range and cite the new digest')
+E                   assert (False, ['a',...x', 'x', 'b']) == (True, ['a', ...Y', 'x', 'b'])
+E                     
+E                     At index 0 diff: False != True
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert2-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w65')
+shape = 'run_in_context', edit = ('insert', 2, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 2), None)
+E                   assert (True, ['a', ...Y', 'x', 'b']) == (True, ['a', ...x', 'Y', 'b'])
+E                     
+E                     At index 1 diff: ['a', 'x', 'Y', 'x', 'b'] != ['a', 'x', 'x', 'Y', 'b']
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert2-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w66')
+shape = 'run_in_context', edit = ('insert', 2, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 2), 'apply_patch preflight: f.py reference 1: lines 3-3 changed since the digest was issued; reread the range and cite the new digest')
+E                   assert (False, ['a',...'', 'x', 'b']) == (True, ['a', ...'', 'Y', 'b'])
+E                     
+E                     At index 0 diff: False != True
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert2-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w67')
+shape = 'run_in_context', edit = ('insert', 2, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 2), 'apply_patch preflight: f.py reference 1: lines 3-3 changed since the digest was issued; reread the range and cite the new digest')
+E                   assert (False, ['a',...N', 'x', 'b']) == (True, ['a', ...N', 'Y', 'b'])
+E                     
+E                     At index 0 diff: False != True
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert3-'x'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w68')
+shape = 'run_in_context', edit = ('insert', 3, 'x')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 3), 'apply_patch preflight: f.py reference 1: lines 4-4 changed since the digest was issued; reread the range and cite the new digest')
+E                   assert (False, ['a',...x', 'x', 'b']) == (True, ['a', ...x', 'x', 'Y'])
+E                     
+E                     At index 0 diff: False != True
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert3-''] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w69')
+shape = 'run_in_context', edit = ('insert', 3, '')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 3), 'apply_patch preflight: f.py reference 1: lines 4-4 changed since the digest was issued; reread the range and cite the new digest')
+E                   assert (False, ['a',...'x', '', 'b']) == (True, ['a', ...'x', '', 'Y'])
+E                     
+E                     At index 0 diff: False != True
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert3-'N'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w70')
+shape = 'run_in_context', edit = ('insert', 3, 'N')
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+                    assert applied is False, (probe, applied, error, result)
+                elif lines[i] == "" and applied is False:
+                    # A blank line is a zero-width range; next to an edit its
+                    # empty text would match on either side, so it is refused
+                    # (a false refusal when the line itself survived, listed in
+                    # the delivery note).
+                    assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error
+                elif kind == "insert" and k == 0 and i == 0:
+                    # A top insertion is journaled at offset 0, where remap keeps
+                    # an offset in place, so the window on old line 1 now spans
+                    # the inserted text and its own and no longer matches: a
+                    # false refusal, listed in the delivery note.
+                    assert applied is False, (probe, applied, error, result)
+                else:
+                    expected = list(after)
+                    expected[moved[i]] = "Y"
+>                   assert (applied, result) == (True, expected), (probe, error)
+E                   AssertionError: (('window', 3), 'apply_patch preflight: f.py reference 1: lines 4-4 changed since the digest was issued; reread the range and cite the new digest')
+E                   assert (False, ['a',...x', 'N', 'b']) == (True, ['a', ...x', 'N', 'Y'])
+E                     
+E                     At index 0 diff: False != True
+E                     Use -v to get more diff
+
+tests/test_the_journal_records_what_the_applier_wrote.py:380: AssertionError
+_ test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-delete1-None] _
+
+tmp_path = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_an_older_citation_lands_w75')
+shape = 'run_in_context', edit = ('delete', 1, None)
+
+    @pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)
+    def test_an_older_citation_lands_where_its_line_went_or_is_refused(
+            tmp_path, shape, edit):
+        """Where each old line went is known from the edit itself: a window on it
+        writes there, or is refused when the edit deleted it. An insertion point
+        before an old line stays before it. A blank line may also be refused."""
+        lines = SHAPES[shape]
+        n = len(lines)
+        after, moved = _after(lines, edit)
+        kind, k, _ = edit
+        for probe in _probes(n):
+            applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)
+            i = probe[1]
+            if probe[0] == "window":
+                if moved[i] is None:
+>                   assert applied is False, (probe, applied, error, result)
+E                   AssertionError: (('window', 1), True, None, ['a', 'Y', 'b'])
+E                   assert True is False
+
+tests/test_the_journal_records_what_the_applier_wrote.py:364: AssertionError
+=============================== warnings summary ===============================
+tests/test_integration_configs.py: 39 warnings
+tests/test_regression.py: 1 warning
+  /home/linxuhao/coords-r3-scratch/mut_collapse/src/skillflow/core.py:7633: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    elapsed = (dt.datetime.utcnow() - started_dt).total_seconds()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_H1_a_span_on_the_shown_line_after_v4a_inserted_an_identical_line_above
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_H2_a_sha_only_window_on_the_shown_line_after_the_same_insertion
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_H3_an_insertion_shown_before_a_blank_line_after_v4a_inserted_a_blank_above
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_H5_explicit_lines_on_the_shown_line_after_v4a_inserted_an_identical_line_above
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_H6_a_window_on_a_line_this_run_s_v4a_deleted_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_window_on_a_blank_line_this_run_s_v4a_deleted_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[one-insert0-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two-insert0-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two-insert1-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two-insert1-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two-insert1-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two-delete0-None]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-insert0-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-insert1-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-insert1-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-insert1-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-insert2-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-insert2-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-insert2-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-delete0-None]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[three-delete1-None]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[blank_between-insert0-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[blank_between-insert1-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[blank_between-insert1-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[blank_between-insert1-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[blank_between-insert2-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[blank_between-insert2-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[blank_between-insert2-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two_blanks-insert0-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two_blanks-insert1-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two_blanks-insert1-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[two_blanks-insert1-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert1-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert1-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert1-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert2-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert2-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert2-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert3-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert3-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-insert3-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_v4a_and_reference_journal_and_translate_the_same_edit_identically[run_in_context-delete1-None]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[one-insert0-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[two-insert0-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[two-insert1-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[two-insert1-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[two-insert1-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[two-delete0-None]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[three-insert0-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[three-insert1-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[three-insert1-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[three-insert1-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[three-insert2-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[three-insert2-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[three-insert2-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[three-delete0-None]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[three-delete1-None]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[blank_between-insert0-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[blank_between-insert1-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[blank_between-insert1-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[blank_between-insert1-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[blank_between-insert2-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[blank_between-insert2-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[blank_between-insert2-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[two_blanks-insert0-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[two_blanks-insert1-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[two_blanks-insert1-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[two_blanks-insert1-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert1-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert1-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert1-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert2-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert2-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert2-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert3-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert3-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-insert3-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[run_in_context-delete1-None]
+78 failed, 1331 passed, 3 skipped, 40 warnings in 22.50s
+PYTEST_RC=1
+DOCKER_RC=1

@@ -35,8 +35,16 @@ class UncorroboratedColumns(PatchError):
 
 @dataclass(frozen=True)
 class Hunk:
+    """One V4A hunk: the lines it matches and the lines it writes.
+
+    ``rows`` keeps the hunk's own lines in order as ``(prefix, text)``, so the
+    applier can say which matched line each deletion removed and between
+    which lines each insertion went. A hunk built without rows is recorded as
+    one block: all of ``old`` replaced by all of ``new``.
+    """
     old: tuple[str, ...]
     new: tuple[str, ...]
+    rows: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -166,6 +174,7 @@ def parse_patch(patch: str) -> tuple[Operation, ...]:
                 j += 1
                 old: list[str] = []
                 new: list[str] = []
+                rows: list[tuple[str, str]] = []
                 changed = False
                 while j < len(body) and body[j] != "@@":
                     row = body[j]
@@ -175,11 +184,12 @@ def parse_patch(patch: str) -> tuple[Operation, ...]:
                         old.append(row[1:])
                     if row[0] in " +":
                         new.append(row[1:])
+                    rows.append((row[0], row[1:]))
                     changed |= row[0] != " "
                     j += 1
                 if not changed or old == new:
                     raise PatchError(f"{name}: each hunk must change text")
-                hunks.append(Hunk(tuple(old), tuple(new)))
+                hunks.append(Hunk(tuple(old), tuple(new), tuple(rows)))
             if not hunks or len(hunks) > 1024:
                 raise PatchError(f"{name}: require 1..1024 hunks")
             ops.append(Operation(kind, name, tuple(hunks)))
@@ -527,6 +537,15 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
                     f"{op.path} reference {number}: lines {from_line}-"
                     f"{to_line} were themselves replaced by an earlier "
                     "edit in this run; reread that range and cite the new digest")
+            if (local_from == local_to and ref.from_col is None
+                    and ref.to_col is None
+                    and citations.touched(run_id, op.path, generation,
+                                          window_start + local_from)):
+                raise PatchError(
+                    f"{op.path} reference {number}: line {from_line} is blank "
+                    "and an earlier edit in this run covered, began or ended "
+                    "exactly where it was, so an empty line now matches it "
+                    "wherever it went; reread that range and cite the new digest")
             if joined[start:end] != record["text"][local_from:local_to]:
                 raise PatchError(
                     f"{op.path} reference {number}: lines {from_line}-"
@@ -596,9 +615,13 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
             lines_was = was.count("\n") + 1 if was else 0
             lines_new = new_text.count("\n") + 1 if new_text else 0
             if lines_was != lines_new:
-                # A change in line count is the one thing the echo above cuts
-                # off: a window of ten lines replaced by one shows only its
-                # first characters. Counted, in the file's own bytes.
+                # A change in the number of lines is the one thing the echo
+                # above cuts off: a window of ten lines replaced by one shows
+                # only its first characters. Bytes are the file's own. The two
+                # counts count line PIECES, 1 + the newlines in a non-empty
+                # text and 0 for an empty one, not whole lines: a whole-line
+                # insertion `x\n` at a line start reports 0 -> 2, one line
+                # deleted with its newline 2 -> 0.
                 said["replaced_lines"] = lines_was
                 said["replaced_bytes"] = len(was.replace(
                     "\n", eol).encode("utf-8"))
@@ -609,7 +632,87 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
     return (eol.join(result) + (eol if result and final_newline else "")).encode("utf-8")
 
 
-def updated_bytes(before: bytes, op: Operation) -> bytes:
+def _line_blocks(placed) -> list[tuple[int, int, tuple[str, ...]]]:
+    """``(first old line, lines deleted, lines inserted)`` per changed block.
+
+    ``placed`` is each hunk with the line the applier matched it at. The
+    blocks are read off the hunk's own rows: a context row is a line kept, a
+    `-` row the matched line it removed, a `+` row a line written before the
+    next kept one. Neighbouring changed rows form one block, across a hunk
+    boundary too when no kept line separates them.
+    """
+    blocks: list[list] = []
+    open_block = None
+    cursor = 0
+    for hunk, start in placed:
+        if start != cursor:
+            open_block = None
+        rows = hunk.rows or (tuple(("-", t) for t in hunk.old)
+                             + tuple(("+", t) for t in hunk.new))
+        index = start
+        for sign, text in rows:
+            if sign == " ":
+                index += 1
+                open_block = None
+                continue
+            if open_block is None:
+                open_block = [index, 0, []]
+                blocks.append(open_block)
+            if sign == "-":
+                open_block[1] += 1
+                index += 1
+            else:
+                open_block[2].append(text)
+        cursor = start + len(hunk.old)
+    return [(k, m, tuple(new)) for k, m, new in blocks]
+
+
+def _block_spans(original: list[str], blocks) -> list[tuple[int, int, int]]:
+    """The blocks as ``(start, end, new_length)`` in the joined old text.
+
+    A line is its characters; the newline between two lines belongs to
+    neither. So an insertion between lines k-1 and k is written at the end of
+    line k-1 (``"\\n" + lines``), which leaves an offset at the start of line
+    k after it, and a deletion of lines k..k+m-1 takes each line with the
+    newline that follows it (or, at the end of the file, the one before).
+    """
+    starts = []
+    run = 0
+    for line in original:
+        starts.append(run)
+        run += len(line) + 1
+    total = max(run - 1, 0)
+
+    def end_of(i):
+        return starts[i] + len(original[i])
+
+    spans = []
+    for k, m, new in blocks:
+        text = "\n".join(new)
+        if m and new:
+            spans.append((starts[k], end_of(k + m - 1), len(text)))
+        elif new:
+            if k > 0:
+                spans.append((end_of(k - 1), end_of(k - 1), len(text) + 1))
+            else:
+                spans.append((0, 0, len(text) + (1 if original else 0)))
+        elif k + m < len(original):
+            spans.append((starts[k], starts[k + m], 0))
+        elif k > 0:
+            spans.append((end_of(k - 1), total, 0))
+        else:
+            spans.append((0, total, 0))
+    return spans
+
+
+def updated_bytes(before: bytes, op: Operation, edits: list | None = None) -> bytes:
+    """Apply V4A hunks; fill ``edits`` with the spans the applier wrote.
+
+    ``edits`` gets one ``(start, end, new_length)`` per changed block, in the
+    offsets of the old text as the journal frames it, taken from where each
+    hunk matched and from its own rows. Not recomputed from the two texts
+    afterwards: next to repeated lines those have more than one reading.
+    """
     try:
         text = before.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -626,6 +729,7 @@ def updated_bytes(before: bytes, op: Operation) -> bytes:
         original.pop()
     framed = "\n" + "\n".join(original) + "\n" if original else ""
     result: list[str] = []
+    placed: list[tuple[Hunk, int]] = []
     cursor = 0
     for number, hunk in enumerate(op.hunks, 1):
         if not hunk.old:
@@ -658,8 +762,11 @@ def updated_bytes(before: bytes, op: Operation) -> bytes:
             raise PatchError(f"{op.path}: hunks overlap or are out of order; combine them")
         result.extend(original[cursor:start])
         result.extend(hunk.new)
+        placed.append((hunk, start))
         cursor = start + len(hunk.old)
     result.extend(original[cursor:])
+    if edits is not None:
+        edits.extend(_block_spans(original, _line_blocks(placed)))
     return (eol.join(result) + (eol if result and final_newline else "")).encode("utf-8")
 
 
@@ -677,26 +784,25 @@ def _normalised(data: bytes) -> str | None:
     return "\n".join(lines)
 
 
-def _collapsed_edit(before: str, after: str) -> list[tuple[int, int, int]]:
-    """One span covering everything that differs, in ``before``'s offsets.
+def _spans_account_for(old: str, new: str, spans) -> bool:
+    """True when ``spans`` turn ``old`` into ``new`` outside the spans' own text.
 
-    For a V4A hunk batch the engine knows the two texts but not a per-hunk
-    span it could state in characters (a whole-line deletion is not a
-    character range), so it states the truth it does have: the region between
-    the first and last difference changed. Coordinates outside it translate;
-    coordinates inside it are refused, which is correct — they may be anywhere.
+    Every character outside a span must reappear, in order, exactly where the
+    spans say it moved to; that is what `citations.remap` will assume. It
+    cannot say WHICH of two valid readings an edit was — that comes from the
+    applier — only that the recorded one is a reading of this edit at all.
     """
-    if before == after:
-        return []
-    head = 0
-    limit = min(len(before), len(after))
-    while head < limit and before[head] == after[head]:
-        head += 1
-    tail = 0
-    while (tail < limit - head
-           and before[len(before) - 1 - tail] == after[len(after) - 1 - tail]):
-        tail += 1
-    return [(head, len(before) - tail, len(after) - tail - head)]
+    position = 0
+    cursor = 0
+    for start, end, new_length in sorted(spans):
+        if start < cursor or end < start or end > len(old):
+            return False
+        kept = old[cursor:start]
+        if new[position:position + len(kept)] != kept:
+            return False
+        position += len(kept) + new_length
+        cursor = end
+    return new[position:] == old[cursor:]
 
 
 @dataclass(frozen=True)
@@ -757,18 +863,23 @@ def _journal(run_id: str, op: Operation, before, after: bytes,
              spans: list[tuple[int, int, int]]) -> None:
     """Tell the citation journal what this publication did to ``op.path``.
 
+    The one recorder for every edit format. ``spans`` are what the applier
+    that made this edit wrote — `cited_bytes` for references, spans and
+    windows, `updated_bytes` for V4A hunks — never a diff of the two texts
+    taken afterwards: next to repeated lines a diff has two readings, and
+    the wrong one moves older citations onto the wrong copy.
+
     Recorded AFTER the write, so a citation is never translated through an
     edit that did not land. Anything the engine cannot describe as spans
-    (an Add, a text it cannot frame) breaks the chain instead of being guessed
-    at: a broken chain costs a reread, a wrong span costs a corrupted file.
+    (an Add, a text it cannot frame, spans that do not account for the
+    change) breaks the chain instead of being guessed at: a broken chain
+    costs a reread, a wrong span costs a corrupted file.
     """
     old = _normalised(before.data) if before is not None else None
     new = _normalised(after)
-    if old is None or new is None:
+    if old is None or new is None or not _spans_account_for(old, new, spans):
         citations.break_journal(run_id, op.path)
         return
-    if op.kind != "Cite":
-        spans = _collapsed_edit(old, new)
     citations.journal_edit(run_id, op.path, edits=spans,
                            sha_before=citations.text_sha(old),
                            sha_after=citations.text_sha(new))
@@ -819,7 +930,7 @@ def apply_code_patch(patch: str, root: Path, references=None,
                 if before is None:
                     raise PatchError(f"{op.path}: {op.kind} File requires an existing file")
                 if op.kind == "Update":
-                    after = updated_bytes(before.data, op)
+                    after = updated_bytes(before.data, op, edits=spans)
                 elif op.kind == "Cite":
                     after = cited_bytes(before.data, op, run_id, edits=spans,
                                         echo=echo)

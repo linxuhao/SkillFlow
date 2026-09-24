@@ -36,9 +36,11 @@ description: |
   column one short of the line's end keeps the line's last character, which
   is why a column is never written until you have seen what it covers. To
   replace whole lines, omit the columns. from == to inserts at a point. The
-  result's `replaced` says what each reference took out, and when a
-  reference changes the number of lines, `replaced_lines`, `replaced_bytes`
-  and `new_lines` say by how much. Order does not
+  result's `replaced` says what each reference took out. When a reference
+  changes the number of line pieces, it also gives `replaced_bytes` (bytes
+  taken out) and `replaced_lines`/`new_lines`: 1 + the newlines in the old
+  and new text, 0 when empty. They count pieces, not the net change: a
+  whole-line insertion `x\n` at a line start is 0 -> 2. Order does not
   matter and you never compensate for line drift: every range in one call is
   resolved against the same snapshot and the engine applies them. Ranges
   must not overlap. To change one line, read or cite just that line — a

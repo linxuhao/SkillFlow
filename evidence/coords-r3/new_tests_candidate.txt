@@ -1,0 +1,13 @@
+TREE_HEAD=6879e9d9d18d69f3f6532ed7cf68395dcf767b2a DIRTY_PATHS=5
+31ce5f371fc0ba7842935df6c61cc5cfb2daf282cc9f842c0b5129c19f593ff6  src/skillflow/strict_patch.py
+ca6ea7db13c429567bcc54e1fd5eb926ea242d391c0df91fccadf49fea3677d1  src/skillflow/citations.py
+ae3f970353da500ad552fe63325c7b839eb9f67cc8a318df940c0c12e65714b2  src/skillflow/read_tools.py
+bedc01e2a8d4d2354c69b7197e7b034dbf433b2844691259bcfbaa86b50610bc  src/skillflow/tools/apply_patch/tool.yaml
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
+PYTEST 9.1.1 ASYNCIO 1.4.0
+........................................................................ [ 43%]
+........................................................................ [ 86%]
+......................                                                   [100%]
+166 passed in 3.63s
+PYTEST_RC=0
+DOCKER_RC=0

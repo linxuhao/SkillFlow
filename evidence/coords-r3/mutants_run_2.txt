@@ -1,0 +1,19 @@
+MUTATED blank
+MUTATE_blank_RC=0
+SUITE_blank_RC=1
+IGNITIONS_blank=58
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_window_on_a_blank_line_this_run_s_v4a_deleted_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_a_window_on_a_blank_line_a_reference_filled_is_refused
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[blank_between-delete1-None]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[two_blanks-insert0-'x']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[two_blanks-insert0-'']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[two_blanks-insert0-'N']
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[two_blanks-delete0-None]
+FAILED tests/test_the_journal_records_what_the_applier_wrote.py::test_an_older_citation_lands_where_its_line_went_or_is_refused[two_blanks-delete1-None]
+8 failed, 1401 passed, 3 skipped, 40 warnings in 24.73s
+MUTATED m3
+MUTATE_m3_RC=0
+SUITE_m3_RC=1
+IGNITIONS_m3=1
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_T1_the_shown_text_edited_after_the_preview_is_refused
+1 failed, 1408 passed, 3 skipped, 40 warnings in 24.34s

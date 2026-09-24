@@ -1,0 +1,60 @@
+TREE_HEAD= DIRTY_PATHS=0
+f62e1c22fc9e03f6efbf7a884dd101c85323791dc28ca75ea2171458317a96b8  src/skillflow/strict_patch.py
+ca6ea7db13c429567bcc54e1fd5eb926ea242d391c0df91fccadf49fea3677d1  src/skillflow/citations.py
+ae3f970353da500ad552fe63325c7b839eb9f67cc8a318df940c0c12e65714b2  src/skillflow/read_tools.py
+bedc01e2a8d4d2354c69b7197e7b034dbf433b2844691259bcfbaa86b50610bc  src/skillflow/tools/apply_patch/tool.yaml
+IMPORT_PROOF /home/linxuhao/coords-r3-scratch/mut_m6/src/skillflow/__init__.py
+PYTEST 9.1.1 ASYNCIO 1.4.0
+.........F........s......ss............................................. [  5%]
+........................................................................ [ 10%]
+........................................................................ [ 15%]
+........................................................................ [ 20%]
+........................................................................ [ 25%]
+........................................................................ [ 30%]
+........................................................................ [ 35%]
+........................................................................ [ 40%]
+........................................................................ [ 45%]
+........................................................................ [ 50%]
+........................................................................ [ 56%]
+........................................................................ [ 61%]
+........................................................................ [ 66%]
+........................................................................ [ 71%]
+........................................................................ [ 76%]
+........................................................................ [ 81%]
+........................................................................ [ 86%]
+........................................................................ [ 91%]
+........................................................................ [ 96%]
+............................................                             [100%]
+=================================== FAILURES ===================================
+______________ test_T2_a_window_after_an_outside_write_is_refused ______________
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_T2_a_window_after_an_outs0')
+
+    def test_T2_a_window_after_an_outside_write_is_refused(root):
+        """The window form of T2. Lines 3..3 still read `x = 30`, so the check
+        that compares the text at those line numbers passes; before this it wrote
+        line 3, which is not the line the read showed."""
+        put(root, b"x = 30\n" * 5)
+        w = rd(root, 0, 5)["citation"]["sha"]
+        put(root, b"x = 30\n" * 6)                               # outside write
+        outside = (root / REL).read_bytes()
+    
+        res = ap(root, [{"file": REL, "sha": w, "from_line": 3, "to_line": 3,
+                         "new_text": "x = 45"}])
+    
+>       assert res["applied"] is False
+E       assert True is False
+
+tests/test_a_citation_writes_only_where_it_was_shown.py:296: AssertionError
+=============================== warnings summary ===============================
+tests/test_integration_configs.py: 39 warnings
+tests/test_regression.py: 1 warning
+  /home/linxuhao/coords-r3-scratch/mut_m6/src/skillflow/core.py:7633: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    elapsed = (dt.datetime.utcnow() - started_dt).total_seconds()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_T2_a_window_after_an_outside_write_is_refused
+1 failed, 1408 passed, 3 skipped, 40 warnings in 24.75s
+PYTEST_RC=1
+DOCKER_RC=1

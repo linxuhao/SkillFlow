@@ -1,0 +1,148 @@
+TREE_HEAD= DIRTY_PATHS=0
+31ce5f371fc0ba7842935df6c61cc5cfb2daf282cc9f842c0b5129c19f593ff6  src/skillflow/strict_patch.py
+d1b975ebdf72007fcb813f914b5b1bc601ae5d449f8397a15e0042fa27209f9b  src/skillflow/citations.py
+ae3f970353da500ad552fe63325c7b839eb9f67cc8a318df940c0c12e65714b2  src/skillflow/read_tools.py
+bedc01e2a8d4d2354c69b7197e7b034dbf433b2844691259bcfbaa86b50610bc  src/skillflow/tools/apply_patch/tool.yaml
+IMPORT_PROOF /home/linxuhao/coords-r3-scratch/mut_m7/src/skillflow/__init__.py
+PYTEST 9.1.1 ASYNCIO 1.4.0
+F.FFFF............s......ss............................................. [  5%]
+........................................................................ [ 10%]
+........................................................................ [ 15%]
+........................................................................ [ 20%]
+........................................................................ [ 25%]
+........................................................................ [ 30%]
+........................................................................ [ 35%]
+........................................................................ [ 40%]
+........................................................................ [ 45%]
+........................................................................ [ 50%]
+........................................................................ [ 56%]
+........................................................................ [ 61%]
+........................................................................ [ 66%]
+........................................................................ [ 71%]
+........................................................................ [ 76%]
+........................................................................ [ 81%]
+........................................................................ [ 86%]
+........................................................................ [ 91%]
+........................................................................ [ 96%]
+............................................                             [100%]
+=================================== FAILURES ===================================
+____ test_review_case_E_an_old_insertion_preview_writes_where_it_was_shown _____
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_review_case_E_an_old_inse0')
+
+    def test_review_case_E_an_old_insertion_preview_writes_where_it_was_shown(root):
+        """probe2.py case E. An empty range covers '' in every version of the
+        file, so before this two previews of 3:0 in two versions were one sha."""
+        put(root, L1_TO_L5)
+        wa = rd(root, 0, 5)["citation"]["sha"]
+        p = ap(root, [{"file": REL, "sha": wa, "from_line": 3, "to_line": 3,
+                       "from_col": 0, "to_col": 0, "new_text": "# note\n"}])
+        span_a = p["spans"][0]["sha"]
+        assert (p["spans"][0]["text"], p["spans"][0]["keeps_after"]) == ("", "l3")
+        r = ap(root, [{"file": REL, "sha": wa, "from_line": 1, "to_line": 1,
+                       "new_text": "l1\nNEW1\nNEW2"}])
+        assert r["applied"] is True
+        wb = rd(root, 0, 7)["citation"]["sha"]
+        p2 = ap(root, [{"file": REL, "sha": wb, "from_line": 3, "to_line": 3,
+                        "from_col": 0, "to_col": 0, "new_text": "# other\n"}])
+        span_b = p2["spans"][0]["sha"]
+        assert (p2["spans"][0]["text"], p2["spans"][0]["keeps_after"]) == ("", "NEW2")
+>       assert span_a != span_b
+E       AssertionError: assert '67bf11fafd9d454d3b5991280c2373a3c43b391c' != '67bf11fafd9d454d3b5991280c2373a3c43b391c'
+
+tests/test_a_citation_writes_only_where_it_was_shown.py:91: AssertionError
+_ test_review_case_S3_an_old_span_over_repeated_text_writes_where_it_was_shown _
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_review_case_S3_an_old_spa0')
+
+    def test_review_case_S3_an_old_span_over_repeated_text_writes_where_it_was_shown(root):
+        """probe.py case S3: the same coordinates over the same text `30`,
+        previewed in two versions of the file."""
+        put(root, DUP, SETTINGS)
+        wa = rd(root, 0, 5, SETTINGS)["citation"]["sha"]
+        first = ap(root, [{"file": SETTINGS, "sha": wa, "from_line": 2, "to_line": 2,
+                           "from_col": 4, "to_col": 6, "new_text": "45"}])
+        span_a = first["spans"][0]["sha"]
+        ap(root, [{"file": SETTINGS, "sha": wa, "from_line": 1, "to_line": 1,
+                   "new_text": "a = 1\nx = 30\nb = 2"}])
+        wb = rd(root, 0, 7, SETTINGS)["citation"]["sha"]
+        second = ap(root, [{"file": SETTINGS, "sha": wb, "from_line": 2, "to_line": 2,
+                            "from_col": 4, "to_col": 6, "new_text": "45"}])
+        span_b = second["spans"][0]["sha"]
+        assert first["spans"][0]["text"] == second["spans"][0]["text"] == "30"
+>       assert span_a != span_b
+E       AssertionError: assert '533a3eae2c341af199917b419e5046dbff4ad8c0' != '533a3eae2c341af199917b419e5046dbff4ad8c0'
+
+tests/test_a_citation_writes_only_where_it_was_shown.py:137: AssertionError
+__________ test_review_case_W_an_old_window_writes_where_it_was_read ___________
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_review_case_W_an_old_wind0')
+
+    def test_review_case_W_an_old_window_writes_where_it_was_read(root):
+        """probe2.py case W: the same lines with the same text read in two
+        versions of the file. The review measured this one on base as well."""
+        put(root, DUP)
+        wa = rd(root, 1, 2)["citation"]["sha"]
+        w1 = rd(root, 0, 1)["citation"]["sha"]
+        r = ap(root, [{"file": REL, "sha": w1, "from_line": 1, "to_line": 1,
+                       "new_text": "a = 1\nx = 30\nb = 2"}])
+        assert r["applied"] is True
+        wb = rd(root, 1, 2)["citation"]["sha"]
+>       assert wa != wb
+E       AssertionError: assert '51ecfb35700f1ad3dad5e4c7f057da7d96168ab1' != '51ecfb35700f1ad3dad5e4c7f057da7d96168ab1'
+
+tests/test_a_citation_writes_only_where_it_was_shown.py:156: AssertionError
+_ test_review_case_S3w_an_old_window_cited_by_sha_alone_writes_where_it_was_read _
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_review_case_S3w_an_old_wi0')
+
+    def test_review_case_S3w_an_old_window_cited_by_sha_alone_writes_where_it_was_read(root):
+        """probe.py case S3w: the window form of S3, with the insert made by
+        citing the sha alone."""
+        put(root, DUP, SETTINGS)
+        wa = rd(root, 1, 2, SETTINGS)["citation"]["sha"]
+        ap(root, [{"file": SETTINGS, "sha": rd(root, 0, 1, SETTINGS)["citation"]["sha"],
+                   "new_text": "a = 1\nx = 30\nb = 2"}])
+        wb = rd(root, 1, 2, SETTINGS)["citation"]["sha"]
+>       assert wa != wb
+E       AssertionError: assert 'b201bd16f81ef0cdd92224937d7c02b77723420b' != 'b201bd16f81ef0cdd92224937d7c02b77723420b'
+
+tests/test_a_citation_writes_only_where_it_was_shown.py:173: AssertionError
+___ test_the_same_range_in_the_same_version_is_one_sha_and_in_another_is_two ___
+
+root = PosixPath('/tmp/pytest-of-unknown/pytest-0/test_the_same_range_in_the_sam0')
+
+    def test_the_same_range_in_the_same_version_is_one_sha_and_in_another_is_two(root):
+        put(root, DUP)
+        first = rd(root, 3, 4)["citation"]["sha"]
+        assert rd(root, 3, 4)["citation"]["sha"] == first
+        ref = {"file": REL, "sha": first, "from_line": 4, "to_line": 4,
+               "from_col": 4, "to_col": 6, "new_text": "45"}
+        span = ap(root, [ref])["spans"][0]["sha"]
+        assert ap(root, [ref])["spans"][0]["sha"] == span
+    
+        # This run's own edit BELOW the range: nothing above it moved, the text
+        # and offset are the same; only the version differs.
+        assert ap(root, [{"file": REL, "sha": rd(root, 4, 5)["citation"]["sha"],
+                          "new_text": "c = 4"}])["applied"] is True
+        again = rd(root, 3, 4)["citation"]
+>       assert again["sha"] != first
+E       AssertionError: assert '880c8452053630e0f955be23e1ae9885320a37bf' != '880c8452053630e0f955be23e1ae9885320a37bf'
+
+tests/test_a_citation_writes_only_where_it_was_shown.py:200: AssertionError
+=============================== warnings summary ===============================
+tests/test_integration_configs.py: 39 warnings
+tests/test_regression.py: 1 warning
+  /home/linxuhao/coords-r3-scratch/mut_m7/src/skillflow/core.py:7633: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    elapsed = (dt.datetime.utcnow() - started_dt).total_seconds()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_review_case_E_an_old_insertion_preview_writes_where_it_was_shown
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_review_case_S3_an_old_span_over_repeated_text_writes_where_it_was_shown
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_review_case_W_an_old_window_writes_where_it_was_read
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_review_case_S3w_an_old_window_cited_by_sha_alone_writes_where_it_was_read
+FAILED tests/test_a_citation_writes_only_where_it_was_shown.py::test_the_same_range_in_the_same_version_is_one_sha_and_in_another_is_two
+5 failed, 1404 passed, 3 skipped, 40 warnings in 24.36s
+PYTEST_RC=1
+DOCKER_RC=1

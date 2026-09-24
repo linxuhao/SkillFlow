@@ -1,0 +1,1251 @@
+diff --git a/evidence/coords-r3/delivery_notes.md b/evidence/coords-r3/delivery_notes.md
+new file mode 100644
+index 0000000..c540147
+--- /dev/null
++++ b/evidence/coords-r3/delivery_notes.md
+@@ -0,0 +1,261 @@
+{+# editing.the-coordinates-must-come-from-the-read-too (rev 4): delivery notes, round 3+}
+
+{+- Attempt: `attempt-1111e2e100b943cb8d792ef4dde4fd30`. Branch: `director/coords-r3-20260924`.+}
+{+- Base: the r2 candidate `6879e9d9d18d69f3f6532ed7cf68395dcf767b2a`. Release base: `101da5c44e23aadbb0dcf3a423a0ac43286453bc` (1.5.79).+}
+{+- The r2 review is `~/.AItelier/director/reports/coords-r2-review-20260924/review.md` (sha256 `c98f734176ffd6ffe7a7d300b84ff3072f71b08efa38ac26e83dbc8bead92039`), called `$R2` below. The r1 review directory is called `$R1`.+}
+{+- Written 2026-09-24 (UTC). All measurements below had finished by 15:05Z (`date -u` when this line was written).+}
+{+- Every log named here is in this directory (`evidence/coords-r3/`) as `.txt`, unless it names `$R1` or `$R2`.+}
+{+- Every run used a throwaway `docker run --rm --init -m 3g aitelier:latest`, with the tree's `src/` first on `PYTHONPATH`. Each log prints `IMPORT_PROOF <tree>/src/skillflow/__init__.py`.+}
+{+- Every RC below was captured bare (`$?`, no pipe). At most 4 of my containers ran at once. The production `aitelier` container was not touched.+}
+{+- The `*_RC=` names come from the driver logs, which print each container's `$?`: `stage1_driver.txt` (new tests, probes, census), `stage2_driver.txt` (suites, reference tests, replay, bytes) and `mutants_driver.txt`.+}
+
+{+## What the last green light was bought with+}
+
+{+r2's translation was right, but the journal it translated through was not the edit that was made.+}
+{+- A V4A edit was journaled by `_collapsed_edit`. It stripped the common prefix and suffix of the two texts and recorded the rest as one span.+}
+{+- Next to a run of identical lines, that span sits at the far end of the run, not where the hunk wrote.+}
+{+- The property that gave way: **what the journal records is where the edit actually wrote**. Nothing observed it. Reference edits were journaled exactly, so every test was green, and no test compared a V4A journal entry with where V4A had applied.+}
+
+{+This round adds that observation point (the sweep below) and rederives the V4A journal from the applier.+}
+
+{+## What changed+}
+
+{+1. **`src/skillflow/strict_patch.py`: the journal comes from the applier, for every format.**+}
+{+   - `Hunk` keeps its own rows in order (`rows: ((prefix, text), ...)`). `parse_patch` fills them.+}
+{+   - `updated_bytes(before, op, edits=)`, the V4A applier, records each hunk with the line it matched at.+}
+{+     - `_line_blocks` reads the changed blocks off those rows, as `(first old line, lines deleted, lines inserted)`:+}
+{+       - a context row is a line kept;+}
+{+       - a `-` row is the matched line it removed;+}
+{+       - a `+` row is a line written before the next kept one.+}
+{+     - `_block_spans` turns each block into `(start, end, new_length)` in the journal's offsets. These are the same spans a reference making the same edit records:+}
+{+       - an insertion between lines k-1 and k is `"\n" + lines` at the end of line k-1;+}
+{+       - an insertion at the top of the file is `lines + "\n"` at offset 0;+}
+{+       - a deletion takes each line with the newline after it, or with the newline before it at the end of the file;+}
+{+       - a replacement is the replaced lines' characters.+}
+{+   - `_collapsed_edit` is deleted. `_journal` is the one recorder for V4A, reference, span and window edits, and records the spans the applier handed it.+}
+{+   - `_spans_account_for(old, new, spans)` guards that recorder. Every character outside the spans must reappear, in order, where the spans say it moved; if not, the chain is broken (a reread), never guessed. It cannot choose between two readings of an edit; the applier supplies that choice.+}
+{+   - No other content-derived diff (difflib or similar) is used anywhere.+}
+{+2. **`src/skillflow/citations.py`: `touched()`.** It is used for the blank-line case the sweep found (next item).+}
+{+   - A window on a blank line is a zero-width range, and its empty text matches wherever it lands. So the text check cannot catch a move.+}
+{+   - `touched(run, path, generation, offset)` reports whether any journaled edit since the window's generation covered that offset or began or ended exactly at it.+}
+{+   - In `cited_bytes`, a whole-line window over one blank line is refused when `touched` is true:+}
+
+{+         line N is blank and an earlier edit in this run covered, began or ended exactly where it was, so an empty line now matches it wherever it went; reread that range and cite the new digest+}
+
+{+   - Before this, on the r2 tree and on this tree without the check:+}
+{+     - a window on a blank line this run deleted wrote `Y` into the neighbouring line;+}
+{+     - after a top insertion, it wrote into the inserted line (`YN`).+}
+{+   - The same happened through reference edits (`test_a_window_on_a_blank_line_a_reference_filled_is_refused` is red on r2). So it is not a V4A difference. The sweep's second test found it (census below).+}
+{+3. **Criterion 3 wording** (`strict_patch.py` comment at the echo, and `src/skillflow/tools/apply_patch/tool.yaml`). `replaced_lines` and `new_lines` count line PIECES: 1 + the newlines in a non-empty text, 0 for an empty one. They do not count the net change. A whole-line insertion `x\n` at a line start reports 0 -> 2, and one line deleted with its newline reports 2 -> 0. The semantics are unchanged.+}
+{+4. **`tests/test_the_journal_records_what_the_applier_wrote.py`** (new, 166 tests): the review's H cases, verbatim; three blank-line cases; and the sweep.+}
+{+5. **Evidence scripts** in this directory:+}
+{+   - `run_in_throwaway.sh` and `replay.sh`, copied from `coords-r2`;+}
+{+   - `run_bytes.sh`, r2's with the scratch path changed;+}
+{+   - `run_py.sh`, which mounts both review directories read-only;+}
+{+   - `mutants.sh` and `mutate_r3.py`, which is r2's `mutate_r2.py` plus `collapse` and `blank`;+}
+{+   - `sweep_census.py`.+}
+
+{+## Route and discriminating reason (criterion 1)+}
+
+{+**The route is unchanged from r1 and r2: caller-supplied digest redundancy.** The caller quotes a digest the engine issued, and never a count or the original text.+}
+{+- Explicit columns must cite a span the engine issued for exactly those coordinates, after showing the covered text.+}
+{+- The common intent needs no column at all: the whole window (sha only) or whole lines (lines only).+}
+
+{+**This round's discriminating reason: which reading of the edit the journal records.**+}
+{+- A digest resolves through the journal. So the journal must record the edit that was made, and only the code that made it knows which one that was.+}
+{+- Next to repeated lines, the before and after texts have two or more valid readings. H5's `a x b -> a x x b` is "x inserted above line 2" or "x inserted below it".+}
+{+- Any rule that picks one reading from content alone (prefix/suffix, difflib, a longest-match) picks the wrong one for some hunk.+}
+{+- The applier does not choose. Its hunk matched at a line, and its own `-`/`+` rows say which lines it removed and where it wrote.+}
+
+{+## a-mis-specified-range-cannot-write-silently+}
+
+{+### The review's cases, pinned verbatim+}
+
+{+Each case is a test in `tests/test_the_journal_records_what_the_applier_wrote.py`, citing the file it came from. The review's probe scripts were also re-run unmodified on this tree (`run_py.sh`):+}
+{+- `$R2/probe4.py` → `probe4_candidate.txt`, DOCKER_RC=0;+}
+{+- `$R2/probe5.py` → `probe5_candidate.txt`, DOCKER_RC=0.+}
+
+{+| case (source) | file, citation, own edit | intended bytes | this tree | r2 (review's `$R2/probe*_candidate.txt`) |+}
+{+|---|---|---|---|---|+}
+{+| H1 (`probe4.py`) | `a\nx\nb\n`; span 2:0..2:1 from `rd(0,3)`; V4A `" a\n+x\n x\n b\n"` | `a\nx\nY\nb\n` | `b'a\nx\nY\nb\n'`, CORRECT=True | `b'a\nY\nx\nb\n'` |+}
+{+| H2 (`probe4.py`) | same, sha-only window `rd(1,2)` | `a\nx\nY\nb\n` | `b'a\nx\nY\nb\n'`, CORRECT=True | `b'a\nY\nx\nb\n'` |+}
+{+| H3 (`probe4.py`) | `a\n\nb\n`; insertion 2:0..2:0; V4A `" a\n+\n \n b\n"`; `new_text "# note\n"` | `a\n\n# note\n\nb\n` | `b'a\n\n# note\n\nb\n'`, CORRECT=True | `b'a\n# note\n\n\nb\n'` |+}
+{+| H4 control (`probe4.py`) | same insertion as H1 by a reference `{sha of rd(0,1), "a\nx"}` | `a\nx\nY\nb\n` | `b'a\nx\nY\nb\n'`, CORRECT=True | same (already right) |+}
+{+| H5 (`probe5.py`) | `a\nx\nb\n`; `rd(1,2)`; V4A `" a\n+x\n x\n b\n"`; `{sha, from_line 2, to_line 2, "Y"}` | `a\nx\nY\nb\n` | `b'a\nx\nY\nb\n'`, CORRECT=True | `b'a\nY\nx\nb\n'` |+}
+{+| H6 (`probe5.py`) | `a\nx\nx\nb\n`; `rd(1,2)`; V4A `" a\n-x\n x\n b\n"`; lines 2..2 `"Y"` | refused | refused, file `b'a\nx\nb\n'`, CORRECT=True | wrote `b'a\nY\nb\n'` |+}
+{+| H6c control (`probe5.py`) | same deletion by a reference | refused | refused, CORRECT=True | refused |+}
+
+{+H6 and H6c are refused with the same message, and both tests assert it exactly:+}
+
+{+    apply_patch preflight: f.py reference 1: lines 2-2 were themselves replaced by an earlier edit in this run; reread that range and cite the new digest+}
+
+{+**H7, pasted as-is, not counted** (`probe5_candidate.txt`):+}
+
+{+    H7 V4A applied=True -> b'def f():\n    return None\n\ndef h():\n    return None\n\ndef g():\n    return 1\n'+}
+{+    CASE H7 f's shown 'return None' after V4A inserted h() ending in the same line+}
+{+       WROTE=True applied=True+}
+{+       intended: b'def f():\n    return None\n\ndef h():\n    return 42\n\ndef g():\n    return 1\n'+}
+{+       actual:   b'def f():\n    return None\n\ndef h():\n    return 42\n\ndef g():\n    return 1\n'+}
+{+       CORRECT=True+}
+
+{+On r2 it wrote `return 42` into `f()`. The hunk's rows keep f's original `return None` as the context line at the end of the inserted `h()`, and the journal now follows those rows.+}
+
+{+**Nothing else in the review's probes moved.** `probe4_diff_vs_review_r2.txt` and `probe5_diff_vs_review_r2.txt` diff the CASE/actual/CORRECT lines of the review's r2 run against this tree (diff RC 1 each, differences shown).+}
+{+- The only changed outcomes are H1, H2, H3, H5, H6 and H7.+}
+{+- Every other case prints the same outcome as on r2: A1–A5, B1–B7, C1–C4, D1–D5, E1–E5, F1–F2 and G1–G6.+}
+
+{+**Three blank-line cases** (same test file):+}
+{+- `test_a_window_on_a_blank_line_this_run_s_v4a_deleted_is_refused` is H6 with the identical lines blank (`a\n\n\nb\n`, V4A `" a\n-\n \n b\n"`). It is refused with the blank-line message.+}
+{+- `test_a_window_on_a_blank_line_a_reference_filled_is_refused`: the run writes `filled` into the blank line. The window is refused.+}
+{+- `test_a_window_on_a_blank_line_away_from_this_run_s_edit_still_writes`: a V4A edit two lines below leaves the blank line's window writing `a\nY\nb\nC\n`.+}
+
+{+### The sweep: V4A and reference journal every edit identically+}
+
+{+`test_v4a_and_reference_journal_and_translate_the_same_edit_identically` (78 parametrised cases). Each case makes one edit twice, once through V4A with whole-file context and once through a reference, each in a fresh run on a fresh file. It then asserts two things:+}
+{+- the journal entry each left (`citations._JOURNAL[run][path]["edits"][-1]`) is equal;+}
+{+- every older citation gets the same outcome: the same file bytes (normalised text), or refused with the same message. The citations are a whole-line window on each old line (lines i..i of a whole-file read, `"Y"`), and an insertion-point span issued before the edit at the start of each old line and at the end of the file.+}
+
+{+**The cross product.** 6 file shapes:+}
+{+- `x`;+}
+{+- `x x`;+}
+{+- `x x x`;+}
+{+- `x '' x`;+}
+{+- `'' ''`;+}
+{+- `a x x b`.+}
+
+{+Each shape gets every insertion position (0..n) × 3 inserted texts (`x`, `''`, `N`), plus every deletion position (0..n-1). That is 63 insertions + 15 deletions = **78 edits** × 2 formats.+}
+{+- Each edit is probed by n windows + (n+1) insertion points = **512 probes**.+}
+{+- So 78 journal comparisons and 512 outcome comparisons, over **1,024 translations** (512 per format).+}
+
+{+`test_an_older_citation_lands_where_its_line_went_or_is_refused` (78 cases) checks the V4A outcome against where each old line went, computed from the edit itself:+}
+{+- a window on a deleted line is refused;+}
+{+- any other window writes `Y` at the line's new index;+}
+{+- an insertion point writes `P` before its old line's new index, or at the end.+}
+
+{+For deletion edits the 58 insertion-point probes are compared across formats only (the first test), so the oracle covers 454 of the 512 probes.+}
+
+{+**Census** (`sweep_census_candidate.txt`, CENSUS_RC=0; script `sweep_census.py`) over those 454 probes:+}
+{+- `WRONG_PLACE 0`: no probe writes anywhere other than where its line went.+}
+{+- `FALSE_REFUSALS 31`: probes refused although their line survived. They are listed by name in the census and under Not done:+}
+{+  - 18 are a window on old line 1 after a top insertion (6 shapes × 3 texts);+}
+{+  - 13 are a blank-line window next to an edit.+}
+
+{+**Both polarities.**+}
+{+- This tree: `new_tests_candidate.txt`, **166 passed**, PYTEST_RC=0, DOCKER_RC=0.+}
+{+- The r2 tree (a temporary detached worktree at 6879e9d, `~/coords-r3-scratch/r2tree`, removed afterwards), with the same test file: `new_tests_on_r2.txt`, **84 failed, 82 passed**, PYTEST_RC=1, DOCKER_RC=1. The red tests:+}
+{+  - H1, H2, H3, H5 and H6;+}
+{+  - the two blank-line refusal tests;+}
+{+  - 36 of the 78 equality cases: every shape has at least one, e.g. `two-insert1-'x'`, `three-delete1-None` and `run_in_context-delete1-None`;+}
+{+  - 41 of the 78 oracle cases.+}
+{+- The 3 named tests green on r2 are H4, H6c and the blank-line-away control, all of which r2 already did right.+}
+
+{+### Mutants: the whole suite, on disk+}
+
+{+Each mutant runs on a throwaway copy of the tree (`tar` of the worktree without `.git`, into `~/coords-r3-scratch/mut_<m>`).+}
+{+- Whole suite per mutant, bare RC. Driver: `mutants.sh`, in four parallel drivers of two mutants each (`mutants_run_1..4.txt`).+}
+{+- An IGNITION is logged each time the mutant departs from what the original code would have done.+}
+{+- Mutant code: `mutate_r3.py`, except M3, which uses `$R1/mutate.py`, unmodified.+}
+{+- Diffs: `mutant_<m>.diff.txt`. Ignition logs: `mutant_<m>_ignitions.txt`.+}
+
+{+| mutant | change | whole suite (log) | bare RC | ignitions | red tests |+}
+{+|---|---|---|---|---|---|+}
+{+| control | none | 1409 passed, 3 skipped (`mutant_control_suite.txt`) | SUITE_control_RC=0 | 0 | none |+}
+{+| **collapse** | `_collapsed_edit` put back: r2's function body, and every non-`Cite` edit (V4A) journaled through it instead of the applier's spans | 78 failed, 1331 passed (`mutant_collapse_suite.txt`) | **SUITE_collapse_RC=1** | **135** | H1, H2, H3, H5, H6, `test_a_window_on_a_blank_line_this_run_s_v4a_deleted_is_refused`, 36 of the 78 equality cases and 36 of the 78 oracle cases (the full list is the `FAILED` lines of the log). The 36 equality ids are exactly the 36 that are red on the r2 tree (`new_tests_on_r2.txt`). |+}
+{+| **blank** | the blank-line-window refusal removed | 8 failed, 1401 passed (`mutant_blank_suite.txt`) | **SUITE_blank_RC=1** | **58** | `test_a_window_on_a_blank_line_this_run_s_v4a_deleted_is_refused`, `test_a_window_on_a_blank_line_a_reference_filled_is_refused`, oracle `[blank_between-delete1-None]`, `[two_blanks-insert0-'x']`, `[two_blanks-insert0-'']`, `[two_blanks-insert0-'N']`, `[two_blanks-delete0-None]`, `[two_blanks-delete1-None]` |+}
+{+| M3 | `$R1/mutate.py m3`, verbatim: the span text comparison dropped | 1 failed, 1408 passed (`mutant_m3_suite.txt`) | SUITE_m3_RC=1 | 1 | `test_T1_the_shown_text_edited_after_the_preview_is_refused` |+}
+{+| M3b | the span chain check's `raise stale` replaced by an ignition (r2's `mutate_r2.py m3b`, unchanged) | 2 failed, 1407 passed (`mutant_m3b_suite.txt`) | SUITE_m3b_RC=1 | 3 | `test_T2_a_span_after_an_outside_write_is_refused`, `test_a_span_from_before_an_outside_write_stays_refused_after_the_run_rebuilds_the_same_text` |+}
+{+| M5 (= the review's M8) | the epoch comparison in `chain_intact` removed | 1 failed, 1408 passed (`mutant_m5_suite.txt`) | SUITE_m5_RC=1 | 1 | `test_a_span_from_before_an_outside_write_stays_refused_after_the_run_rebuilds_the_same_text` |+}
+{+| M6 | the framed-window refusal on a broken chain removed | 1 failed, 1408 passed (`mutant_m6_suite.txt`) | SUITE_m6_RC=1 | 5 | `test_T2_a_window_after_an_outside_write_is_refused` |+}
+{+| M7 | the frame dropped from the digest (r1's digest) | 5 failed, 1404 passed (`mutant_m7_suite.txt`) | SUITE_m7_RC=1 | 6 | `test_review_case_E_…`, `test_review_case_S3_…`, `test_review_case_W_…`, `test_review_case_S3w_…`, `test_the_same_range_in_the_same_version_is_one_sha_and_in_another_is_two` |+}
+
+{+Every mutant applied cleanly: each `MUTATE_<m>_RC=0` is in `mutants_run_1..4.txt`, and each of the four drivers returned `DRIVER<n>_RC=0` (`mutants_driver.txt`).+}
+
+{+Coverage, as a cross product:+}
+{+- 7 mutants (collapse, blank, M3, M3b, M5, M6, M7) plus an unmutated control × the whole suite (1409 tests), 1 run each.+}
+{+- Every mutant is killed with bare RC 1 and ignitions > 0.+}
+{+- M3, M3b, M5/M8, M6 and M7 kill the same tests as in r2. So r2's E/S3/W/S3w, T1/T2 and frame binding did not regress.+}
+
+{+## prove-it-on-the-edit-that-actually-went-wrong+}
+
+{+Re-measured on this tree, with the r1 script unmodified (`evidence/coords-r1/replay_real_edits.py`). Logs: `replay_candidate.txt` (SCRIPT_RC=0, DOCKER_RC=0, REPLAY_CAND_RC=0) and `replay_base.txt` (base, SCRIPT_RC=0, DOCKER_RC=0, REPLAY_BASE_RC=0).+}
+
+{+**eac7cacb, on the real file:**+}
+{+- **A1**, trace id 22 verbatim (`to_col=27`): `applied=False`, line 1679 `'DEFAULT_TIMEOUT_SECONDS = 30'`, `A1 file byte-identical to the original: True`. On base: `applied=True`, `'DEFAULT_TIMEOUT_SECONDS = 450'`.+}
+{+- **A2**, same read, same line, no columns: `applied=True`, `line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 45'`, `A2 rest of file byte-identical: True`.+}
+{+- **A3**, sha + new_text only: `applied=True`, `line 1679 = 'DEFAULT_TIMEOUT_SECONDS = 45'`. On base: `applied=False`.+}
+
+{+**wuxia b3983d63:** B1 (`to_col=58`) `applied=False`; B2 and B3 `applied=True`.+}
+
+{+**The 73 reference-mode tests** (`test_reference_hunks` + `test_strict_patch_parser` + `test_output_targets`):+}
+{+- candidate: `73 passed`, PYTEST_RC=0, DOCKER_RC=0, REF_CAND_RC=0 (`reference73_candidate.txt`, `IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py`);+}
+{+- base: `73 passed`, PYTEST_RC=0, DOCKER_RC=0, REF_BASE_RC=0 (`reference73_base.txt`, `IMPORT_PROOF /home/linxuhao/stepflow-coords-r1-base/src/skillflow/__init__.py`).+}
+
+{+**Byte identity of the 8 tests r1 rewrote**, measured by running the real test functions:+}
+{+- Method: `run_bytes.sh` (the review's runner) + `$R1/hash_tmp.py`. The base tree runs the 8 original tests and this tree runs the 8 rewritten ones, and every `.py` each left in its tmp dir is hashed.+}
+{+- Runs:+}
+{+  - base `8 passed`, PYTEST_RC=0, DOCKER_RC=0, BYTES_BASE_RC=0 (`rewritten_real_base.txt`);+}
+{+  - candidate `8 passed`, PYTEST_RC=0, DOCKER_RC=0, BYTES_CAND_RC=0 (`rewritten_real_candidate.txt`).+}
+{+- Result: `IDENTICAL 22 / 22 (candidate keys 22)`, COMPARE_RC=0 (`rewritten_real_compare.txt`; hashes in `rewritten_real_*.json.txt`). The 22 are 11 distinct files, each seen twice through pytest's `current` symlink.+}
+
+{+No docstring or message attributes the eac7cacb error to the model.+}
+
+{+## replace-what-was-read-without-naming-a-column+}
+
+{+**Pole 1: no column number.** `replay_candidate.txt` part C, `sha + new_text only (read line 3)`: `applied=True`, and `no columns (lines 3..3)` gives `line 3 = 'DEFAULT_TIMEOUT_SECONDS = 45'`. On base, the sha-only form is `applied=False` (`replay_base.txt`).+}
+
+{+**Pole 2: a narrowed sub-range still works.** The column cut `3:26..3:28 -> '45'` is refused on the first call, showing `'30'`, and written by the span on the second. This is `$R1/probe.py` P6a/P6b, unchanged since r2; its tests are in the whole suite, which is green.+}
+
+{+**How `replaced_lines` / `new_lines` count, stated truthfully.**+}
+{+- The echo comment in `cited_bytes` and the `tool.yaml` description now say they count line pieces: 1 + the newlines in a non-empty text, 0 for an empty one.+}
+{+- They do not count the net change. A whole-line insertion `x\n` at a line start is 0 -> 2, and a whole-line deletion is 2 -> 0.+}
+{+- The semantics and the r2 tests (`test_a_window_replaced_by_fewer_lines_states_the_lines_and_bytes_replaced`, `test_the_line_count_is_stated_in_the_file_s_own_bytes`, `test_a_replace_that_keeps_the_line_count_adds_nothing_to_the_echo`) are unchanged and green in the suite.+}
+
+{+## Whole suite+}
+
+{+| tree | result | bare RC | log | import proof |+}
+{+|---|---|---|---|---|+}
+{+| release base `101da5c` | 1209 passed, 3 skipped | PYTEST_RC=0, DOCKER_RC=0, SUITE_BASE_RC=0 | `suite_base.txt` (`TREE_HEAD=101da5c… DIRTY_PATHS=0`) | `IMPORT_PROOF /home/linxuhao/stepflow-coords-r1-base/src/skillflow/__init__.py` |+}
+{+| candidate | 1409 passed, 3 skipped | PYTEST_RC=0, DOCKER_RC=0, SUITE_CAND_RC=0 | `suite_candidate.txt` | `IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py` |+}
+
+{+- 1409 = r2's 1243 + the 166 new tests. No new red.+}
+{+- The candidate suite ran on the working tree before the commit (`TREE_HEAD=6879e9d… DIRTY_PATHS=5`). The sha256 it logged for the changed sources are:+}
+{+  - `strict_patch.py` `31ce5f37…`+}
+{+  - `citations.py` `ca6ea7db…`+}
+{+  - `read_tools.py` `ae3f9703…` (unchanged)+}
+{+  - `tool.yaml` `bedc01e2…`+}
+{+- `committed_hashes.txt` hashes the same four files as committed (`git show HEAD:<path> | sha256sum`), for comparison.+}
+
+{+## Word-diff read-back+}
+
+{+`worddiff_readback.txt` is `git diff --cached --word-diff 6879e9d` for every changed non-log file:+}
+{+- the 3 sources;+}
+{+- the new test file;+}
+{+- the scripts;+}
+{+- this note.+}
+
+{+The logs are excluded. Splice check:+}
+{+- I read every hunk back: no duplicated adjacent lines, fused lines, cut sentences or stale tails.+}
+{+- An awk scan for identical adjacent non-blank lines finds 0 hits in all 12 changed non-log files: the sources, the test file, the scripts and this note (`splice_scan.txt`).+}
+{+- The self-defence phrases (`not a defect`, `by design`, `documented`, `known limitation`, `intentionally`) appear 0 times in added lines (`splice_scan.txt`); in this note only on this line, which lists them.+}
+
+{+## Not done, stated plainly+}
+
+{+- **A window on old line 1 after this run inserts at the top of the file is refused** although the line survived. This is 18 of the census's 31 false refusals.+}
+{+  - The top insertion is journaled at offset 0, and `remap` keeps an offset at an edit's start in place. So the window then spans the inserted text and its own line, fails the text check and is refused.+}
+{+  - An insertion point at 1:0 issued before such an edit lands BEFORE the inserted lines, by the same rule. The sweep pins that position.+}
+{+- **A blank-line window next to this run's edit is refused** even when the line survived. This is the other 13 false refusals: e.g. a blank line right after a deleted line, or right before an insertion.+}
+{+  - `touched` cannot tell which side of an edit a zero-width range belonged to, so it refuses both.+}
+{+  - The safe half, deleted blank lines refused, is what the new check buys. The false half is its cost.+}
+{+- **Insertion points after a deletion are compared across formats only.** The 58 point probes on deletion edits are checked to be equal between V4A and reference; the place they land is not checked against an oracle. The tie rule places them, and no test pins that position.+}
+{+- **An insertion's neighbours are not re-checked** (unchanged from r2). An empty span covers no text, so an own edit that starts or ends exactly at an insertion point is not refused. `remap`'s tie rule places the point.+}
+{+- **The sweep covers single-block edits only.** It uses 6 shapes × every position × 3 texts, one hunk each.+}
+{+  - Multi-hunk V4A patches and hunks with several changed blocks are journaled by the same `_line_blocks` code: consecutive hunks with no kept line between them merge into one block.+}
+{+  - No sweep compares those against references. The existing multi-hunk tests in the suite pass.+}
+{+- **H7 follows the hunk's literal rows.** When a hunk's context line is text the author meant as some other copy, the journal records what the hunk says, and a citation of that line follows it. See H7 above; per the goal it is not counted.+}
+{+- **A `Hunk` built in code without `rows`** (not through `parse_patch`) is journaled as one block: all its old lines replaced by all its new ones. Citations inside it are refused rather than translated.+}
+{+- **`_spans_account_for` checks that the recorded spans are a reading of the edit, not that they are the applier's reading.** The applier is the only source of which reading; the guard catches spans that describe some other edit entirely.+}
+{+- **A citation issued with no frame** (`citations.issue` without `start_char`) is still judged by the text at its line numbers (unchanged from r2). No read issues one.+}
+{+- **Resending a preview without looking at it still writes what the count covered** (`A1'` in `replay_candidate.txt`: `= 450`). This is unchanged from r1 and r2.+}
+{+- **Explicit lines-only ranges are not corroborated** (unchanged).+}
+{+- **`~/AItelier/templates/coding_impl.md`** is still out of scope. Its replacement text is in `evidence/coords-r1/delivery_notes.md`.+}
+{+- No tag, version bump, build or publish, and no State DAG write.+}
+diff --git a/evidence/coords-r3/mutants.sh b/evidence/coords-r3/mutants.sh
+new file mode 100755
+index 0000000..fa23a6a
+--- /dev/null
++++ b/evidence/coords-r3/mutants.sh
+@@ -0,0 +1,26 @@
+{+#!/bin/sh+}
+{+# usage: mutants.sh <name>...   (control = no mutation; m3 = r1 review mutate.py verbatim)+}
+{+# Each mutant runs the whole suite on a throwaway copy (tar, no .git) of the+}
+{+# candidate tree. Logs go to $S; the exit codes are captured bare.+}
+{+E=/home/linxuhao/stepflow-coords-r1/evidence/coords-r3+}
+{+S=/home/linxuhao/coords-r3-scratch/ev; T=/home/linxuhao/stepflow-coords-r1+}
+{+R=/home/linxuhao/.AItelier/director/reports/coords-r1-review-20260924+}
+{+for m in "$@"; do+}
+{+  C=/home/linxuhao/coords-r3-scratch/mut_$m; rm -rf "$C"; mkdir -p "$C"+}
+{+  (cd $T && tar --exclude=./.git -cf - .) | (cd "$C" && tar -xf -)+}
+{+  case $m in+}
+{+    control) echo "MUTATED control (none)";;+}
+{+    m3) python3 $R/mutate.py "$C" m3;;+}
+{+    *) python3 $E/mutate_r3.py "$C" $m;;+}
+{+  esac+}
+{+  mrc=$?; echo "MUTATE_${m}_RC=$mrc"+}
+{+  [ $mrc -ne 0 ] && continue+}
+{+  for f in src/skillflow/strict_patch.py src/skillflow/citations.py; do diff -u "$T/$f" "$C/$f"; done > $S/mutant_${m}.diff.txt+}
+{+  $E/run_in_throwaway.sh "$C" coords-r3-mut-$m $S/mutant_${m}_suite.txt+}
+{+  echo "SUITE_${m}_RC=$?"+}
+{+  n=0; [ -f "$C/IGNITIONS.log" ] && n=$(grep -c IGNITION "$C/IGNITIONS.log")+}
+{+  echo "IGNITIONS_${m}=$n"+}
+{+  [ -f "$C/IGNITIONS.log" ] && cp "$C/IGNITIONS.log" $S/mutant_${m}_ignitions.txt+}
+{+  grep -E "^FAILED" $S/mutant_${m}_suite.txt | sed "s/ - .*//"+}
+{+  tail -3 $S/mutant_${m}_suite.txt | head -1+}
+{+done+}
+diff --git a/evidence/coords-r3/mutate_r3.py b/evidence/coords-r3/mutate_r3.py
+new file mode 100644
+index 0000000..449191c
+--- /dev/null
++++ b/evidence/coords-r3/mutate_r3.py
+@@ -0,0 +1,114 @@
+{+"""Apply one named, ignition-instrumented mutant to a throwaway copy of the tree.+}
+
+{+Usage: python3 mutate_r3.py <copy> <collapse|blank|m3b|m5|m6|m7>+}
+{+r2's mutate_r2.py with two mutants added for this round:+}
+{+  collapse: `_collapsed_edit` put back for V4A (and every non-Cite op), which+}
+{+            is what r2 journaled; ignites when its span differs from the+}
+{+            applier's.+}
+{+  blank:    the blank-line-window refusal removed; ignites when it would+}
+{+            have refused.+}
+{+M3 is applied with the review's own mutate.py, unmodified. Every replacement+}
+{+here must match exactly once, or the script exits 2. An IGNITION line is+}
+{+appended to <copy>/IGNITIONS.log each time the ORIGINAL code would have+}
+{+refused (or, for m7, would have issued a distinct digest) and the mutant did+}
+{+not.+}
+{+"""+}
+{+import sys+}
+
+{+LOG = ("def _ignite(name):\n"+}
+{+       "    import os as _os\n"+}
+{+       "    _p = _os.path.join(_os.path.dirname(__file__), '..', '..', 'IGNITIONS.log')\n"+}
+{+       "    with open(_p, 'a') as _fh:\n"+}
+{+       "        _fh.write('IGNITION ' + name + '\\n')\n\n\n")+}
+
+{+_COLLAPSED = (+}
+{+    "def _collapsed_edit(before, after):\n"+}
+{+    "    # MUTANT collapse: r2's content-derived journal span, restored verbatim\n"+}
+{+    "    if before == after:\n"+}
+{+    "        return []\n"+}
+{+    "    head = 0\n"+}
+{+    "    limit = min(len(before), len(after))\n"+}
+{+    "    while head < limit and before[head] == after[head]:\n"+}
+{+    "        head += 1\n"+}
+{+    "    tail = 0\n"+}
+{+    "    while (tail < limit - head\n"+}
+{+    "           and before[len(before) - 1 - tail] == after[len(after) - 1 - tail]):\n"+}
+{+    "        tail += 1\n"+}
+{+    "    return [(head, len(before) - tail, len(after) - tail - head)]\n\n\n")+}
+
+{+SP = "src/skillflow/strict_patch.py"+}
+{+CI = "src/skillflow/citations.py"+}
+{+MUTANTS = {+}
+{+    "collapse": [(SP, "def _coords(",+}
+{+                  "    new = _normalised(after)\n"+}
+{+                  "    if old is None or new is None or not _spans_account_for(old, new, spans):\n",+}
+{+                  "    new = _normalised(after)\n"+}
+{+                  "    if op.kind != \"Cite\" and old is not None and new is not None:\n"+}
+{+                  "        _collapsed = _collapsed_edit(old, new)\n"+}
+{+                  "        if _collapsed != [tuple(x) for x in spans]:\n"+}
+{+                  "            _ignite('collapse')\n"+}
+{+                  "        spans = _collapsed\n"+}
+{+                  "    if old is None or new is None or not _spans_account_for(old, new, spans):\n"),+}
+{+                 (SP, None, "def _journal(run_id", _COLLAPSED + "def _journal(run_id")],+}
+{+    "blank": [(SP, "def _coords(",+}
+{+               "                    and citations.touched(run_id, op.path, generation,\n"+}
+{+               "                                          window_start + local_from)):\n",+}
+{+               "                    and citations.touched(run_id, op.path, generation,\n"+}
+{+               "                                          window_start + local_from)\n"+}
+{+               "                    and _ignite('blank')):  # MUTANT blank: refusal removed\n")],+}
+{+    # M3b: the review's mutant, with the one line the epoch argument added.+}
+{+    "m3b": [(SP, "def _coords(",+}
+{+             "    if not citations.chain_intact(run_id, op.path, record.get(\"generation\"),\n"+}
+{+             "                                  record.get(\"file_sha\", \"\"), current_sha,\n"+}
+{+             "                                  epoch=record.get(\"epoch\")):\n"+}
+{+             "        raise stale\n",+}
+{+             "    if not citations.chain_intact(run_id, op.path, record.get(\"generation\"),\n"+}
+{+             "                                  record.get(\"file_sha\", \"\"), current_sha,\n"+}
+{+             "                                  epoch=record.get(\"epoch\")):\n"+}
+{+             "        _ignite('m3b')  # MUTANT m3b: chain check deleted\n")],+}
+{+    # M5: the chain (epoch) comparison removed from chain_intact.+}
+{+    "m5": [(CI, "def text_sha(",+}
+{+            "        if epoch is not None and entry[\"epoch\"] != epoch:\n"+}
+{+            "            return False\n",+}
+{+            "        if epoch is not None and entry[\"epoch\"] != epoch:\n"+}
+{+            "            _ignite('m5')  # MUTANT m5: epoch comparison removed\n")],+}
+{+    # M6: the refusal of a framed window whose chain is broken removed+}
+{+    # (back to r1: the strict line-number check decides).+}
+{+    "m6": [(SP, "def _coords(",+}
+{+            "            if window_start is not None:\n"+}
+{+            "                # The read placed",+}
+{+            "            if window_start is not None:\n"+}
+{+            "                _ignite('m6')  # MUTANT m6: framed-window refusal removed\n"+}
+{+            "            if False:\n"+}
+{+            "                # The read placed")],+}
+{+    # M7: the frame dropped from the digest (r1's digest).+}
+{+    "m7": [(CI, "def text_sha(",+}
+{+            "    payload = \"\\x00\".join((run_id, path, source, str(start_line),\n"+}
+{+            "                           str(end_line), text, frame)).encode(\"utf-8\")\n",+}
+{+            "    payload = \"\\x00\".join((run_id, path, source, str(start_line),\n"+}
+{+            "                           str(end_line), text)).encode(\"utf-8\")  # MUTANT m7\n"),+}
+{+           (CI, None,+}
+{+            "        record[\"sha\"] = sha\n        bucket = _bucket(_LEDGER, run_id, create=True)\n",+}
+{+            "        record[\"sha\"] = sha\n        bucket = _bucket(_LEDGER, run_id, create=True)\n"+}
+{+            "        _old = bucket.get(sha)\n"+}
+{+            "        if _old is not None and (_old.get('epoch'), _old.get('generation'), _old.get('file_sha'), _old.get('start_char')) != (epoch, generation, file_sha, start_char):\n"+}
+{+            "            _ignite('m7')  # a re-issue moved an existing sha\n")],+}
+{+}+}
+
+{+copy, name = sys.argv[1], sys.argv[2]+}
+{+logged = set()+}
+{+for rel, anchor, old, new in MUTANTS[name]:+}
+{+    path = copy + "/" + rel+}
+{+    src = open(path).read()+}
+{+    n = src.count(old)+}
+{+    expected = 2 if (name == "m7" and anchor is None) else 1+}
+{+    if n != expected:+}
+{+        print("MATCHES", n, "for", name, rel)+}
+{+        sys.exit(2)+}
+{+    src = src.replace(old, new)+}
+{+    if anchor and rel not in logged:+}
+{+        assert src.count(anchor) == 1+}
+{+        src = src.replace(anchor, LOG + anchor)+}
+{+        logged.add(rel)+}
+{+    open(path, "w").write(src)+}
+{+print("MUTATED", name)+}
+diff --git a/evidence/coords-r3/replay.sh b/evidence/coords-r3/replay.sh
+new file mode 100755
+index 0000000..fa75944
+--- /dev/null
++++ b/evidence/coords-r3/replay.sh
+@@ -0,0 +1,11 @@
+{+#!/bin/sh+}
+{+# usage: replay.sh <tree-under-test> <name> <log>   (r1 replay script, unmodified)+}
+{+TREE=$1; NAME=$2; LOG=$3; CAND=/home/linxuhao/stepflow-coords-r1+}
+{+docker run --rm --init -m 3g --name "$NAME" -u 1000:1000 -e HOME=/tmp \+}
+{+  -e PYTHONPATH="$TREE/src" -e PYTHONDONTWRITEBYTECODE=1 \+}
+{+  -v /home/linxuhao/stepflow:/home/linxuhao/stepflow:ro \+}
+{+  -v "$TREE:$TREE:ro" -v "$CAND:$CAND:ro" -w /tmp aitelier:latest \+}
+{+  sh -c "python $CAND/evidence/coords-r1/replay_real_edits.py; rc=\$?; echo SCRIPT_RC=\$rc; exit \$rc" > "$LOG" 2>&1+}
+{+rc=$?+}
+{+echo "DOCKER_RC=$rc" >> "$LOG"+}
+{+exit $rc+}
+diff --git a/evidence/coords-r3/run_bytes.sh b/evidence/coords-r3/run_bytes.sh
+new file mode 100755
+index 0000000..e99a068
+--- /dev/null
++++ b/evidence/coords-r3/run_bytes.sh
+@@ -0,0 +1,17 @@
+{+#!/bin/sh+}
+{+# usage: run_bytes.sh <tree> <name> <log> <out.json>+}
+{+# The review's run_bytes.sh, with the output JSON written to this scratch dir+}
+{+# and the review directory mounted read-only.+}
+{+TREE=$1; NAME=$2; LOG=$3; OUT=$4+}
+{+R=/home/linxuhao/.AItelier/director/reports/coords-r1-review-20260924+}
+{+S=/home/linxuhao/coords-r3-scratch/ev+}
+{+T=tests/test_reference_hunks.py+}
+{+W=tests/test_a_successful_write_leaves_the_next_coordinates_valid.py+}
+{+docker run --rm --init -m 3g --name "$NAME" -u 1000:1000 -e HOME=/tmp \+}
+{+  -e PYTHONPATH="$TREE/src" -e PYTHONDONTWRITEBYTECODE=1 \+}
+{+  -v /home/linxuhao/stepflow:/home/linxuhao/stepflow:ro \+}
+{+  -v "$TREE:$TREE:ro" -v "$R:$R:ro" -v "$S:$S" -w "$TREE" aitelier:latest \+}
+{+  sh -c "python -c \"import skillflow; print(\\\"IMPORT_PROOF\\\", skillflow.__file__)\"; python -m pytest -p no:cacheprovider -q --basetemp=/tmp/bt $T::test_a_digest_the_read_issued_applies $T::test_reference_and_v4a_produce_the_same_bytes $T::test_one_word_cites_one_line_and_leaves_the_rest_alone $T::test_unordered_references_match_descending_ones_byte_for_byte tests/test_output_targets.py::test_reference_mode_runs_end_to_end_through_the_engine $W::test_citing_inside_a_span_this_run_replaced_is_refused_by_name $W::test_the_result_says_what_it_replaced $W::test_the_privacy_r2_corruption_shape; rc=\$?; echo PYTEST_RC=\$rc; python $R/hash_tmp.py /tmp/bt $OUT; exit \$rc" > "$LOG" 2>&1+}
+{+rc=$?+}
+{+echo "DOCKER_RC=$rc" >> "$LOG"+}
+{+exit $rc+}
+diff --git a/evidence/coords-r3/run_in_throwaway.sh b/evidence/coords-r3/run_in_throwaway.sh
+new file mode 100755
+index 0000000..12af7d8
+--- /dev/null
++++ b/evidence/coords-r3/run_in_throwaway.sh
+@@ -0,0 +1,14 @@
+{+#!/bin/sh+}
+{+# usage: run_in_throwaway.sh <tree> <container-name> <log> [pytest args...]+}
+{+# Runs pytest in a throwaway --init container with <tree>/src first on the+}
+{+# import path, and logs the import proof, the tree state and the hashes of the+}
+{+# files this round changes. The exit code is pytest's, captured bare.+}
+{+TREE=$1; NAME=$2; LOG=$3; shift 3+}
+{+docker run --rm --init -m 3g --name "$NAME" -u 1000:1000 -e HOME=/tmp \+}
+{+  -e PYTHONPATH="$TREE/src" -e PYTHONDONTWRITEBYTECODE=1 \+}
+{+  -v /home/linxuhao/stepflow:/home/linxuhao/stepflow:ro \+}
+{+  -v "$TREE:$TREE" -w "$TREE" aitelier:latest \+}
+{+  sh -c 'echo "TREE_HEAD=$(git rev-parse HEAD 2>/dev/null) DIRTY_PATHS=$(git status --porcelain 2>/dev/null | wc -l)"; sha256sum src/skillflow/strict_patch.py src/skillflow/citations.py src/skillflow/read_tools.py src/skillflow/tools/apply_patch/tool.yaml 2>&1; python -c "import skillflow; print(\"IMPORT_PROOF\", skillflow.__file__)"; python -c "import pytest, pytest_asyncio; print(\"PYTEST\", pytest.__version__, \"ASYNCIO\", pytest_asyncio.__version__)"; python -m pytest -p no:cacheprovider -q -rfE "$@"; rc=$?; echo "PYTEST_RC=$rc"; exit $rc' sh "$@" > "$LOG" 2>&1+}
+{+rc=$?+}
+{+echo "DOCKER_RC=$rc" >> "$LOG"+}
+{+exit $rc+}
+diff --git a/evidence/coords-r3/run_py.sh b/evidence/coords-r3/run_py.sh
+new file mode 100755
+index 0000000..63dde01
+--- /dev/null
++++ b/evidence/coords-r3/run_py.sh
+@@ -0,0 +1,14 @@
+{+#!/bin/sh+}
+{+# usage: run_py.sh <tree> <name> <log> <script> [args]+}
+{+# The review probes, run unmodified, with both review directories mounted read-only.+}
+{+TREE=$1; NAME=$2; LOG=$3; shift 3+}
+{+R1=/home/linxuhao/.AItelier/director/reports/coords-r1-review-20260924+}
+{+R2=/home/linxuhao/.AItelier/director/reports/coords-r2-review-20260924+}
+{+docker run --rm --init -m 3g --name "$NAME" -u 1000:1000 -e HOME=/tmp \+}
+{+  -e PYTHONPATH="$TREE/src" -e PYTHONDONTWRITEBYTECODE=1 -e REAL_FILE=$R1/eac7cacb_real_settings.py \+}
+{+  -v /home/linxuhao/stepflow:/home/linxuhao/stepflow:ro \+}
+{+  -v "$TREE:$TREE:ro" -v "$R1:$R1:ro" -v "$R2:$R2:ro" -w /tmp aitelier:latest \+}
+{+  python "$@" > "$LOG" 2>&1+}
+{+rc=$?+}
+{+echo "DOCKER_RC=$rc" >> "$LOG"+}
+{+exit $rc+}
+diff --git a/evidence/coords-r3/sweep_census.py b/evidence/coords-r3/sweep_census.py
+new file mode 100644
+index 0000000..6e0114b
+--- /dev/null
++++ b/evidence/coords-r3/sweep_census.py
+@@ -0,0 +1,48 @@
+{+"""Every probe of the sweep, with its V4A outcome against where the line went.+}
+
+{+Prints the cross product, every probe that wrote somewhere other than where+}
+{+its old line went (must be none), and every refusal of a window whose line+}
+{+survived the edit (false refusals), by kind.+}
+{+"""+}
+{+import sys, tempfile+}
+{+from pathlib import Path+}
+{+sys.path.insert(0, "tests")+}
+{+import test_the_journal_records_what_the_applier_wrote as t+}
+
+{+total = 0+}
+{+wrong_place = []+}
+{+false_refusals = []+}
+{+for (shape, edit), ident in zip(t.EDITS, t.IDS):+}
+{+    lines = t.SHAPES[shape]+}
+{+    n = len(lines)+}
+{+    after, moved = t._after(lines, edit)+}
+{+    kind, k, _ = edit+}
+{+    for probe in t._probes(n):+}
+{+        total += 1+}
+{+        with tempfile.TemporaryDirectory() as d:+}
+{+            applied, error, result = t._outcome(Path(d), lines, edit, "v4a", probe)+}
+{+        i = probe[1]+}
+{+        want = None+}
+{+        if probe[0] == "window":+}
+{+            if moved[i] is None:+}
+{+                want = "refused"+}
+{+            else:+}
+{+                e = list(after); e[moved[i]] = "Y"; want = e+}
+{+        elif kind == "insert":+}
+{+            e = list(after)+}
+{+            at = (0 if (k == 0 and i == 0) else moved[i]) if i < n else moved[n - 1] + 1+}
+{+            e.insert(at, "P"); want = e+}
+{+        if want is None:+}
+{+            continue+}
+{+        if applied is False:+}
+{+            if want != "refused":+}
+{+                false_refusals.append((ident, probe, lines, error.split(": ", 2)[-1][:60]))+}
+{+        elif want == "refused" or result != want:+}
+{+            wrong_place.append((ident, probe, lines, result, want))+}
+{+print("EDITS", len(t.EDITS), "PROBES", total, "TRANSLATIONS_BOTH_FORMATS", 2 * total)+}
+{+print("WRONG_PLACE", len(wrong_place))+}
+{+for w in wrong_place:+}
+{+    print("  WRONG", *w)+}
+{+print("FALSE_REFUSALS", len(false_refusals))+}
+{+for f in false_refusals:+}
+{+    print("  FALSE", *f)+}
+diff --git a/src/skillflow/citations.py b/src/skillflow/citations.py
+index 8ac9fd2..ede0e54 100644
+--- a/src/skillflow/citations.py
++++ b/src/skillflow/citations.py
+@@ -377,6 +377,32 @@ def remap(run_id: str, path: str, generation: int, offset: int):
+    return position
+
+
+{+def touched(run_id: str, path: str, generation: int, offset: int) -> bool:+}
+{+    """True when an edit since ``generation`` covered ``offset`` or began or+}
+{+    ended exactly at it.+}
+
+{+    `remap` cannot place a zero-width range on either side of an edit that+}
+{+    touches it, and a blank line IS a zero-width range: its empty text matches+}
+{+    wherever it lands. A caller holding one asks this instead.+}
+{+    """+}
+{+    with _LOCK:+}
+{+        entry = (_JOURNAL.get(run_id) or {}).get(path)+}
+{+        if not entry or not (0 <= generation < len(entry["shas"])):+}
+{+            return True+}
+{+        generations = [list(g) for g in entry["edits"][generation:]]+}
+{+    position = offset+}
+{+    for spans in generations:+}
+{+        delta = 0+}
+{+        for start, end, new_length in spans:+}
+{+            if position < start:+}
+{+                break+}
+{+            if position <= end:+}
+{+                return True+}
+{+            delta += new_length - (end - start)+}
+{+        position += delta+}
+{+    return False+}
+
+
+def journal_depth(run_id: str, path: str) -> int:
+    """Generations recorded for ``path`` — 0 when nothing is known."""
+    with _LOCK:
+diff --git a/src/skillflow/strict_patch.py b/src/skillflow/strict_patch.py
+index d008fbf..547c48b 100644
+--- a/src/skillflow/strict_patch.py
++++ b/src/skillflow/strict_patch.py
+@@ -35,8 +35,16 @@ class UncorroboratedColumns(PatchError):
+
+@dataclass(frozen=True)
+class Hunk:
+    {+"""One V4A hunk: the lines it matches and the lines it writes.+}
+
+{+    ``rows`` keeps the hunk's own lines in order as ``(prefix, text)``, so the+}
+{+    applier can say which matched line each deletion removed and between+}
+{+    which lines each insertion went. A hunk built without rows is recorded as+}
+{+    one block: all of ``old`` replaced by all of ``new``.+}
+{+    """+}
+    old: tuple[str, ...]
+    new: tuple[str, ...]
+    {+rows: tuple[tuple[str, str], ...] = ()+}
+
+
+@dataclass(frozen=True)
+@@ -166,6 +174,7 @@ def parse_patch(patch: str) -> tuple[Operation, ...]:
+                j += 1
+                old: list[str] = []
+                new: list[str] = []
+                {+rows: list[tuple[str, str]] = []+}
+                changed = False
+                while j < len(body) and body[j] != "@@":
+                    row = body[j]
+@@ -175,11 +184,12 @@ def parse_patch(patch: str) -> tuple[Operation, ...]:
+                        old.append(row[1:])
+                    if row[0] in " +":
+                        new.append(row[1:])
+                    {+rows.append((row[0], row[1:]))+}
+                    changed |= row[0] != " "
+                    j += 1
+                if not changed or old == new:
+                    raise PatchError(f"{name}: each hunk must change text")
+                hunks.append(Hunk(tuple(old), [-tuple(new)))-]{+tuple(new), tuple(rows)))+}
+            if not hunks or len(hunks) > 1024:
+                raise PatchError(f"{name}: require 1..1024 hunks")
+            ops.append(Operation(kind, name, tuple(hunks)))
+@@ -527,6 +537,15 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
+                    f"{op.path} reference {number}: lines {from_line}-"
+                    f"{to_line} were themselves replaced by an earlier "
+                    "edit in this run; reread that range and cite the new digest")
+            {+if (local_from == local_to and ref.from_col is None+}
+{+                    and ref.to_col is None+}
+{+                    and citations.touched(run_id, op.path, generation,+}
+{+                                          window_start + local_from)):+}
+{+                raise PatchError(+}
+{+                    f"{op.path} reference {number}: line {from_line} is blank "+}
+{+                    "and an earlier edit in this run covered, began or ended "+}
+{+                    "exactly where it was, so an empty line now matches it "+}
+{+                    "wherever it went; reread that range and cite the new digest")+}
+            if joined[start:end] != record["text"][local_from:local_to]:
+                raise PatchError(
+                    f"{op.path} reference {number}: lines {from_line}-"
+@@ -596,9 +615,13 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
+            lines_was = was.count("\n") + 1 if was else 0
+            lines_new = new_text.count("\n") + 1 if new_text else 0
+            if lines_was != lines_new:
+                # A change in [-line count-]{+the number of lines+} is the one thing the echo
+                {+#+} above cuts[-#-] off: a window of ten lines replaced by one shows
+                {+#+} only its[-#-] first characters. [-Counted, in-]{+Bytes are+} the file's [-own bytes.-]{+own. The two+}
+{+                # counts count line PIECES, 1 + the newlines in a non-empty+}
+{+                # text and 0 for an empty one, not whole lines: a whole-line+}
+{+                # insertion `x\n` at a line start reports 0 -> 2, one line+}
+{+                # deleted with its newline 2 -> 0.+}
+                said["replaced_lines"] = lines_was
+                said["replaced_bytes"] = len(was.replace(
+                    "\n", eol).encode("utf-8"))
+@@ -609,7 +632,87 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
+    return (eol.join(result) + (eol if result and final_newline else "")).encode("utf-8")
+
+
+def {+_line_blocks(placed) -> list[tuple[int, int, tuple[str, ...]]]:+}
+{+    """``(first old line, lines deleted, lines inserted)`` per changed block.+}
+
+{+    ``placed`` is each hunk with the line the applier matched it at. The+}
+{+    blocks are read off the hunk's own rows: a context row is a line kept, a+}
+{+    `-` row the matched line it removed, a `+` row a line written before the+}
+{+    next kept one. Neighbouring changed rows form one block, across a hunk+}
+{+    boundary too when no kept line separates them.+}
+{+    """+}
+{+    blocks: list[list] = []+}
+{+    open_block = None+}
+{+    cursor = 0+}
+{+    for hunk, start in placed:+}
+{+        if start != cursor:+}
+{+            open_block = None+}
+{+        rows = hunk.rows or (tuple(("-", t) for t in hunk.old)+}
+{+                             + tuple(("+", t) for t in hunk.new))+}
+{+        index = start+}
+{+        for sign, text in rows:+}
+{+            if sign == " ":+}
+{+                index += 1+}
+{+                open_block = None+}
+{+                continue+}
+{+            if open_block is None:+}
+{+                open_block = [index, 0, []]+}
+{+                blocks.append(open_block)+}
+{+            if sign == "-":+}
+{+                open_block[1] += 1+}
+{+                index += 1+}
+{+            else:+}
+{+                open_block[2].append(text)+}
+{+        cursor = start + len(hunk.old)+}
+{+    return [(k, m, tuple(new)) for k, m, new in blocks]+}
+
+
+{+def _block_spans(original: list[str], blocks) -> list[tuple[int, int, int]]:+}
+{+    """The blocks as ``(start, end, new_length)`` in the joined old text.+}
+
+{+    A line is its characters; the newline between two lines belongs to+}
+{+    neither. So an insertion between lines k-1 and k is written at the end of+}
+{+    line k-1 (``"\\n" + lines``), which leaves an offset at the start of line+}
+{+    k after it, and a deletion of lines k..k+m-1 takes each line with the+}
+{+    newline that follows it (or, at the end of the file, the one before).+}
+{+    """+}
+{+    starts = []+}
+{+    run = 0+}
+{+    for line in original:+}
+{+        starts.append(run)+}
+{+        run += len(line) + 1+}
+{+    total = max(run - 1, 0)+}
+
+{+    def end_of(i):+}
+{+        return starts[i] + len(original[i])+}
+
+{+    spans = []+}
+{+    for k, m, new in blocks:+}
+{+        text = "\n".join(new)+}
+{+        if m and new:+}
+{+            spans.append((starts[k], end_of(k + m - 1), len(text)))+}
+{+        elif new:+}
+{+            if k > 0:+}
+{+                spans.append((end_of(k - 1), end_of(k - 1), len(text) + 1))+}
+{+            else:+}
+{+                spans.append((0, 0, len(text) + (1 if original else 0)))+}
+{+        elif k + m < len(original):+}
+{+            spans.append((starts[k], starts[k + m], 0))+}
+{+        elif k > 0:+}
+{+            spans.append((end_of(k - 1), total, 0))+}
+{+        else:+}
+{+            spans.append((0, total, 0))+}
+{+    return spans+}
+
+
+{+def+} updated_bytes(before: bytes, op: [-Operation)-]{+Operation, edits: list | None = None)+} -> bytes:
+    {+"""Apply V4A hunks; fill ``edits`` with the spans the applier wrote.+}
+
+{+    ``edits`` gets one ``(start, end, new_length)`` per changed block, in the+}
+{+    offsets of the old text as the journal frames it, taken from where each+}
+{+    hunk matched and from its own rows. Not recomputed from the two texts+}
+{+    afterwards: next to repeated lines those have more than one reading.+}
+{+    """+}
+    try:
+        text = before.decode("utf-8")
+    except UnicodeDecodeError as exc:
+@@ -626,6 +729,7 @@ def updated_bytes(before: bytes, op: Operation) -> bytes:
+        original.pop()
+    framed = "\n" + "\n".join(original) + "\n" if original else ""
+    result: list[str] = []
+    {+placed: list[tuple[Hunk, int]] = []+}
+    cursor = 0
+    for number, hunk in enumerate(op.hunks, 1):
+        if not hunk.old:
+@@ -658,8 +762,11 @@ def updated_bytes(before: bytes, op: Operation) -> bytes:
+            raise PatchError(f"{op.path}: hunks overlap or are out of order; combine them")
+        result.extend(original[cursor:start])
+        result.extend(hunk.new)
+        {+placed.append((hunk, start))+}
+        cursor = start + len(hunk.old)
+    result.extend(original[cursor:])
+    {+if edits is not None:+}
+{+        edits.extend(_block_spans(original, _line_blocks(placed)))+}
+    return (eol.join(result) + (eol if result and final_newline else "")).encode("utf-8")
+
+
+@@ -677,26 +784,25 @@ def _normalised(data: bytes) -> str | None:
+    return "\n".join(lines)
+
+
+def [-_collapsed_edit(before:-]{+_spans_account_for(old:+} str, [-after: str)-]{+new: str, spans)+} -> [-list[tuple[int, int, int]]:-]
+[-    """One span covering everything that differs, in ``before``'s offsets.-]{+bool:+}
+{+    """True when ``spans`` turn ``old`` into ``new`` outside the spans' own text.+}
+
+    [-For a V4A hunk batch the engine knows the two texts but not-]{+Every character outside+} a[-per-hunk-] span [-it could state-]{+must reappear,+} in [-characters (a whole-line deletion is not a-]
+[-    character range), so it states-]{+order, exactly where+} the
+    [-truth-]{+spans say+} it [-does have:-]{+moved to; that is what `citations.remap` will assume. It+}
+{+    cannot say WHICH of two valid readings an edit was — that comes from+} the
+    [-region between-]{+applier — only that+} the [-first and last difference changed. Coordinates outside it translate;-]
+[-    coordinates inside it are refused, which-]{+recorded one+} is [-correct — they may be anywhere.-]{+a reading of this edit at all.+}
+    """
+    [-if before == after:-]
+[-        return []-]
+[-    head-]{+position+} = 0
+    [-limit = min(len(before), len(after))-]
+[-    while head < limit and before[head] == after[head]:-]
+[-        head += 1-]
+[-    tail-]{+cursor+} = 0
+    [-while (tail-]{+for start, end, new_length in sorted(spans):+}
+{+        if start+} < [-limit - head-]
+[-           and before[len(before) - 1 - tail] == after[len(after) - 1 - tail]):-]
+[-        tail-]{+cursor or end < start or end > len(old):+}
+{+            return False+}
+{+        kept = old[cursor:start]+}
+{+        if new[position:position + len(kept)] != kept:+}
+{+            return False+}
+{+        position+} += [-1-]{+len(kept) + new_length+}
+{+        cursor = end+}
+    return [-[(head, len(before) - tail, len(after) - tail - head)]-]{+new[position:] == old[cursor:]+}
+
+
+@dataclass(frozen=True)
+@@ -757,18 +863,23 @@ def _journal(run_id: str, op: Operation, before, after: bytes,
+             spans: list[tuple[int, int, int]]) -> None:
+    """Tell the citation journal what this publication did to ``op.path``.
+
+    {+The one recorder for every edit format. ``spans`` are what the applier+}
+{+    that made this edit wrote — `cited_bytes` for references, spans and+}
+{+    windows, `updated_bytes` for V4A hunks — never a diff of the two texts+}
+{+    taken afterwards: next to repeated lines a diff has two readings, and+}
+{+    the wrong one moves older citations onto the wrong copy.+}
+
+    Recorded AFTER the write, so a citation is never translated through an
+    edit that did not land. Anything the engine cannot describe as spans
+    (an Add, a text it cannot [-frame)-]{+frame, spans that do not account for the+}
+{+    change)+} breaks the chain instead of being guessed at: a broken chain
+    costs a reread, a wrong span costs a corrupted file.
+    """
+    old = _normalised(before.data) if before is not None else None
+    new = _normalised(after)
+    if old is None or new is [-None:-]{+None or not _spans_account_for(old, new, spans):+}
+        citations.break_journal(run_id, op.path)
+        return
+[-    if op.kind != "Cite":-]
+[-        spans = _collapsed_edit(old, new)-]
+    citations.journal_edit(run_id, op.path, edits=spans,
+                           sha_before=citations.text_sha(old),
+                           sha_after=citations.text_sha(new))
+@@ -819,7 +930,7 @@ def apply_code_patch(patch: str, root: Path, references=None,
+                if before is None:
+                    raise PatchError(f"{op.path}: {op.kind} File requires an existing file")
+                if op.kind == "Update":
+                    after = updated_bytes(before.data, [-op)-]{+op, edits=spans)+}
+                elif op.kind == "Cite":
+                    after = cited_bytes(before.data, op, run_id, edits=spans,
+                                        echo=echo)
+diff --git a/src/skillflow/tools/apply_patch/tool.yaml b/src/skillflow/tools/apply_patch/tool.yaml
+index 038bdc5..8361172 100644
+--- a/src/skillflow/tools/apply_patch/tool.yaml
++++ b/src/skillflow/tools/apply_patch/tool.yaml
+@@ -36,9 +36,11 @@ description: |
+  column one short of the line's end keeps the line's last character, which
+  is why a column is never written until you have seen what it covers. To
+  replace whole lines, omit the columns. from == to inserts at a point. The
+  result's `replaced` says what each reference took [-out, and when-]{+out. When+} a reference
+  changes the number of [-lines, `replaced_lines`,-]{+line pieces, it also gives+} `replaced_bytes` {+(bytes+}
+{+  taken out) and `replaced_lines`/`new_lines`: 1 + the newlines in the old+}
+  and [-`new_lines` say by how much.-]{+new text, 0 when empty. They count pieces, not the net change: a+}
+{+  whole-line insertion `x\n` at a line start is 0 -> 2.+} Order does not
+  matter and you never compensate for line drift: every range in one call is
+  resolved against the same snapshot and the engine applies them. Ranges
+  must not overlap. To change one line, read or cite just that line — a
+diff --git a/tests/test_the_journal_records_what_the_applier_wrote.py b/tests/test_the_journal_records_what_the_applier_wrote.py
+new file mode 100644
+index 0000000..76b8afe
+--- /dev/null
++++ b/tests/test_the_journal_records_what_the_applier_wrote.py
+@@ -0,0 +1,389 @@
+{+"""The edit journal records the positions the applier wrote, in every format.+}
+
+{+A citation issued before this run's own edit is translated through the+}
+{+journal, so the journal must say where that edit actually went. A V4A edit+}
+{+used to be journaled afterwards, from the two texts: their common prefix and+}
+{+suffix were stripped and the rest recorded as one span. Next to a run of+}
+{+identical lines that span sits at the far end of the run, not where the hunk+}
+{+wrote, and older citations were moved onto the wrong copy. The review of+}
+{+coords-r2 (`~/.AItelier/director/reports/coords-r2-review-20260924/+}
+{+review.md`, sha256 c98f7341…) measured it; its cases H1-H3 (probe4.py) and+}
+{+H5, H6 (probe5.py) are replayed below verbatim, with the bytes the node goal+}
+{+(rev 4) names.+}
+
+{+Any reading taken from the two texts has two answers once lines repeat, so+}
+{+the journal now comes from the applier: each V4A hunk's matched line and its+}
+{+own `-`/`+` rows. The sweep at the end checks it: for identical-line files,+}
+{+the same edit made through V4A and through a reference must journal the same+}
+{+spans and translate every older citation to the same outcome.+}
+{+"""+}
+{+from pathlib import Path+}
+
+{+import pytest+}
+
+{+from skillflow import citations+}
+{+from skillflow.read_tools import unified_read+}
+{+from skillflow.strict_patch import apply_code_patch+}
+
+{+RUN = "run-the-journal-records-what-the-applier-wrote"+}
+{+REL = "f.py"+}
+
+
+{+def smap(root):+}
+{+    return {"working_tree": [("repo", str(root))], "named": {}, "allowed": set()}+}
+
+
+{+def rd(root, s, e, run=RUN):+}
+{+    """The probes' read: 0-based start, exclusive end."""+}
+{+    return unified_read(smap(root), REL, start_line=s, end_line=e, run_id=run)+}
+
+
+{+def ap(root, refs=None, patch="", run=RUN):+}
+{+    return apply_code_patch(patch, root, references=refs, run_id=run)+}
+
+
+{+def v4a(body):+}
+{+    return "*** Begin Patch\n*** Update File: f.py\n@@\n" + body + "*** End Patch\n"+}
+
+
+{+def span(root, sha, fl, fc, tl, tc, run=RUN):+}
+{+    """The probes' span helper: preview the coordinates, return the span sha."""+}
+{+    got = ap(root, [{"file": REL, "sha": sha, "from_line": fl, "from_col": fc,+}
+{+                     "to_line": tl, "to_col": tc, "new_text": "?"}], run=run)+}
+{+    assert got["applied"] is False, got+}
+{+    return got["spans"][0]["sha"]+}
+
+
+{+@pytest.fixture+}
+{+def root(tmp_path):+}
+{+    citations.forget_run(RUN)+}
+{+    yield tmp_path+}
+{+    citations.forget_run(RUN)+}
+
+
+{+def put(root, data):+}
+{+    (root / REL).write_bytes(data)+}
+
+
+{+# ===========================================================================+}
+{+# the review's cases, verbatim+}
+{+# ===========================================================================+}
+
+{+def test_H1_a_span_on_the_shown_line_after_v4a_inserted_an_identical_line_above(root):+}
+{+    """probe4.py H1."""+}
+{+    put(root, b"a\nx\nb\n")+}
+{+    w = rd(root, 0, 3)["citation"]["sha"]+}
+{+    sx = span(root, w, 2, 0, 2, 1)+}
+{+    r = ap(root, patch=v4a(" a\n+x\n x\n b\n"))+}
+{+    assert r["applied"] is True and (root / REL).read_bytes() == b"a\nx\nx\nb\n"+}
+{+    res = ap(root, [{"file": REL, "sha": sx, "new_text": "Y"}])+}
+{+    assert res["applied"] is True, res+}
+{+    assert (root / REL).read_bytes() == b"a\nx\nY\nb\n"+}
+
+
+{+def test_H2_a_sha_only_window_on_the_shown_line_after_the_same_insertion(root):+}
+{+    """probe4.py H2."""+}
+{+    put(root, b"a\nx\nb\n")+}
+{+    wx = rd(root, 1, 2)["citation"]["sha"]+}
+{+    ap(root, patch=v4a(" a\n+x\n x\n b\n"))+}
+{+    res = ap(root, [{"file": REL, "sha": wx, "new_text": "Y"}])+}
+{+    assert res["applied"] is True, res+}
+{+    assert (root / REL).read_bytes() == b"a\nx\nY\nb\n"+}
+
+
+{+def test_H3_an_insertion_shown_before_a_blank_line_after_v4a_inserted_a_blank_above(root):+}
+{+    """probe4.py H3."""+}
+{+    put(root, b"a\n\nb\n")+}
+{+    w = rd(root, 0, 3)["citation"]["sha"]+}
+{+    ins = span(root, w, 2, 0, 2, 0)+}
+{+    ap(root, patch=v4a(" a\n+\n \n b\n"))+}
+{+    assert (root / REL).read_bytes() == b"a\n\n\nb\n"+}
+{+    res = ap(root, [{"file": REL, "sha": ins, "new_text": "# note\n"}])+}
+{+    assert res["applied"] is True, res+}
+{+    assert (root / REL).read_bytes() == b"a\n\n# note\n\nb\n"+}
+
+
+{+def test_H4_control_the_same_insertion_made_by_a_reference(root):+}
+{+    """probe4.py H4: this was already right, and must stay right."""+}
+{+    put(root, b"a\nx\nb\n")+}
+{+    wx = rd(root, 1, 2)["citation"]["sha"]+}
+{+    w1 = rd(root, 0, 1)["citation"]["sha"]+}
+{+    ap(root, [{"file": REL, "sha": w1, "new_text": "a\nx"}])+}
+{+    res = ap(root, [{"file": REL, "sha": wx, "new_text": "Y"}])+}
+{+    assert res["applied"] is True, res+}
+{+    assert (root / REL).read_bytes() == b"a\nx\nY\nb\n"+}
+
+
+{+def test_H5_explicit_lines_on_the_shown_line_after_v4a_inserted_an_identical_line_above(root):+}
+{+    """probe5.py H5."""+}
+{+    put(root, b"a\nx\nb\n")+}
+{+    wx = rd(root, 1, 2)["citation"]["sha"]+}
+{+    r = ap(root, patch=v4a(" a\n+x\n x\n b\n"))+}
+{+    assert r["applied"] is True and (root / REL).read_bytes() == b"a\nx\nx\nb\n"+}
+{+    res = ap(root, [{"file": REL, "sha": wx, "from_line": 2, "to_line": 2,+}
+{+                     "new_text": "Y"}])+}
+{+    assert res["applied"] is True, res+}
+{+    assert (root / REL).read_bytes() == b"a\nx\nY\nb\n"+}
+
+
+{+H6_REFUSAL = ("apply_patch preflight: f.py reference 1: lines 2-2 were themselves "+}
+{+              "replaced by an earlier edit in this run; reread that range and cite "+}
+{+              "the new digest")+}
+
+
+{+def test_H6_a_window_on_a_line_this_run_s_v4a_deleted_is_refused(root):+}
+{+    """probe5.py H6. The hunk deletes line 2 and keeps line 3; before this the+}
+{+    journal recorded line 3 as the one deleted and wrote `a\\nY\\nb\\n`."""+}
+{+    put(root, b"a\nx\nx\nb\n")+}
+{+    w2 = rd(root, 1, 2)["citation"]["sha"]+}
+{+    r = ap(root, patch=v4a(" a\n-x\n x\n b\n"))+}
+{+    assert r["applied"] is True and (root / REL).read_bytes() == b"a\nx\nb\n"+}
+{+    res = ap(root, [{"file": REL, "sha": w2, "from_line": 2, "to_line": 2,+}
+{+                     "new_text": "Y"}])+}
+{+    assert res["applied"] is False+}
+{+    assert res["error"] == H6_REFUSAL+}
+{+    assert (root / REL).read_bytes() == b"a\nx\nb\n"+}
+
+
+{+def test_H6c_control_the_same_deletion_by_a_reference_is_refused_for_the_same_reason(root):+}
+{+    """probe5.py H6c."""+}
+{+    put(root, b"a\nx\nx\nb\n")+}
+{+    w2 = rd(root, 1, 2)["citation"]["sha"]+}
+{+    w12 = rd(root, 0, 2)["citation"]["sha"]+}
+{+    ap(root, [{"file": REL, "sha": w12, "from_line": 1, "to_line": 2, "new_text": "a"}])+}
+{+    res = ap(root, [{"file": REL, "sha": w2, "from_line": 2, "to_line": 2,+}
+{+                     "new_text": "Y"}])+}
+{+    assert res["applied"] is False+}
+{+    assert res["error"] == H6_REFUSAL+}
+{+    assert (root / REL).read_bytes() == b"a\nx\nb\n"+}
+
+
+{+BLANK_REFUSAL = ("apply_patch preflight: f.py reference 1: line 2 is blank and an "+}
+{+                 "earlier edit in this run covered, began or ended exactly where "+}
+{+                 "it was, so an empty line now matches it wherever it went; "+}
+{+                 "reread that range and cite the new digest")+}
+
+
+{+def test_a_window_on_a_blank_line_this_run_s_v4a_deleted_is_refused(root):+}
+{+    """H6 with the identical lines blank. A blank line's range is zero-width+}
+{+    and its empty text matches anywhere, so the text check cannot catch the+}
+{+    move; before this the window wrote `Y` into old line 3."""+}
+{+    put(root, b"a\n\n\nb\n")+}
+{+    w2 = rd(root, 1, 2)["citation"]["sha"]+}
+{+    r = ap(root, patch=v4a(" a\n-\n \n b\n"))+}
+{+    assert r["applied"] is True and (root / REL).read_bytes() == b"a\n\nb\n"+}
+{+    res = ap(root, [{"file": REL, "sha": w2, "from_line": 2, "to_line": 2,+}
+{+                     "new_text": "Y"}])+}
+{+    assert res["applied"] is False+}
+{+    assert res["error"] == BLANK_REFUSAL+}
+{+    assert (root / REL).read_bytes() == b"a\n\nb\n"+}
+
+
+{+def test_a_window_on_a_blank_line_a_reference_filled_is_refused(root):+}
+{+    """The run wrote text into the blank line itself: a pure insertion at its+}
+{+    offset. Before this the window wrote `Y` in front of that text."""+}
+{+    put(root, b"a\n\nb\n")+}
+{+    w2 = rd(root, 1, 2)["citation"]["sha"]+}
+{+    w2b = rd(root, 1, 2)["citation"]["sha"]+}
+{+    ap(root, [{"file": REL, "sha": w2b, "new_text": "filled"}])+}
+{+    assert (root / REL).read_bytes() == b"a\nfilled\nb\n"+}
+{+    res = ap(root, [{"file": REL, "sha": w2, "new_text": "Y"}])+}
+{+    assert res["applied"] is False+}
+{+    assert res["error"] == BLANK_REFUSAL+}
+{+    assert (root / REL).read_bytes() == b"a\nfilled\nb\n"+}
+
+
+{+def test_a_window_on_a_blank_line_away_from_this_run_s_edit_still_writes(root):+}
+{+    put(root, b"a\n\nb\nc\n")+}
+{+    w2 = rd(root, 1, 2)["citation"]["sha"]+}
+{+    ap(root, patch=v4a(" a\n \n b\n-c\n+C\n"))+}
+{+    res = ap(root, [{"file": REL, "sha": w2, "from_line": 2, "to_line": 2,+}
+{+                     "new_text": "Y"}])+}
+{+    assert res["applied"] is True, res+}
+{+    assert (root / REL).read_bytes() == b"a\nY\nb\nC\n"+}
+
+
+{+# ===========================================================================+}
+{+# the sweep: V4A and reference journal the same edit the same way+}
+{+# ===========================================================================+}
+
+{+SHAPES = {+}
+{+    "one": ["x"],+}
+{+    "two": ["x", "x"],+}
+{+    "three": ["x", "x", "x"],+}
+{+    "blank_between": ["x", "", "x"],+}
+{+    "two_blanks": ["", ""],+}
+{+    "run_in_context": ["a", "x", "x", "b"],+}
+{+}+}
+{+INSERTED = ("x", "", "N")+}
+
+
+{+def _edits():+}
+{+    for shape, lines in SHAPES.items():+}
+{+        n = len(lines)+}
+{+        for k in range(n + 1):+}
+{+            for text in INSERTED:+}
+{+                yield shape, ("insert", k, text)+}
+{+        for k in range(n):+}
+{+            yield shape, ("delete", k, None)+}
+
+
+{+EDITS = list(_edits())+}
+{+# Sum over the 6 shapes (n = 1, 2, 3, 3, 2, 4 lines) of 3 texts x (n + 1)+}
+{+# insert positions + n delete positions = 63 + 15 = 78 edits.+}
+{+assert len(EDITS) == 78+}
+
+
+{+def _after(lines, edit):+}
+{+    """The lines after the edit, and where each old line went (None: deleted)."""+}
+{+    kind, k, text = edit+}
+{+    if kind == "insert":+}
+{+        return (lines[:k] + [text] + lines[k:],+}
+{+                [i if i < k else i + 1 for i in range(len(lines))])+}
+{+    return (lines[:k] + lines[k + 1:],+}
+{+            [i if i < k else (None if i == k else i - 1) for i in range(len(lines))])+}
+
+
+{+def _v4a_patch(lines, edit):+}
+{+    kind, k, text = edit+}
+{+    rows = [" " + line for line in lines]+}
+{+    if kind == "insert":+}
+{+        rows.insert(k, "+" + text)+}
+{+    else:+}
+{+        rows[k] = "-" + lines[k]+}
+{+    return v4a("\n".join(rows) + "\n")+}
+
+
+{+def _reference(lines, edit):+}
+{+    """The same edit through a reference: coordinates, new_text."""+}
+{+    kind, k, text = edit+}
+{+    n = len(lines)+}
+{+    if kind == "insert":+}
+{+        if k == 0:+}
+{+            return (1, 0, 1, 0), text + "\n"+}
+{+        return (k, len(lines[k - 1]), k, len(lines[k - 1])), "\n" + text+}
+{+    if k < n - 1:+}
+{+        return (k + 1, 0, k + 2, 0), ""+}
+{+    if k > 0:+}
+{+        return (k, len(lines[k - 1]), k + 1, len(lines[k])), ""+}
+{+    return (1, 0, 1, len(lines[0])), ""+}
+
+
+{+def _make(tmp, lines, edit, fmt, run, probe=None):+}
+{+    """Fresh file and run; optional probe issued BEFORE the edit; the edit.+}
+
+{+    Returns the journal entry the edit left and the probe's citation.+}
+{+    """+}
+{+    citations.forget_run(run)+}
+{+    root = tmp / run+}
+{+    root.mkdir()+}
+{+    (root / REL).write_bytes(("\n".join(lines) + "\n").encode())+}
+{+    whole = rd(root, 0, len(lines), run=run)["citation"]["sha"]+}
+{+    cite = None+}
+{+    if probe is not None and probe[0] == "point":+}
+{+        i = probe[1]+}
+{+        if i < len(lines):+}
+{+            cite = span(root, whole, i + 1, 0, i + 1, 0, run=run)+}
+{+        else:+}
+{+            end = len(lines[-1])+}
+{+            cite = span(root, whole, i, end, i, end, run=run)+}
+{+    if fmt == "v4a":+}
+{+        done = ap(root, patch=_v4a_patch(lines, edit), run=run)+}
+{+    else:+}
+{+        (fl, fc, tl, tc), new_text = _reference(lines, edit)+}
+{+        sha = span(root, whole, fl, fc, tl, tc, run=run)+}
+{+        done = ap(root, [{"file": REL, "sha": sha, "new_text": new_text}], run=run)+}
+{+    assert done["applied"] is True, (fmt, lines, edit, done)+}
+{+    journal = citations._JOURNAL[run][REL]["edits"][-1]+}
+{+    return root, whole, cite, list(journal)+}
+
+
+{+def _normalised(root):+}
+{+    text = (root / REL).read_bytes().decode()+}
+{+    lines = text.split("\n")+}
+{+    if text.endswith("\n"):+}
+{+        lines.pop()+}
+{+    return lines+}
+
+
+{+def _outcome(tmp, lines, edit, fmt, probe):+}
+{+    run = f"sweep-{fmt}-{abs(hash((tuple(lines), edit, probe))):x}"+}
+{+    root, whole, cite, _ = _make(tmp, lines, edit, fmt, run, probe)+}
+{+    if probe[0] == "window":+}
+{+        i = probe[1]+}
+{+        got = ap(root, [{"file": REL, "sha": whole, "from_line": i + 1,+}
+{+                         "to_line": i + 1, "new_text": "Y"}], run=run)+}
+{+    else:+}
+{+        text = "P\n" if probe[1] < len(lines) else "\nP"+}
+{+        got = ap(root, [{"file": REL, "sha": cite, "new_text": text}], run=run)+}
+{+    citations.forget_run(run)+}
+{+    return got["applied"], got.get("error"), _normalised(root)+}
+
+
+{+IDS = [f"{s}-{e[0]}{e[1]}-{e[2]!r}" for s, e in EDITS]+}
+
+
+{+def _probes(n):+}
+{+    return [("window", i) for i in range(n)] + [("point", i) for i in range(n + 1)]+}
+
+
+{+@pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)+}
+{+def test_v4a_and_reference_journal_and_translate_the_same_edit_identically(+}
+{+        tmp_path, shape, edit):+}
+{+    """Same spans in the journal; every older citation gets the same outcome:+}
+{+    the same bytes, or refused with the same message."""+}
+{+    lines = SHAPES[shape]+}
+{+    _, _, _, j_v4a = _make(tmp_path, lines, edit, "v4a", "journal-v4a")+}
+{+    _, _, _, j_ref = _make(tmp_path, lines, edit, "reference", "journal-ref")+}
+{+    assert j_v4a == j_ref, (j_v4a, j_ref)+}
+{+    for probe in _probes(len(lines)):+}
+{+        v4a_out = _outcome(tmp_path, lines, edit, "v4a", probe)+}
+{+        ref_out = _outcome(tmp_path, lines, edit, "reference", probe)+}
+{+        assert v4a_out == ref_out, (probe, v4a_out, ref_out)+}
+
+
+{+BLANK_WINDOW_REFUSAL = ("line {n} is blank and an earlier edit in this run "+}
+{+                        "covered, began or ended exactly where it was")+}
+
+
+{+@pytest.mark.parametrize("shape,edit", EDITS, ids=IDS)+}
+{+def test_an_older_citation_lands_where_its_line_went_or_is_refused(+}
+{+        tmp_path, shape, edit):+}
+{+    """Where each old line went is known from the edit itself: a window on it+}
+{+    writes there, or is refused when the edit deleted it. An insertion point+}
+{+    before an old line stays before it. A blank line may also be refused."""+}
+{+    lines = SHAPES[shape]+}
+{+    n = len(lines)+}
+{+    after, moved = _after(lines, edit)+}
+{+    kind, k, _ = edit+}
+{+    for probe in _probes(n):+}
+{+        applied, error, result = _outcome(tmp_path, lines, edit, "v4a", probe)+}
+{+        i = probe[1]+}
+{+        if probe[0] == "window":+}
+{+            if moved[i] is None:+}
+{+                assert applied is False, (probe, applied, error, result)+}
+{+            elif lines[i] == "" and applied is False:+}
+{+                # A blank line is a zero-width range; next to an edit its+}
+{+                # empty text would match on either side, so it is refused+}
+{+                # (a false refusal when the line itself survived, listed in+}
+{+                # the delivery note).+}
+{+                assert BLANK_WINDOW_REFUSAL.format(n=i + 1) in error, error+}
+{+            elif kind == "insert" and k == 0 and i == 0:+}
+{+                # A top insertion is journaled at offset 0, where remap keeps+}
+{+                # an offset in place, so the window on old line 1 now spans+}
+{+                # the inserted text and its own and no longer matches: a+}
+{+                # false refusal, listed in the delivery note.+}
+{+                assert applied is False, (probe, applied, error, result)+}
+{+            else:+}
+{+                expected = list(after)+}
+{+                expected[moved[i]] = "Y"+}
+{+                assert (applied, result) == (True, expected), (probe, error)+}
+{+        elif kind == "insert":+}
+{+            expected = list(after)+}
+{+            if i < n:+}
+{+                # A point at the top stays at offset 0, before a top insertion.+}
+{+                at = 0 if (k == 0 and i == 0) else moved[i]+}
+{+            else:+}
+{+                at = moved[n - 1] + 1+}
+{+            expected.insert(at, "P")+}
+{+            assert (applied, result) == (True, expected), (probe, error)+}

@@ -1,0 +1,35 @@
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1/src/skillflow/__init__.py
+H5 V4A applied=True -> b'a\nx\nx\nb\n'
+CASE H5 window lines 2..2 on the shown 'x' after V4A inserted an identical 'x' above it
+   WROTE=True applied=True
+   intended: b'a\nx\nY\nb\n'
+   actual:   b'a\nx\nY\nb\n'
+   CORRECT=True
+H6 V4A applied=True -> b'a\nx\nb\n'
+CASE H6 window on line 2 after this run's V4A DELETED line 2 (an identical line 3 survives)
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: lines 2-2 were themselves replaced by an earlier edit in this run; reread that range and cite the new digest
+   intended: 'refusal: the cited line was deleted by an earlier edit in this run'
+   actual:   b'a\nx\nb\n'
+   CORRECT=True
+H6c ref delete applied=True -> b'a\nx\nb\n'
+CASE H6c control: the same deletion by a reference, then the window on line 2
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: lines 2-2 were themselves replaced by an earlier edit in this run; reread that range and cite the new digest
+   intended: 'refusal: the cited line was deleted by an earlier edit in this run'
+   actual:   b'a\nx\nb\n'
+   CORRECT=True
+H7 V4A applied=True -> b'def f():\n    return None\n\ndef h():\n    return None\n\ndef g():\n    return 1\n'
+CASE H7 f's shown 'return None' after V4A inserted h() ending in the same line
+   WROTE=True applied=True
+   intended: b'def f():\n    return None\n\ndef h():\n    return 42\n\ndef g():\n    return 1\n'
+   actual:   b'def f():\n    return None\n\ndef h():\n    return 42\n\ndef g():\n    return 1\n'
+   CORRECT=True
+CASE B7 own edit overlapping the END of span 'TIMEOUT' (3:12..3:20), then cite it
+   WROTE=False applied=False
+   error: apply_patch preflight: f.py reference 1: span 3:8..3:15 changed since its citation was issued: the text it showed was edited, or the file was written by something other than this run's apply_patch; reread the range and resend the reference with the new digest to be shown the text it covers now
+   intended: 'refusal'
+   actual:   b'import os\n\nDEFAULT_TIMEQNDS = 30\n\nDEBUG = False\n'
+   CORRECT=True
+PROBE5_DONE
+DOCKER_RC=0

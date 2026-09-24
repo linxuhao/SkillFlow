@@ -1,0 +1,45 @@
+--- /home/linxuhao/stepflow-coords-r1/src/skillflow/citations.py	2026-09-24 15:00:11.850598038 +0000
++++ /home/linxuhao/coords-r3-scratch/mut_m7/src/skillflow/citations.py	2026-09-24 15:03:34.903543966 +0000
+@@ -99,6 +99,13 @@
+ _EPOCHS = itertools.count(1)
+ 
+ 
++def _ignite(name):
++    import os as _os
++    _p = _os.path.join(_os.path.dirname(__file__), '..', '..', 'IGNITIONS.log')
++    with open(_p, 'a') as _fh:
++        _fh.write('IGNITION ' + name + '\n')
++
++
+ def text_sha(text: str) -> str:
+     """The digest the journal identifies one version of a file's text by.
+ 
+@@ -118,7 +125,7 @@
+ def _digest(run_id: str, path: str, source: str, start_line: int,
+             end_line: int, text: str, frame: str) -> str:
+     payload = "\x00".join((run_id, path, source, str(start_line),
+-                           str(end_line), text, frame)).encode("utf-8")
++                           str(end_line), text)).encode("utf-8")  # MUTANT m7
+     return hmac.new(_SECRET, payload, hashlib.sha256).hexdigest()[:40]
+ 
+ 
+@@ -199,6 +206,9 @@
+                       _frame(epoch, generation, file_sha, start_char))
+         record["sha"] = sha
+         bucket = _bucket(_LEDGER, run_id, create=True)
++        _old = bucket.get(sha)
++        if _old is not None and (_old.get('epoch'), _old.get('generation'), _old.get('file_sha'), _old.get('start_char')) != (epoch, generation, file_sha, start_char):
++            _ignite('m7')  # a re-issue moved an existing sha
+         bucket[sha] = {**record, "text": text, "start_char": start_char,
+                        "file_sha": file_sha, "generation": generation,
+                        "epoch": epoch}
+@@ -247,6 +257,9 @@
+                       _frame(epoch, generation, file_sha, start_char))
+         record["sha"] = sha
+         bucket = _bucket(_LEDGER, run_id, create=True)
++        _old = bucket.get(sha)
++        if _old is not None and (_old.get('epoch'), _old.get('generation'), _old.get('file_sha'), _old.get('start_char')) != (epoch, generation, file_sha, start_char):
++            _ignite('m7')  # a re-issue moved an existing sha
+         bucket[sha] = {**record, "text": text, "start_char": start_char,
+                        "file_sha": file_sha, "generation": generation,
+                        "epoch": epoch}

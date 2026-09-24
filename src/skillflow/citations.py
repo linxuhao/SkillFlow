@@ -377,6 +377,32 @@ def remap(run_id: str, path: str, generation: int, offset: int):
     return position
 
 
+def touched(run_id: str, path: str, generation: int, offset: int) -> bool:
+    """True when an edit since ``generation`` covered ``offset`` or began or
+    ended exactly at it.
+
+    `remap` cannot place a zero-width range on either side of an edit that
+    touches it, and a blank line IS a zero-width range: its empty text matches
+    wherever it lands. A caller holding one asks this instead.
+    """
+    with _LOCK:
+        entry = (_JOURNAL.get(run_id) or {}).get(path)
+        if not entry or not (0 <= generation < len(entry["shas"])):
+            return True
+        generations = [list(g) for g in entry["edits"][generation:]]
+    position = offset
+    for spans in generations:
+        delta = 0
+        for start, end, new_length in spans:
+            if position < start:
+                break
+            if position <= end:
+                return True
+            delta += new_length - (end - start)
+        position += delta
+    return False
+
+
 def journal_depth(run_id: str, path: str) -> int:
     """Generations recorded for ``path`` — 0 when nothing is known."""
     with _LOCK:

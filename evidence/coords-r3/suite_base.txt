@@ -1,0 +1,34 @@
+TREE_HEAD=101da5c44e23aadbb0dcf3a423a0ac43286453bc DIRTY_PATHS=0
+5340112deaec2fc1ebdcfaf1d3b0eaf89cfb627baf17be4bb7a4ebd119f4d762  src/skillflow/strict_patch.py
+88a0d9c8a200f08d9a42f512f4f3b3fa360548bf15fec5b61f87705536aa68f3  src/skillflow/citations.py
+6b286807313206da5706c51425f5d07384d9e8d1c4458cca23e321544febf7b2  src/skillflow/read_tools.py
+aa8ccbebe55a31871214a87bb7eaa1c1aa4c1b904de5ea493f2c37e3f7e6d53a  src/skillflow/tools/apply_patch/tool.yaml
+IMPORT_PROOF /home/linxuhao/stepflow-coords-r1-base/src/skillflow/__init__.py
+PYTEST 9.1.1 ASYNCIO 1.4.0
+.....s......ss.......................................................... [  5%]
+........................................................................ [ 11%]
+........................................................................ [ 17%]
+........................................................................ [ 23%]
+........................................................................ [ 29%]
+........................................................................ [ 35%]
+........................................................................ [ 41%]
+........................................................................ [ 47%]
+........................................................................ [ 53%]
+........................................................................ [ 59%]
+........................................................................ [ 65%]
+........................................................................ [ 71%]
+........................................................................ [ 77%]
+........................................................................ [ 83%]
+........................................................................ [ 89%]
+........................................................................ [ 95%]
+............................................................             [100%]
+=============================== warnings summary ===============================
+tests/test_integration_configs.py: 39 warnings
+tests/test_regression.py: 1 warning
+  /home/linxuhao/stepflow-coords-r1-base/src/skillflow/core.py:7633: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    elapsed = (dt.datetime.utcnow() - started_dt).total_seconds()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1209 passed, 3 skipped, 40 warnings in 18.71s
+PYTEST_RC=0
+DOCKER_RC=0

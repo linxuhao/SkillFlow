@@ -1,0 +1,18 @@
+101,102c101,102
+<    actual:   b'a\nY\nx\nb\n'
+<    CORRECT=False
+---
+>    actual:   b'a\nx\nY\nb\n'
+>    CORRECT=True
+104,105c104,105
+<    actual:   b'a\nY\nx\nb\n'
+<    CORRECT=False
+---
+>    actual:   b'a\nx\nY\nb\n'
+>    CORRECT=True
+107,108c107,108
+<    actual:   b'a\n# note\n\n\nb\n'
+<    CORRECT=False
+---
+>    actual:   b'a\n\n# note\n\nb\n'
+>    CORRECT=True

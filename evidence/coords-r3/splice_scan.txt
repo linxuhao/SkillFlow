@@ -1,0 +1,17 @@
+# identical adjacent non-blank lines (awk), per changed non-log file
+src/skillflow/citations.py ADJ_DUP=0
+src/skillflow/strict_patch.py ADJ_DUP=0
+src/skillflow/tools/apply_patch/tool.yaml ADJ_DUP=0
+tests/test_the_journal_records_what_the_applier_wrote.py ADJ_DUP=0
+evidence/coords-r3/delivery_notes.md ADJ_DUP=0
+evidence/coords-r3/mutate_r3.py ADJ_DUP=0
+evidence/coords-r3/sweep_census.py ADJ_DUP=0
+evidence/coords-r3/mutants.sh ADJ_DUP=0
+evidence/coords-r3/run_py.sh ADJ_DUP=0
+evidence/coords-r3/run_bytes.sh ADJ_DUP=0
+evidence/coords-r3/replay.sh ADJ_DUP=0
+evidence/coords-r3/run_in_throwaway.sh ADJ_DUP=0
+# self-defence phrases in added lines (tracked diff vs 6879e9d + new files, excluding the note)
+PHRASE_HITS=0
+# phrase hits in the note
+239:- The self-defence phrases (`not a defect`, `by design`, `documented`, `known limitation`, `intentionally`) appear 0 times in added lines (`splice_scan.txt`); in this note only on this line, which lists them.

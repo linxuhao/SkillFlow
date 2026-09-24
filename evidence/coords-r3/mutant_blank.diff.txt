@@ -1,0 +1,26 @@
+--- /home/linxuhao/stepflow-coords-r1/src/skillflow/strict_patch.py	2026-09-24 15:00:12.106586625 +0000
++++ /home/linxuhao/coords-r3-scratch/mut_blank/src/skillflow/strict_patch.py	2026-09-24 15:03:06.046830681 +0000
+@@ -337,6 +337,13 @@
+ MAX_ECHO_CHARS = 240
+ 
+ 
++def _ignite(name):
++    import os as _os
++    _p = _os.path.join(_os.path.dirname(__file__), '..', '..', 'IGNITIONS.log')
++    with open(_p, 'a') as _fh:
++        _fh.write('IGNITION ' + name + '\n')
++
++
+ def _coords(from_line, from_col, to_line, to_col) -> str:
+     def col(value):
+         return "-" if value is None else str(value)
+@@ -540,7 +547,8 @@
+             if (local_from == local_to and ref.from_col is None
+                     and ref.to_col is None
+                     and citations.touched(run_id, op.path, generation,
+-                                          window_start + local_from)):
++                                          window_start + local_from)
++                    and _ignite('blank')):  # MUTANT blank: refusal removed
+                 raise PatchError(
+                     f"{op.path} reference {number}: line {from_line} is blank "
+                     "and an earlier edit in this run covered, began or ended "
