@@ -7190,6 +7190,12 @@ class SkillFlow:
             for k in ("written", "error", "applied", "size"):
                 if k in result:
                     res_summary[k] = result[k]
+            if name == "apply_patch" and "echo" in result:
+                # What apply_patch showed the agent of the files it had just
+                # written, kept whole. Without it no trace could show whether
+                # the agent was shown a splice. The tool bounds it: 20 + 20
+                # lines and one line of context per edit.
+                res_summary["echo"] = result["echo"]
             if len(res_summary) == 1:
                 # Read/search tools (web_search, web_fetch, read_file,
                 # list_files) carry their payload in non-write keys. Keep a

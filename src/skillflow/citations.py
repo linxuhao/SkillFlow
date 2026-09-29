@@ -44,14 +44,33 @@ replaced. Two properties keep that from becoming blind editing:
   span an earlier edit replaced. That text is gone; nobody read the new text.
 * The journal is only trusted while the file's content still matches what the
   journal says the engine left there. A write from outside the journal (the
-  `write` tool, `repo_apply`, a human) breaks the chain, and citations for that
-  file fall back to the original strict check — a refusal, never a silent
-  best-effort apply.
+  `write` tool, `repo_apply`, a human) breaks the chain, and a citation issued
+  before it is refused — never a silent best-effort apply. Lines that still
+  read the same after such a write are not proof of anything: in a file of
+  repeated lines, a line written in above leaves every line number reading
+  the same text.
+
+## A digest names the place it was issued for
+
+The coordinate frame is part of what a digest identifies. Two reads of the
+same lines in two versions of a file used to return the same digest whenever
+the text on those lines was the same, and the ledger kept one record per
+digest, so the second read silently moved the first one: citing the older
+digest wrote at the newer place. The review of coords-r1 measured an
+insertion that its caller had been shown landing before `l3` being written
+before `NEW2`.
+
+So the digest is taken over every field that decides where it resolves: the
+journal chain it was issued in (`epoch`), the generation inside that chain,
+the digest of the whole text it was issued against, and the offset the range
+starts at. Two issues share a digest only when every one of those is equal,
+and then they resolve to the same place by construction.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
+import itertools
 import secrets
 import threading
 from collections import OrderedDict
@@ -69,10 +88,15 @@ MAX_GENERATIONS_PER_FILE = 4096
 _SECRET = secrets.token_bytes(32)
 _LOCK = threading.Lock()
 _LEDGER: "OrderedDict[str, OrderedDict[str, dict]]" = OrderedDict()
-# run_id -> path -> {"shas": [text sha per generation], "edits": [[(s, e, n)]]}
+# run_id -> path -> {"epoch": n, "shas": [text sha per generation],
+#                     "edits": [[(s, e, n)]]}
 # shas[i] is the sha of the file's normalised text at generation i; edits[i] is
 # what turned generation i into generation i+1, so len(shas) == len(edits) + 1.
+# `epoch` is unique per chain: a chain that is discarded and started again
+# numbers its generations from 0 again, and a citation from the old chain must
+# not be read as one from the new.
 _JOURNAL: "OrderedDict[str, OrderedDict[str, dict]]" = OrderedDict()
+_EPOCHS = itertools.count(1)
 
 
 def text_sha(text: str) -> str:
@@ -86,11 +110,20 @@ def text_sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _frame(epoch, generation, file_sha, start_char) -> str:
+    """Where a range was issued: the chain, the generation, the text, the offset."""
+    return f"{epoch}\x00{generation}\x00{file_sha}\x00{start_char}"
+
+
 def _digest(run_id: str, path: str, source: str, start_line: int,
-            end_line: int, text: str) -> str:
+            end_line: int, text: str, frame: str) -> str:
     payload = "\x00".join((run_id, path, source, str(start_line),
-                           str(end_line), text)).encode("utf-8")
+                           str(end_line), text, frame)).encode("utf-8")
     return hmac.new(_SECRET, payload, hashlib.sha256).hexdigest()[:40]
+
+
+def _new_chain(file_sha: str) -> dict:
+    return {"epoch": next(_EPOCHS), "shas": [file_sha], "edits": []}
 
 
 def _bucket(store: OrderedDict, run_id: str, create: bool):
@@ -104,24 +137,24 @@ def _bucket(store: OrderedDict, run_id: str, create: bool):
     return bucket
 
 
-def _note_version_locked(run_id: str, path: str, file_sha: str) -> int:
-    """The generation number ``file_sha`` is, seeding/resetting as needed.
+def _note_version_locked(run_id: str, path: str, file_sha: str) -> tuple[int, int]:
+    """``(epoch, generation)`` of ``file_sha``, seeding/resetting as needed.
 
     A version the journal has never seen means someone else wrote the file, so
     the old chain describes text that is gone: it is replaced rather than
-    extended, and the returned generation is 0. Citations issued against the
-    discarded generations then fail `chain_intact` and take the strict path.
+    extended, under a new epoch, and the returned generation is 0. Citations
+    issued against the discarded chain then fail `chain_intact`.
     """
     files = _bucket(_JOURNAL, run_id, create=True)
     entry = files.get(path)
     if entry is not None and entry["shas"] and entry["shas"][-1] == file_sha:
         files.move_to_end(path)
-        return len(entry["edits"])
-    files[path] = {"shas": [file_sha], "edits": []}
+        return entry["epoch"], len(entry["edits"])
+    entry = files[path] = _new_chain(file_sha)
     files.move_to_end(path)
     while len(files) > MAX_JOURNAL_FILES:
         files.popitem(last=False)
-    return 0
+    return entry["epoch"], 0
 
 
 def issue(run_id: str, *, path: str, source: str, start_line: int,
@@ -138,8 +171,11 @@ def issue(run_id: str, *, path: str, source: str, start_line: int,
     addressed in THIS window's coordinates after the file has moved on; a
     caller that omits them gets exactly the old contract, which is a refusal
     once the file changes.
+
+    The digest covers the frame (`_frame`) as well as the text, so the same
+    lines read again after the file has moved on get a different digest, and
+    the older one keeps resolving to the place it was issued for.
     """
-    sha = _digest(run_id, path, source, start_line, end_line, text)
     record = {
         "path": path,
         "source": source,
@@ -149,7 +185,6 @@ def issue(run_id: str, *, path: str, source: str, start_line: int,
         "end_col": len(text.split("\n")[-1]) if text else 0,
         "start_byte": start_byte,
         "end_byte": end_byte,
-        "sha": sha,
     }
     if not run_id:
         # Nothing to bind it to, so nothing may be cited against it later.
@@ -157,11 +192,64 @@ def issue(run_id: str, *, path: str, source: str, start_line: int,
         # whether the host happened to supply a run id.
         return {**record, "sha": "", "citable": False}
     with _LOCK:
-        generation = (_note_version_locked(run_id, path, file_sha)
-                      if file_sha and start_char is not None else None)
+        epoch, generation = (
+            _note_version_locked(run_id, path, file_sha)
+            if file_sha and start_char is not None else (None, None))
+        sha = _digest(run_id, path, source, start_line, end_line, text,
+                      _frame(epoch, generation, file_sha, start_char))
+        record["sha"] = sha
         bucket = _bucket(_LEDGER, run_id, create=True)
         bucket[sha] = {**record, "text": text, "start_char": start_char,
-                       "file_sha": file_sha, "generation": generation}
+                       "file_sha": file_sha, "generation": generation,
+                       "epoch": epoch}
+        bucket.move_to_end(sha)
+        while len(bucket) > MAX_CITATIONS_PER_RUN:
+            bucket.popitem(last=False)
+    return {**record, "citable": True}
+
+
+def issue_span(run_id: str, *, path: str, source: str, from_line: int,
+               from_col, to_line: int, to_col, text: str, start_char: int,
+               file_sha: str) -> dict:
+    """Record and return the citation for one exact sub-range of a file.
+
+    A window citation covers whole lines; a column names a cut inside one,
+    and a counted column has no redundancy: in a 28-character line 27 and 28
+    are both legal, and only the caller knows which it meant. A span citation
+    is the check that restores it. The engine issues one for the exact
+    coordinates a caller named, over the exact text they cover, and shows the
+    caller that text; an edit naming those columns must quote it back, and is
+    refused unless those coordinates still cover that text.
+
+    ``from_line``/``from_col``/``to_line``/``to_col`` are recorded exactly as
+    the caller named them (a column may be None), because the citation is
+    bound to that request. ``start_char`` and ``file_sha`` place the text in
+    the file's normalised text, as for a window, so a later edit elsewhere in
+    the file does not invalidate the span. They are also part of the digest:
+    the same coordinates shown again after the file has moved on are a
+    different place, so they get a different sha.
+    """
+    if not run_id:
+        return {"kind": "span", "path": path, "sha": "", "citable": False}
+    record = {
+        "kind": "span",
+        "path": path,
+        "source": source,
+        "start_line": from_line,
+        "end_line": to_line,
+        "from_col": from_col,
+        "to_col": to_col,
+    }
+    with _LOCK:
+        epoch, generation = _note_version_locked(run_id, path, file_sha)
+        sha = _digest(run_id, path, f"{source}\x00span\x00{from_col}\x00{to_col}",
+                      from_line, to_line, text,
+                      _frame(epoch, generation, file_sha, start_char))
+        record["sha"] = sha
+        bucket = _bucket(_LEDGER, run_id, create=True)
+        bucket[sha] = {**record, "text": text, "start_char": start_char,
+                       "file_sha": file_sha, "generation": generation,
+                       "epoch": epoch}
         bucket.move_to_end(sha)
         while len(bucket) > MAX_CITATIONS_PER_RUN:
             bucket.popitem(last=False)
@@ -183,7 +271,9 @@ def matches(record: dict, run_id: str, text: str) -> bool:
     return hmac.compare_digest(
         record["sha"],
         _digest(run_id, record["path"], record["source"],
-                record["start_line"], record["end_line"], text),
+                record["start_line"], record["end_line"], text,
+                _frame(record.get("epoch"), record.get("generation"),
+                       record.get("file_sha", ""), record.get("start_char"))),
     )
 
 
@@ -191,8 +281,10 @@ def journal_edit(run_id: str, path: str, *, edits, sha_before: str,
                  sha_after: str) -> bool:
     """Record what the engine just published for ``path``.
 
-    ``edits`` are disjoint ``(start, end, new_length)`` spans in the character
-    offsets of the text ``sha_before`` identifies. Returns True when the
+    ``edits`` are disjoint ``(start, end, new_length)`` spans: characters
+    ``[start, end)`` removed and ``new_length`` characters written there, in
+    the offsets of the text ``sha_before`` identifies with every line ending
+    in its newline, the last line too. Returns True when the
     generation was appended; False when the file was not at ``sha_before``, in
     which case the chain is discarded rather than extended — an unexplained
     version is not something to translate coordinates through.
@@ -204,7 +296,7 @@ def journal_edit(run_id: str, path: str, *, edits, sha_before: str,
         files = _bucket(_JOURNAL, run_id, create=True)
         entry = files.get(path)
         if entry is None or not entry["shas"] or entry["shas"][-1] != sha_before:
-            files[path] = {"shas": [sha_after], "edits": []}
+            files[path] = _new_chain(sha_after)
             files.move_to_end(path)
             while len(files) > MAX_JOURNAL_FILES:
                 files.popitem(last=False)
@@ -214,8 +306,8 @@ def journal_edit(run_id: str, path: str, *, edits, sha_before: str,
         while len(entry["edits"]) > MAX_GENERATIONS_PER_FILE:
             # Dropping the oldest generation would silently re-number every
             # citation still pointing at it, so the whole chain goes and those
-            # citations take the strict path instead.
-            files[path] = {"shas": [sha_after], "edits": []}
+            # citations are refused, with a reread as the remedy.
+            files[path] = _new_chain(sha_after)
             break
         files.move_to_end(path)
         return True
@@ -226,7 +318,7 @@ def break_journal(run_id: str, path: str) -> None:
 
     Used for a mutation the journal cannot describe as spans (a delete, an
     add). The next read seeds a fresh chain; citations from before it fail
-    `chain_intact` and are checked strictly.
+    `chain_intact` and are refused.
     """
     if not run_id:
         return
@@ -237,14 +329,15 @@ def break_journal(run_id: str, path: str) -> None:
 
 
 def chain_intact(run_id: str, path: str, generation, file_sha: str,
-                 current_sha: str) -> bool:
+                 current_sha: str, epoch=None) -> bool:
     """True when coordinates from ``generation`` can be translated to now.
 
-    Requires the journal to still hold the generation the citation was issued
-    against AND the file to still be exactly what the journal says the engine
-    last left there. The second half is what keeps an outside write from being
-    papered over: it breaks the chain, and the citation is then judged by the
-    original strict check.
+    Requires the journal to still hold the chain (``epoch``) and generation the
+    citation was issued against AND the file to still be exactly what the
+    journal says the engine last left there. The second half is what keeps an
+    outside write from being papered over: it breaks the chain, and a citation
+    issued before it is refused. ``epoch`` None skips the chain comparison,
+    for a caller that recorded none.
     """
     if not run_id or generation is None or not file_sha or not current_sha:
         return False
@@ -252,36 +345,74 @@ def chain_intact(run_id: str, path: str, generation, file_sha: str,
         entry = (_JOURNAL.get(run_id) or {}).get(path)
         if not entry:
             return False
+        if epoch is not None and entry["epoch"] != epoch:
+            return False
         shas = entry["shas"]
         return (0 <= generation < len(shas) and shas[generation] == file_sha
                 and shas[-1] == current_sha)
 
 
-def remap(run_id: str, path: str, generation: int, offset: int):
-    """``offset`` in ``generation``'s coordinates, in the current text's.
+# Why `translate` refuses. Each names one row of the translation table.
+REMOVED = "removed"   # an edit removed bytes the citation covers
+SPLIT = "split"       # an insertion landed strictly inside the citation
+POINT = "point"       # an empty citation sits exactly where text was inserted
 
-    None when the offset falls strictly inside a span an edit replaced: that
-    text no longer exists and nobody has read what took its place, so there is
-    nothing honest to return. An offset exactly at a span's start stays put
-    (an insertion there lands before the earlier edit) and one at or past its
-    end moves by the accumulated length change.
+
+def translate(run_id: str, path: str, generation: int, start: int, end: int):
+    """``[start, end)`` in ``generation``'s coordinates, in the current text's.
+
+    Returns ``(start, end)``, or one of `REMOVED`, `SPLIT`, `POINT` naming why
+    the range cannot be placed. Each edit since ``generation`` is a removed
+    range ``[a, b)`` plus the length of the text written there (``b > a``
+    whenever any character was removed, a lone newline included), and is
+    applied in order by one table:
+
+    - the removed range overlaps the citation: `REMOVED` (for an empty
+      citation at ``p``: ``a <= p < b``);
+    - a pure insertion strictly inside a non-empty citation: `SPLIT`;
+    - a pure insertion at a non-empty citation's start or end: the citation
+      follows its own characters (it moves past text inserted at its start
+      and keeps text inserted at its end outside);
+    - an empty citation exactly at a pure insertion's offset: `POINT`. It has
+      no characters of its own, so either side of the inserted text is a
+      guess;
+    - anything else moves the citation by the length change of the edits
+      before it.
     """
     with _LOCK:
         entry = (_JOURNAL.get(run_id) or {}).get(path)
         if not entry or not (0 <= generation < len(entry["shas"])):
-            return None
+            return REMOVED
         generations = [list(g) for g in entry["edits"][generation:]]
-    position = offset
     for spans in generations:
-        delta = 0
-        for start, end, new_length in spans:
-            if position <= start:
-                break
-            if position < end:
-                return None
-            delta += new_length - (end - start)
-        position += delta
-    return position
+        shift_start = shift_end = 0
+        for a, b, new_length in spans:
+            delta = new_length - (b - a)
+            if b > a:
+                if start == end:
+                    if a <= start < b:
+                        return REMOVED
+                elif start < b and a < end:
+                    return REMOVED
+                if b <= start:
+                    shift_start += delta
+                if b <= end:
+                    shift_end += delta
+            elif new_length:
+                if start == end:
+                    if a == start:
+                        return POINT
+                    if a < start:
+                        shift_start += delta
+                        shift_end += delta
+                elif start < a < end:
+                    return SPLIT
+                elif a <= start:
+                    shift_start += delta
+                    shift_end += delta
+        start += shift_start
+        end += shift_end
+    return start, end
 
 
 def journal_depth(run_id: str, path: str) -> int:

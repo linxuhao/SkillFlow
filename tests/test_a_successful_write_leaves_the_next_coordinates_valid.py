@@ -74,6 +74,24 @@ def apply(root, references=None, patch="", run_id=RUN):
     return apply_code_patch(patch, root, references=references, run_id=run_id)
 
 
+def apply_corroborated(root, references, run_id=RUN):
+    """Name columns, be shown what they cover, then cite that span.
+
+    Columns are refused until they cite a span citation issued for exactly
+    those coordinates; the refusal writes nothing and carries the spans.
+    Returns the preview too, so a test can assert what the caller was shown.
+    """
+    before = (root / "src" / "a.py").read_bytes()
+    preview = apply(root, references, run_id=run_id)
+    assert preview["applied"] is False, preview
+    assert preview["written"] == [] and preview["partial"] is False
+    assert (root / "src" / "a.py").read_bytes() == before
+    spans = {span["reference"]: span for span in preview["spans"]}
+    cited = [{**body, "sha": spans[i]["sha"]} if i in spans else body
+             for i, body in enumerate(references, 1)]
+    return apply(root, cited, run_id=run_id), preview
+
+
 @pytest.fixture
 def repo(tmp_path):
     (tmp_path / "src").mkdir()
@@ -185,7 +203,8 @@ def test_citing_inside_a_span_this_run_replaced_is_refused_by_name(repo):
     gone and nobody has read what took its place. A different refusal from the
     one above, and it must not be allowed to become a guess."""
     cite = read(repo)["citation"]
-    assert apply(repo, [ref(cite, 3, 3, "SECOND", from_col=4, to_col=10)])["applied"]
+    assert apply_corroborated(
+        repo, [ref(cite, 3, 3, "SECOND", from_col=4, to_col=10)])[0]["applied"]
     got = apply(repo, [ref(cite, 3, 3, "x", from_col=5, to_col=8)])
     assert got["applied"] is False
     assert "src/a.py" in got["error"] and "3-3" in got["error"]
@@ -239,8 +258,8 @@ def test_the_result_says_what_it_replaced(repo):
     """privacy r2's corruption was legal, silent and only visible by reading
     the file back. The span comes back in the result now."""
     cite = read(repo)["citation"]
-    got = apply(repo, [ref(cite, 2, 2, "    first = 1  # noted",
-                           from_col=4, to_col=9)])
+    got, _ = apply_corroborated(repo, [ref(cite, 2, 2, "    first = 1  # noted",
+                                           from_col=4, to_col=9)])
     assert got["applied"] is True
     assert got["replaced"] == [{"file": "src/a.py", "from_line": 2,
                                 "to_line": 2, "replaced_chars": 5,
@@ -254,7 +273,9 @@ def test_the_privacy_r2_corruption_shape(repo):
 
     The columns still do exactly what they say — an editor that second-guessed
     them would be unusable. What changed is that the caller no longer has to
-    supply them for a whole-line edit, and that the result now names what went.
+    supply them for a whole-line edit, that the result now names what went,
+    and that a column is never written before the caller has been shown the
+    exact text it covers and has cited the span the engine issued for it.
     """
     line = "                 if action in _covered_actions() else []),\n"
     (repo / "src" / "a.py").write_text(line)
@@ -262,7 +283,10 @@ def test_the_privacy_r2_corruption_shape(repo):
     cite = read(repo)["citation"]
     assert len(line.rstrip("\n")) == 58
 
-    wrong = apply(repo, [ref(cite, 1, 1, "NEW", from_col=17, to_col=40)])
+    wrong, shown = apply_corroborated(
+        repo, [ref(cite, 1, 1, "NEW", from_col=17, to_col=40)])
+    # Before anything is written, the caller is shown the 23 characters.
+    assert shown["spans"][0]["text"] == "if action in _covered_a"
     assert wrong["applied"] is True
     # It is visible now, in the result, without reading the file again.
     assert wrong["replaced"][0]["replaced"] == "if action in _covered_a"

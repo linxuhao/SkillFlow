@@ -12,20 +12,62 @@ description: |
   read sent you. Quote it back and supply ONLY the new text; the engine does
   the copying. You never retype the original, so you never have to wonder
   whether your copy of it is still accurate.
-    references: [{"file": "src/a.py", "sha": "<the sha that read returned>",
-                  "from_line": 120, "from_col": 0,
-                  "to_line": 123, "to_col": 18,
-                  "new_text": "    return 2"}]
-  Lines are 1-based and must lie inside the cited window; columns are 0-based
-  character offsets and `to_col` is exclusive, so (L,0)..(M,len(line M)) means
-  "replace lines L..M" and from == to inserts at a point. Order does not
+  Address the edit with the fewest numbers that say what you mean; every
+  number you leave out is taken from the citation, not counted by you:
+    Replace exactly what that read served — no line or column numbers:
+      references: [{"file": "src/a.py", "sha": "<the sha that read returned>",
+                    "new_text": "    return 2"}]
+    Replace whole lines L..M inside a wider window — the line numbers the read
+    printed in its margin, still no columns:
+      references: [{"file": "src/a.py", "sha": "<sha>", "from_line": 120,
+                    "to_line": 123, "new_text": "    return 2"}]
+    Cut INSIDE a line — only then add columns, and it takes two calls:
+      references: [{"file": "src/a.py", "sha": "<sha>", "from_line": 120,
+                    "from_col": 11, "to_line": 120, "to_col": 12,
+                    "new_text": "7"}]
+    The first call writes nothing. It is refused with `spans`: for each such
+    reference, the exact `text` those columns cover, what they leave on the
+    line (`keeps_before`/`keeps_after`), and a span `sha` issued for exactly
+    those coordinates. Check the text is what you meant; if it is, send the
+    same reference again with that span sha (or the span sha and new_text
+    alone). If it is not, fix the columns — or omit them.
+  Lines are absolute 1-based file coordinates, as printed by read, and must
+  lie inside the cited window; give both or
+  neither. Columns are 0-based character offsets, `to_col` exclusive; a
+  column one short of the line's end keeps the line's last character, which
+  is why a column is never written until you have seen what it covers. To
+  replace whole lines, omit the columns. from == to inserts at a point. The
+  result's `replaced` says what each reference took out. When a reference
+  changes the number of line pieces, it also gives `replaced_bytes` (bytes
+  taken out) and `replaced_lines`/`new_lines`: 1 + the newlines in the old
+  and new text, 0 when empty. They count pieces, not the net change: a
+  whole-line insertion `x\n` at a line start is 0 -> 2. Order does not
   matter and you never compensate for line drift: every range in one call is
-  resolved against the same snapshot and the engine applies them. Ranges must
-  not overlap. Change one word by citing one line — a reference is a hunk, not
-  a file rewrite.
-  A sha this run's `read` did not issue is refused, and so is a cited window
-  whose text has changed since: reread the range and cite the new sha. There
-  is no fuzzy matching and no partial write.
+  resolved against the same snapshot and the engine applies them. Ranges
+  must not overlap. To change one line, read or cite just that line — a
+  reference is a hunk, not a file rewrite.
+  A sha this run's `read` did not issue is refused. What else is compared
+  depends on what changed the file since that read:
+  - nothing, or only this run's own apply_patch calls: your coordinates stay
+    the ones the read showed you, the engine carries them through its own
+    edits, and it compares only the text you cite, (from_line,from_col)..
+    (to_line,to_col), with what the read served there. The rest of the
+    window may have changed. The reference is refused if that text was
+    replaced or no longer reads the same.
+  - a content change outside this run recorded apply_patch history, or an
+    engine that no longer holds that history: a framed citation is refused,
+    because its current position cannot be proved. Reread to obtain a new sha.
+    Legacy citations issued without a frame retain the strict whole-window
+    text comparison; this fallback does not relocate a framed citation.
+  After either refusal, reread the range and cite the new sha.
+  There is no fuzzy matching.
+
+  An insert keeps the line it lands on: new_text is placed in front of it,
+  so an insert without a final newline joins its last line onto line 7.
+  A from == to insert at column 0 of a nonempty line, whose new_text spans
+  several lines and does not end with a newline, is refused before anything
+  is written; cite (L,0)..(M,len(line M)) to replace, or end new_text with a
+  newline to insert. A one-line prefix such as "# " at (7,0)..(7,0) applies.
 
   V4A MODE (`patch`) — for Add and Delete, and for edits you would rather
   express as a diff. Updates match exactly one occurrence of their context
@@ -48,13 +90,26 @@ description: |
   reference mode — read the range, cite its sha — rather than widening the
   copied context.
 
+  WHAT COMES BACK. An applied call returns `echo`, and so does a call that
+  stopped partway through writing, for the files it had already written: for
+  every reference and every Update hunk in those files, the file, the resulting line range (from_line..to_line)
+  and those lines as the file now reads them on disk, numbered like a read,
+  plus the line before and the line after as context. A range longer than 40 lines
+  shows its first 20 and last 20 lines and states how many it elided. Check
+  the echo before your next edit; a splice shows up there.
+
   Common to both: repo-relative paths only; no .git, symlinks, traversal or
   caller-selected roots. A file may appear in `patch` or in `references`, not
   both. Maximum 128 files, 1024 hunks or references per file, 2 MiB of patch
   text and 2 MiB of references, 16 MiB per file and 64 MiB combined preflight
-  content. Validation and review still gate delivery. On an I/O failure,
-  inspect partial/written/deleted and reread those files; do not blindly
-  replay the batch. UTF-8 updates preserve LF/CRLF and the existing EOF
+  content. Validation and review still gate delivery. Every check of what you
+  sent runs before anything is written, so a call refused for what it sent
+  writes nothing. Files are then written one at a time, each replaced whole.
+  If writing stops (an I/O error, or a file that changed after the checks),
+  the call returns applied: false, and the files already written stay
+  written: they are listed in written/deleted, the references and Update
+  hunks in them are echoed, and partial is true when there is at least one. Do not blindly replay the
+  batch; those files already carry their edits. UTF-8 updates preserve LF/CRLF and the existing EOF
   newline; Add uses LF with a final newline (no content lines creates an empty
   file). Mixed line endings, move/rename, numbered/anchored @@ and EOF markers
   are unsupported and refused.
@@ -67,7 +122,9 @@ parameters:
     type: array
     required: false
     description: >
-      Reference hunks. Each is
-      {file, sha, from_line, from_col, to_line, to_col, new_text} and carries
-      no original text — the sha, issued by this run's read, is what identifies
-      it. Any order; the engine resolves them against one snapshot.
+      Reference hunks. Each is {file, sha, new_text}, optionally narrowed by
+      from_line/to_line (whole lines) and then from_col/to_col (a cut inside a
+      line, which must cite the span sha a first call returns in `spans`),
+      and carries no original text — the sha, issued by this run's engine, is
+      what identifies it; with no lines it replaces the whole cited window or
+      span. Any order; the engine resolves them against one snapshot.

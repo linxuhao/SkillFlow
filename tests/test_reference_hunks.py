@@ -48,6 +48,24 @@ def apply(root, references=None, patch="", run_id=RUN):
     return apply_code_patch(patch, root, references=references, run_id=run_id)
 
 
+def apply_corroborated(root, references, run_id=RUN):
+    """Name columns, be shown what they cover, then cite that span.
+
+    A reference that names a column is refused until it cites a span citation
+    issued for exactly those coordinates; the refusal writes nothing and hands
+    the span back. This is the two-call shape every column edit now has.
+    """
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    preview = apply(root, references, run_id=run_id)
+    assert preview["applied"] is False, preview
+    assert preview["written"] == [] and preview["partial"] is False
+    assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+    spans = {span["reference"]: span for span in preview["spans"]}
+    cited = [{**ref, "sha": spans[i]["sha"]} if i in spans else ref
+             for i, ref in enumerate(references, 1)]
+    return apply(root, cited, run_id=run_id)
+
+
 # ===========================================================================
 # the-digest-is-issued-by-the-read-not-computed-by-the-caller
 # ===========================================================================
@@ -72,10 +90,10 @@ def test_the_read_reports_the_range_and_a_digest_for_it(repo):
 
 def test_a_digest_the_read_issued_applies(repo):
     cite = read(repo, start_line=1, end_line=2)["citation"]
-    got = apply(repo, [{"file": "src/a.py", "sha": cite["sha"],
-                        "from_line": 2, "from_col": 0,
-                        "to_line": 2, "to_col": len("    value = 1"),
-                        "new_text": "    value = 41"}])
+    got = apply_corroborated(repo, [{"file": "src/a.py", "sha": cite["sha"],
+                                     "from_line": 2, "from_col": 0,
+                                     "to_line": 2, "to_col": len("    value = 1"),
+                                     "new_text": "    value = 41"}])
     assert got["applied"] is True and got["written"] == ["src/a.py"]
     assert (repo / "src" / "a.py").read_text() == BODY.replace(
         "    value = 1", "    value = 41")
@@ -147,7 +165,7 @@ def test_reference_and_v4a_produce_the_same_bytes(tmp_path):
         {"working_tree": [("repo", str(tmp_path / "ref"))], "named": {},
          "allowed": set()},
         "src/a.py", start_line=1, end_line=4, run_id=RUN)["citation"]
-    ref = apply(tmp_path / "ref", [{
+    ref = apply_corroborated(tmp_path / "ref", [{
         "file": "src/a.py", "sha": cite["sha"],
         "from_line": 2, "from_col": 0,
         "to_line": 4, "to_col": len("    return value"),
@@ -165,9 +183,9 @@ def test_reference_and_v4a_produce_the_same_bytes(tmp_path):
 def test_one_word_cites_one_line_and_leaves_the_rest_alone(repo):
     cite = read(repo, start_line=6, end_line=7)["citation"]
     assert cite["start_line"] == 7 and cite["end_line"] == 7
-    got = apply(repo, [{"file": "src/a.py", "sha": cite["sha"],
-                        "from_line": 7, "from_col": 11, "to_line": 7,
-                        "to_col": 12, "new_text": "7"}])
+    got = apply_corroborated(repo, [{"file": "src/a.py", "sha": cite["sha"],
+                                     "from_line": 7, "from_col": 11, "to_line": 7,
+                                     "to_col": 12, "new_text": "7"}])
     assert got["applied"]
     assert (repo / "src" / "a.py").read_text() == BODY.replace(
         "    return 0", "    return 7")
@@ -233,7 +251,7 @@ def _three_edits(tmp_path, order):
         {"file": "src/a.py", "sha": cite["sha"], "from_line": 7, "from_col": 4,
          "to_line": 7, "to_col": 12, "new_text": "return 99"},
     ]
-    got = apply(tmp_path, [edits[i] for i in order])
+    got = apply_corroborated(tmp_path, [edits[i] for i in order])
     assert got["applied"] is True, got
     return (tmp_path / "src" / "a.py").read_bytes()
 

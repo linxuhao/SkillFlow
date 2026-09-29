@@ -48,6 +48,25 @@ def call(sf, rid, claim, name, **params):
                            claim_epoch=claim.token.claim_epoch)
 
 
+def patch_corroborated(sf, rid, claim, root, references):
+    """Name columns, be shown what they cover through the engine, then cite it.
+
+    Columns are refused until they cite a span citation issued for exactly
+    those coordinates; the refusal writes nothing and carries the spans.
+    """
+    before = {p: p.read_bytes() for p in root.rglob('*')
+              if p.is_file() and '.git' not in p.parts}
+    preview = call(sf, rid, claim, 'apply_patch', references=references)
+    assert preview['applied'] is False, preview
+    assert preview['written'] == [] and preview['partial'] is False
+    assert {p: p.read_bytes() for p in root.rglob('*')
+            if p.is_file() and '.git' not in p.parts} == before
+    spans = {span['reference']: span for span in preview['spans']}
+    cited = [{**ref, 'sha': spans[i]['sha']} if i in spans else ref
+             for i, ref in enumerate(references, 1)]
+    return call(sf, rid, claim, 'apply_patch', references=cited)
+
+
 def test_code_writes_reads_searches_same_tree_without_tmp(tmp_path, monkeypatch):
     sf, rid, claim, root = engine(tmp_path)
     assert claim.inputs['_output_target'] == 'code'
@@ -104,7 +123,7 @@ def test_reference_mode_runs_end_to_end_through_the_engine(tmp_path):
 
     # Given out of order on purpose, and the second range's coordinates come
     # from BEFORE the first edit changes its line's length.
-    result = call(sf, rid, claim, 'apply_patch', references=[
+    result = patch_corroborated(sf, rid, claim, root, [
         {'file': 'original.py', 'sha': cite['sha'], 'from_line': 3,
          'from_col': 7, 'to_line': 3, 'to_col': 8, 'new_text': '33'},
         {'file': 'original.py', 'sha': cite['sha'], 'from_line': 1,
@@ -120,7 +139,7 @@ def test_reference_mode_runs_end_to_end_through_the_engine(tmp_path):
     # the refusal was the defect: it made every successful write cost a reread
     # before the next one. The coordinates are the ones the read issued and
     # the engine translates them through its own journal.
-    third = call(sf, rid, claim, 'apply_patch', references=[
+    third = patch_corroborated(sf, rid, claim, root, [
         {'file': 'original.py', 'sha': cite['sha'], 'from_line': 2,
          'from_col': 8, 'to_line': 2, 'to_col': 9, 'new_text': '22'}])
     assert third['applied'] is True, third

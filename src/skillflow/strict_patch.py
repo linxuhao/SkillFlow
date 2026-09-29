@@ -25,10 +25,26 @@ class PatchError(ValueError):
     """Malformed, unsafe, stale or ambiguous input; never a fuzzy fallback."""
 
 
+class UncorroboratedColumns(PatchError):
+    """Columns named without a span citation; carries the spans to cite."""
+
+    def __init__(self, message: str, spans: list[dict]):
+        super().__init__(message)
+        self.spans = spans
+
+
 @dataclass(frozen=True)
 class Hunk:
+    """One V4A hunk: the lines it matches and the lines it writes.
+
+    ``rows`` keeps the hunk's own lines in order as ``(prefix, text)``, so the
+    applier can say which matched line each deletion removed and between
+    which lines each insertion went. A hunk built without rows is recorded as
+    one block: all of ``old`` replaced by all of ``new``.
+    """
     old: tuple[str, ...]
     new: tuple[str, ...]
+    rows: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -52,11 +68,40 @@ class Reference:
     tail `]ctions() else []),` orphaned below it — a SyntaxError at collection,
     so the round's whole suite scored nothing. Column arithmetic the caller
     does not have to do is column arithmetic it cannot get wrong.
+
+    The lines are OPTIONAL too, and omitting both means the whole window the
+    citation was issued for: {file, sha, new_text} replaces exactly the text
+    that read served, with every coordinate taken from the citation. This is
+    the form that restores the check a copied original used to give. On
+    2026-09-21 host run eac7cacb cited the right sha on its first try and asked
+    for line 1679 columns 0..27 when the line `DEFAULT_TIMEOUT_SECONDS = 30`
+    is 28 characters long; 27 and 28 are both legal columns, so the engine
+    wrote `DEFAULT_TIMEOUT_SECONDS = 450` and reported success. A copied
+    original is a checksum because a wrong copy fails to match; a counted
+    column has no such redundancy. The only check a column can be given
+    without retyping the text is a digest of what it covers, and the only
+    digests a caller holds are the ones read issued for windows it served, so
+    a caller that holds the digest of exactly the text it means to replace can
+    cite that window and write no number at all. Here the caller's belief
+    about a line's length has no field to travel in: the range written is the
+    range read, which the caller was shown and the engine re-checks by sha.
+    Explicit lines narrow the window to whole lines.
+
+    Explicit COLUMNS must be corroborated. A reference that names a column
+    and cites a window is refused, nothing is written, and the refusal is the
+    preview: it shows the exact text those coordinates cover and what they
+    leave on either side, and hands back a span citation issued for exactly
+    that range (`skillflow.citations.issue_span`). Resending the reference with
+    that sha writes; the engine checks the sha names those same coordinates
+    and that they still cover the text it showed. A caller that counted 27
+    for a 28-character line is shown `DEFAULT_TIMEOUT_SECONDS = 3` with `0`
+    left behind before anything is written, and the write it can then make is
+    bound to those bytes.
     """
     sha: str
-    from_line: int
+    from_line: int | None
     from_col: int | None
-    to_line: int
+    to_line: int | None
     to_col: int | None
     new_text: str
 
@@ -129,6 +174,7 @@ def parse_patch(patch: str) -> tuple[Operation, ...]:
                 j += 1
                 old: list[str] = []
                 new: list[str] = []
+                rows: list[tuple[str, str]] = []
                 changed = False
                 while j < len(body) and body[j] != "@@":
                     row = body[j]
@@ -138,11 +184,12 @@ def parse_patch(patch: str) -> tuple[Operation, ...]:
                         old.append(row[1:])
                     if row[0] in " +":
                         new.append(row[1:])
+                    rows.append((row[0], row[1:]))
                     changed |= row[0] != " "
                     j += 1
                 if not changed or old == new:
                     raise PatchError(f"{name}: each hunk must change text")
-                hunks.append(Hunk(tuple(old), tuple(new)))
+                hunks.append(Hunk(tuple(old), tuple(new), tuple(rows)))
             if not hunks or len(hunks) > 1024:
                 raise PatchError(f"{name}: require 1..1024 hunks")
             ops.append(Operation(kind, name, tuple(hunks)))
@@ -154,8 +201,7 @@ def parse_patch(patch: str) -> tuple[Operation, ...]:
     return tuple(ops)
 
 
-_REQUIRED_REFERENCE_KEYS = frozenset(
-    {"file", "sha", "from_line", "to_line", "new_text"})
+_REQUIRED_REFERENCE_KEYS = frozenset({"file", "sha", "new_text"})
 
 
 def _int_field(raw: dict, key: str, index: int) -> int:
@@ -214,11 +260,24 @@ def parse_references(references) -> tuple[Operation, ...]:
             raise PatchError(f"reference {index}: new_text must be a string")
         if "\x00" in new_text:
             raise PatchError(f"reference {index}: new_text must not contain NUL")
-        from_line = _int_field(raw, "from_line", index)
-        to_line = _int_field(raw, "to_line", index)
-        if from_line < 1 or to_line < from_line:
+        lines_given = [raw.get(key) is not None for key in ("from_line", "to_line")]
+        if not any(lines_given):
+            # The whole cited window: every coordinate comes from the citation.
+            if raw.get("from_col") is not None or raw.get("to_col") is not None:
+                raise PatchError(
+                    f"reference {index}: from_col/to_col need from_line and "
+                    "to_line; omit all four to replace the whole cited window")
+            from_line = to_line = None
+        elif not all(lines_given):
             raise PatchError(
-                f"reference {index}: require 1 <= from_line <= to_line")
+                f"reference {index}: give both from_line and to_line, or "
+                "neither to replace the whole cited window")
+        else:
+            from_line = _int_field(raw, "from_line", index)
+            to_line = _int_field(raw, "to_line", index)
+            if from_line < 1 or to_line < from_line:
+                raise PatchError(
+                    f"reference {index}: require 1 <= from_line <= to_line")
         ref = Reference(sha.strip(), from_line,
                         _optional_col(raw, "from_col", index),
                         to_line, _optional_col(raw, "to_col", index), new_text)
@@ -276,17 +335,248 @@ def _window_offset(op: Operation, number: int, record: dict, line_no: int,
 
 
 MAX_ECHO_CHARS = 240
+# The resulting-text echo: a touched range longer than ECHO_HEAD + ECHO_TAIL
+# lines shows its first ECHO_HEAD and last ECHO_TAIL lines and says how many
+# it left out; ECHO_CONTEXT unchanged lines frame it on each side.
+ECHO_HEAD = 20
+ECHO_TAIL = 20
+ECHO_CONTEXT = 1
+
+
+def _refuse_fusing_insert(op: Operation, number: int, ref: Reference,
+                          joined: str, start: int, end: int,
+                          new_text: str) -> None:
+    """Refuse the one point insert whose result cannot be what was meant.
+
+    A zero-width reference at column 0 of a nonempty line inserts BEFORE that
+    line. If `new_text` spans several lines and does not end with a newline,
+    its last line is glued onto the front of the old line. A single-line
+    prefix (`# ` to comment a line out), an insert ending in a newline, an
+    insert on an empty line and an insert at a nonzero column all still apply.
+    """
+    if start != end or "\n" not in new_text or new_text.endswith("\n"):
+        return
+    if start > 0 and joined[start - 1] != "\n":
+        return
+    line_end = joined.find("\n", start)
+    width = (len(joined) if line_end < 0 else line_end) - start
+    if width == 0:
+        return
+    line = ref.from_line
+    raise PatchError(
+        f"{op.path} reference {number}: from == to at ({line},0) inserts "
+        f"before line {line}, and this new_text spans "
+        f"{new_text.count(chr(10)) + 1} lines without ending in a newline, "
+        f"so its last line would be joined onto line {line}. To replace "
+        f"lines L..M cite (L,0)..(M,len(line M)) — line {line} alone is "
+        f"({line},0)..({line},{width}); to insert new lines before line "
+        f"{line}, end new_text with a newline")
+
+
+def _echo(path: str, lines: list[str], first: int, last: int) -> dict:
+    """Lines ``first``..``last`` (1-based) of ``lines``, numbered like a read."""
+    total = len(lines)
+    last = max(first, last)
+    first, last = min(first, max(total, 1)), min(last, max(total, 1))
+    touched = last - first + 1
+    shown = list(range(first, last + 1))
+    elided = 0
+    if touched > ECHO_HEAD + ECHO_TAIL:
+        elided = touched - ECHO_HEAD - ECHO_TAIL
+        shown = shown[:ECHO_HEAD] + [None] + shown[-ECHO_TAIL:]
+    before = range(max(1, first - ECHO_CONTEXT), first)
+    after = range(last + 1, min(total, last + ECHO_CONTEXT) + 1)
+    rows = []
+    for number in [*before, *shown, *after]:
+        if number is None:
+            rows.append(f"… {elided} lines elided …")
+        elif number <= total:
+            rows.append(f"{number}\t{lines[number - 1]}")
+    entry = {"file": path, "from_line": first, "to_line": last,
+             "text": "\n".join(rows)}
+    if elided:
+        entry["elided"] = elided
+    return entry
+
+
+def _echoes(root_fd: int, path: str, placed: list[tuple[int, int]]) -> list[dict]:
+    """What the file now says around each edit, read back from disk."""
+    try:
+        snapshot = _snapshot(root_fd, path)
+        if snapshot is None:
+            raise PatchError("the file is gone")
+        lines = _framed(snapshot.data, path)[0]
+    except (PatchError, OSError) as exc:
+        return [{"file": path, "error": f"could not read the file back: {exc}"}]
+    return [_echo(path, lines, first, last) for first, last in placed]
+
+
+def _coords(from_line, from_col, to_line, to_col) -> str:
+    def col(value):
+        return "-" if value is None else str(value)
+    return f"{from_line}:{col(from_col)}..{to_line}:{col(to_col)}"
+
+
+def _shown(text: str) -> str:
+    """The span as shown to the caller: whole, or both ends when it is long.
+
+    A miscounted column moves an END of the span, so the ends are what must
+    never be cut from the preview.
+    """
+    if len(text) <= 2 * MAX_ECHO_CHARS:
+        return text
+    return text[:MAX_ECHO_CHARS] + "…" + text[-MAX_ECHO_CHARS:]
+
+
+def _span_range(op: Operation, number: int, ref: Reference, record: dict,
+                run_id: str, joined: str, current_sha: str) -> tuple[int, int]:
+    """Where a span citation's text sits now, or a refusal.
+
+    The reference must name the span's own coordinates (or none, meaning the
+    span), and those coordinates must still cover exactly the text the engine
+    showed when it issued the span. The text is located through the same
+    journal a window uses, so this run's own edit elsewhere in the file does
+    not stale it. Two checks refuse everything else: the chain check (the file
+    was written by something other than this run's journaled edits since the
+    span was shown) and the text check (this run's own edit changed the
+    shown text itself).
+    """
+    span = (record["start_line"], record["from_col"], record["end_line"],
+            record["to_col"])
+    named = (ref.from_line, ref.from_col, ref.to_line, ref.to_col)
+    if ref.from_line is not None and named != span:
+        raise PatchError(
+            f"{op.path} reference {number}: that sha is the span "
+            f"{_coords(*span)} and this reference names {_coords(*named)}; a "
+            "span citation corroborates only the coordinates it was issued for")
+    stale = PatchError(
+        f"{op.path} reference {number}: span {_coords(*span)} changed since "
+        "its citation was issued: the text it showed was edited, or the file "
+        "was written by something other than this run's apply_patch; reread "
+        "the range and resend the reference with the new digest to be shown "
+        "the text it covers now")
+    if not citations.chain_intact(run_id, op.path, record.get("generation"),
+                                  record.get("file_sha", ""), current_sha,
+                                  epoch=record.get("epoch")):
+        raise stale
+    placed = citations.translate(run_id, op.path, record["generation"],
+                                 record["start_char"],
+                                 record["start_char"] + len(record["text"]))
+    if placed == citations.POINT:
+        raise PatchError(
+            f"{op.path} reference {number}: span {_coords(*span)} is an "
+            "insertion point and an earlier edit in this run inserted text "
+            "exactly there, so which side of that text it meant cannot be "
+            "told; reread the range and resend the reference with the new "
+            "digest to be shown where it lands now")
+    start, end = placed if isinstance(placed, tuple) else (None, None)
+    if start is None or end is None or joined[start:end] != record["text"]:
+        raise stale
+    return start, end
+
+
+def _refuse_uncorroborated(op: Operation, pending: list, run_id: str,
+                           joined: str, current_sha: str) -> None:
+    """Refuse counted columns, showing what they cover and a sha for exactly it.
+
+    This refusal is the preview. It writes nothing; it shows the exact text
+    the named coordinates cover and what they leave on either side of it, and
+    issues a span citation for exactly those coordinates over exactly that
+    text. The caller that meant it resends the same reference with that sha.
+    """
+    spans: list[dict] = []
+    lines: list[str] = []
+    for start, end, _new, from_line, to_line, (number, ref, record), _ in pending:
+        text = joined[start:end]
+        line_start = joined.rfind("\n", 0, start) + 1
+        line_end = joined.find("\n", end)
+        if line_end < 0:
+            line_end = len(joined)
+        coords = (from_line, ref.from_col, to_line, ref.to_col)
+        issued = citations.issue_span(
+            run_id, path=op.path, source=record.get("source", ""),
+            from_line=from_line, from_col=ref.from_col, to_line=to_line,
+            to_col=ref.to_col, text=text, start_char=start,
+            file_sha=current_sha)
+        keeps_before = joined[line_start:start]
+        keeps_after = joined[end:line_end]
+        spans.append({
+            "file": op.path, "reference": number,
+            "from_line": from_line, "from_col": ref.from_col,
+            "to_line": to_line, "to_col": ref.to_col,
+            "sha": issued["sha"], "chars": len(text), "text": _shown(text),
+            "keeps_before": _shown(keeps_before), "keeps_after": _shown(keeps_after),
+        })
+        lines.append(
+            f"reference {number} names columns {_coords(*coords)}, which cover "
+            f"{_shown(text)!r} and leave {_shown(keeps_before)!r} before it and "
+            f"{_shown(keeps_after)!r} after it on their lines; if that is exactly "
+            f"the text to replace, resend this reference with sha "
+            f"{issued['sha']} (in `spans`)")
+    raise UncorroboratedColumns(
+        f"{op.path}: a column the caller counted has nothing to check it "
+        "against, so columns must cite a span citation issued for exactly "
+        "those coordinates. Nothing was written. " + "; ".join(lines)
+        + ". To replace whole lines instead, omit from_col and to_col.",
+        spans)
+
+
+def _recorded(terminated: str, start: int, end: int, new_text: str,
+              whole_lines: bool) -> list[tuple[int, int, int]]:
+    """One reference's write as the journal records it: spans of
+    ``[start, end)`` removed and ``new_length`` characters written.
+
+    ``terminated`` is the text the write was applied to, every line ending in
+    its newline. A write of whole lines replaces them WITH their newlines, so
+    a blank line replaced by text is recorded as its newline removed and the
+    text plus a newline written, never as a pure insertion.
+
+    A column write that starts at a line's end, where the text it removes (or
+    writes) begins with that newline and it stops at another line's end, is a
+    whole-line edit: ``"\\n" + text`` after a line, or lines deleted from the
+    end of the line above. Inserting ``"\\n" + text`` before a newline and
+    ``text + "\\n"`` after it are one change, so it is recorded where a V4A
+    hunk records the same change, one character later, at the next line's
+    start; the same change then journals the same in every format.
+
+    When the line it starts at is blank, that position is also a line start,
+    and when the text it removes and the text it writes each end with a
+    newline (or are empty), the call reads as a whole-line edit on either side
+    of the blank line: the same coordinates and text are what a caller sends
+    to write before that line and to write after it. Which one was meant
+    cannot be told, so the blank line is recorded as rewritten, and a pure
+    insertion is recorded after it as well; every older citation that the two
+    readings would place differently then meets a removed range or an
+    insertion offset and is refused.
+    """
+    if whole_lines:
+        return [(start, end + 1, len(new_text) + 1)]
+    size = len(terminated)
+    if not (start < size and terminated[start] == "\n"
+            and end < size and terminated[end] == "\n"
+            and (new_text[:1] == "\n" or (not new_text and end > start))):
+        return [(start, end, len(new_text))]
+    blank = start == 0 or terminated[start - 1] == "\n"
+    removed = terminated[start:end]
+    if (blank and (not removed or removed.endswith("\n"))
+            and (not new_text or new_text.endswith("\n"))):
+        if not removed:
+            return [(start, start + 1, 1),
+                    (start + 1, start + 1, len(new_text))]
+        return [(start, end + 1, len(new_text) + 1)]
+    return [(start + 1, end + 1, len(new_text))]
 
 
 def cited_bytes(before: bytes, op: Operation, run_id: str,
-                edits: list | None = None, echo: list | None = None) -> bytes:
+                edits: list | None = None, echo: list | None = None,
+                placed: list | None = None) -> bytes:
     """Apply this file's reference hunks against ONE snapshot of its text.
 
     Every range is resolved against the same `original`, so the caller never
     compensates for line drift inside a batch and never has to order its
     edits; the engine sorts them and refuses any overlap. A citation that this
     run did not issue, or whose range no longer reads the same, is refused
-    outright — there is no fuzzy match and no partial write.
+    outright during preflight — there is no fuzzy match.
 
     Coordinates are the CITATION's, not the current file's: they are resolved
     inside the text that read served and then translated through the edits this
@@ -295,17 +585,20 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
     round measured at 54 reads and 37 writes on one file was paying for. The
     translation is refused rather than guessed when the cited range was itself
     replaced, and the chain is only trusted while the file is still what the
-    engine left there; otherwise the original strict window check decides.
+    engine left there; otherwise the citation is refused. Only a citation
+    issued without a frame is judged by the original strict window check.
 
-    ``edits`` is filled, when given, with the disjoint
-    ``(start, end, new_length)`` spans this call applied, in the offsets of the
-    text it applied them to — that is what the journal records. ``echo`` is
-    filled with what each reference actually replaced: a legal span is not
-    necessarily the intended one, and the only way that was ever visible was
-    to read the file back.
+    ``edits`` is filled, when given, with the `_recorded` spans of each
+    reference this call applied, in the offsets of the text it applied them
+    to with every line ending in its newline — that is what the journal
+    records. ``echo`` is filled with what each reference actually replaced:
+    a legal span is not necessarily the intended one, and the only way that
+    was ever visible was to read the file back. ``placed`` records the
+    1-based result line range for each reference.
     """
     original, eol, final_newline = _framed(before, op.path)
     joined = "\n".join(original)
+    terminated = joined + "\n" if original else ""
     current_sha = citations.text_sha(joined)
     starts: list[int] = []
     run = 0
@@ -327,7 +620,7 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
                 f"{line_no} ({len(line)} characters); reread the range")
         return starts[line_no - 1] + col
 
-    resolved: list[tuple[int, int, str, Reference]] = []
+    resolved: list[tuple] = []
     for number, ref in enumerate(op.refs, 1):
         record = citations.lookup(run_id, ref.sha)
         if record is None:
@@ -338,76 +631,226 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
             raise PatchError(
                 f"{op.path} reference {number}: that digest was issued for "
                 f"{record['path']!r}")
-        if ref.from_line < record["start_line"] or ref.to_line > record["end_line"]:
+        if record.get("kind") == "span":
+            start, end = _span_range(op, number, ref, record, run_id, joined,
+                                     current_sha)
+            new_text = ref.new_text.replace("\r\n", "\n")
+            _refuse_fusing_insert(op, number, ref, joined, start, end, new_text)
+            resolved.append((start, end, new_text,
+                             record["start_line"], record["end_line"], None,
+                             False))
+            continue
+        if ref.from_line is None:
+            from_line, to_line = record["start_line"], record["end_line"]
+        else:
+            from_line, to_line = ref.from_line, ref.to_line
+        if from_line < record["start_line"] or to_line > record["end_line"]:
             raise PatchError(
-                f"{op.path} reference {number}: lines {ref.from_line}-{ref.to_line} "
+                f"{op.path} reference {number}: lines {from_line}-{to_line} "
                 f"fall outside the cited window {record['start_line']}-"
                 f"{record['end_line']}; cite the window that contains them")
+        whole_lines = ref.from_col is None and ref.to_col is None
         generation = record.get("generation")
         window_start = record.get("start_char")
         translatable = (
             window_start is not None
             and citations.chain_intact(run_id, op.path, generation,
-                                       record.get("file_sha", ""), current_sha))
+                                       record.get("file_sha", ""), current_sha,
+                                       epoch=record.get("epoch")))
         if translatable:
-            local_from = _window_offset(op, number, record, ref.from_line,
+            local_from = _window_offset(op, number, record, from_line,
                                         ref.from_col, "from")
-            local_to = _window_offset(op, number, record, ref.to_line,
+            local_to = _window_offset(op, number, record, to_line,
                                       ref.to_col, "to")
-            start = citations.remap(run_id, op.path, generation,
-                                    window_start + local_from)
-            end = citations.remap(run_id, op.path, generation,
-                                  window_start + local_to)
-            if start is None or end is None:
+            # Whole lines own their newlines, so a blank line is one
+            # character wide and a range of lines is never empty.
+            own = 1 if whole_lines else 0
+            translated = citations.translate(run_id, op.path, generation,
+                                         window_start + local_from,
+                                         window_start + local_to + own)
+            if translated == citations.REMOVED:
                 raise PatchError(
-                    f"{op.path} reference {number}: lines {ref.from_line}-"
-                    f"{ref.to_line} were themselves replaced by an earlier "
-                    "edit in this run; reread that range and cite the new digest")
+                    f"{op.path} reference {number}: lines {from_line}-"
+                    f"{to_line} changed since the digest was issued: they were "
+                    "removed or replaced by an earlier edit in this run; "
+                    "reread the range and cite the new digest")
+            if translated == citations.SPLIT:
+                raise PatchError(
+                    f"{op.path} reference {number}: lines {from_line}-"
+                    f"{to_line} changed since the digest was issued: an "
+                    "earlier edit in this run inserted text inside them; "
+                    "reread the range and cite the new digest")
+            if translated == citations.POINT:
+                raise PatchError(
+                    f"{op.path} reference {number}: columns {ref.from_col}.."
+                    f"{ref.to_col} are an insertion point and an earlier edit "
+                    "in this run inserted text exactly there, so which side "
+                    "of that text they meant cannot be told; reread the range "
+                    "and cite the new digest")
+            start, end = translated[0], translated[1] - own
             if joined[start:end] != record["text"][local_from:local_to]:
                 raise PatchError(
-                    f"{op.path} reference {number}: lines {ref.from_line}-"
-                    f"{ref.to_line} changed since the digest was issued; "
+                    f"{op.path} reference {number}: lines {from_line}-"
+                    f"{to_line} changed since the digest was issued; "
                     "reread the range and cite the new digest")
         else:
+            if window_start is not None:
+                # The read placed this window in a frame the journal can no
+                # longer connect to the file as it is now. Lines that still
+                # READ the same may be different lines: a file of repeated
+                # lines with one written in above looks unchanged at every
+                # line number.
+                raise PatchError(
+                    f"{op.path} reference {number}: lines {record['start_line']}-"
+                    f"{record['end_line']} changed since the digest was issued, "
+                    "by a write this run's journal does not account for (a "
+                    "write from outside the run, or history the engine no "
+                    "longer holds), so where they are now is unknown; reread "
+                    "the range and cite the new digest")
             window = "\n".join(original[record["start_line"] - 1:record["end_line"]])
             if not citations.matches(record, run_id, window):
                 raise PatchError(
                     f"{op.path} reference {number}: lines {record['start_line']}-"
                     f"{record['end_line']} changed since the digest was issued; "
                     "reread the range and cite the new digest")
-            start = _offset(ref.from_line, ref.from_col, "from")
-            end = _offset(ref.to_line, ref.to_col, "to")
+            start = _offset(from_line, ref.from_col, "from")
+            end = _offset(to_line, ref.to_col, "to")
         if end < start:
             raise PatchError(f"{op.path} reference {number}: end precedes start")
-        resolved.append((start, end, ref.new_text.replace("\r\n", "\n"), ref))
+        # A column the caller counted and nothing corroborates. Resolved all
+        # the same, so every other refusal (outside the window, past the end
+        # of the line, stale, overlapping) keeps its own message and comes
+        # first; this one is raised only for a batch that is otherwise valid.
+        uncorroborated = ((number, ref, record)
+                          if ref.from_col is not None or ref.to_col is not None
+                          else None)
+        new_text = ref.new_text.replace("\r\n", "\n")
+        _refuse_fusing_insert(op, number, ref, joined, start, end, new_text)
+        resolved.append((start, end, new_text,
+                         from_line, to_line, uncorroborated, whole_lines))
     resolved.sort(key=lambda item: (item[0], item[1]))
     cursor = 0
-    pieces: list[str] = []
-    for number, (start, end, new_text, ref) in enumerate(resolved, 1):
-        if start < cursor:
+    for number, item in enumerate(resolved, 1):
+        if item[0] < cursor:
             raise PatchError(
                 f"{op.path} reference {number}: overlaps an earlier reference; "
                 "cite disjoint ranges")
+        cursor = item[1]
+    pending = [item for item in resolved if item[5] is not None]
+    if pending:
+        _refuse_uncorroborated(op, pending, run_id, joined, current_sha)
+    cursor = 0
+    written = 0
+    spots: list[tuple[int, int]] = []
+    pieces: list[str] = []
+    for start, end, new_text, from_line, to_line, _, whole in resolved:
         pieces.append(joined[cursor:start])
+        written += start - cursor
+        spots.append((written, written + len(new_text)))
+        written += len(new_text)
         pieces.append(new_text)
         cursor = end
         if edits is not None:
-            edits.append((start, end, len(new_text)))
+            edits.extend(_recorded(terminated, start, end, new_text, whole))
         if echo is not None:
             was = joined[start:end]
-            echo.append({
+            said = {
                 "file": op.path,
-                "from_line": ref.from_line, "to_line": ref.to_line,
+                "from_line": from_line, "to_line": to_line,
                 "replaced_chars": len(was),
                 "replaced": (was if len(was) <= MAX_ECHO_CHARS
                              else was[:MAX_ECHO_CHARS] + "…"),
-            })
+            }
+            lines_was = was.count("\n") + 1 if was else 0
+            lines_new = new_text.count("\n") + 1 if new_text else 0
+            if lines_was != lines_new:
+                # A change in the number of lines is the one thing the echo
+                # above cuts off: a window of ten lines replaced by one shows
+                # only its first characters. Bytes are the file's own. The two
+                # counts count line PIECES, 1 + the newlines in a non-empty
+                # text and 0 for an empty one, not whole lines: a whole-line
+                # insertion `x\n` at a line start reports 0 -> 2, one line
+                # deleted with its newline 2 -> 0.
+                said["replaced_lines"] = lines_was
+                said["replaced_bytes"] = len(was.replace(
+                    "\n", eol).encode("utf-8"))
+                said["new_lines"] = lines_new
+            echo.append(said)
     pieces.append(joined[cursor:])
-    result = "".join(pieces).split("\n")
+    text = "".join(pieces)
+    if placed is not None:
+        line, pos = 1, 0
+        for rs, re_ in spots:
+            line += text.count("\n", pos, rs)
+            pos = rs
+            placed.append((line, line + text.count("\n", rs, max(rs, re_ - 1))))
+    result = text.split("\n")
     return (eol.join(result) + (eol if result and final_newline else "")).encode("utf-8")
 
 
-def updated_bytes(before: bytes, op: Operation) -> bytes:
+def _line_blocks(placed) -> list[tuple[int, int, tuple[str, ...]]]:
+    """``(first old line, lines deleted, lines inserted)`` per changed block.
+
+    ``placed`` is each hunk with the line the applier matched it at. The
+    blocks are read off the hunk's own rows: a context row is a line kept, a
+    `-` row the matched line it removed, a `+` row a line written before the
+    next kept one. Neighbouring changed rows form one block, across a hunk
+    boundary too when no kept line separates them.
+    """
+    blocks: list[list] = []
+    open_block = None
+    cursor = 0
+    for hunk, start in placed:
+        if start != cursor:
+            open_block = None
+        rows = hunk.rows or (tuple(("-", t) for t in hunk.old)
+                             + tuple(("+", t) for t in hunk.new))
+        index = start
+        for sign, text in rows:
+            if sign == " ":
+                index += 1
+                open_block = None
+                continue
+            if open_block is None:
+                open_block = [index, 0, []]
+                blocks.append(open_block)
+            if sign == "-":
+                open_block[1] += 1
+                index += 1
+            else:
+                open_block[2].append(text)
+        cursor = start + len(hunk.old)
+    return [(k, m, tuple(new)) for k, m, new in blocks]
+
+
+def _block_spans(original: list[str], blocks) -> list[tuple[int, int, int]]:
+    """The blocks as ``(start, end, new_length)`` in the old text with every
+    line ending in its newline.
+
+    Lines k..k+m-1 are removed with their newlines (``[start of line k,
+    start of line k+m)``) and the new lines are written there, each with its
+    newline. A block that removes nothing is a pure insertion at the start of
+    line k; a block that removes a blank line removes its newline.
+    """
+    starts = []
+    run = 0
+    for line in original:
+        starts.append(run)
+        run += len(line) + 1
+    starts.append(run)
+    return [(starts[k], starts[k + m], sum(len(line) + 1 for line in new))
+            for k, m, new in blocks]
+
+
+def updated_bytes(before: bytes, op: Operation, edits: list | None = None,
+                  placed: list | None = None) -> bytes:
+    """Apply V4A hunks; fill ``edits`` with the spans the applier wrote.
+
+    ``edits`` gets one ``(start, end, new_length)`` per changed block, in the
+    offsets of the old text as the journal frames it, taken from where each
+    hunk matched and from its own rows. Not recomputed from the two texts
+    afterwards: next to repeated lines those have more than one reading.
+    """
     try:
         text = before.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -424,6 +867,7 @@ def updated_bytes(before: bytes, op: Operation) -> bytes:
         original.pop()
     framed = "\n" + "\n".join(original) + "\n" if original else ""
     result: list[str] = []
+    matched: list[tuple[Hunk, int]] = []
     cursor = 0
     for number, hunk in enumerate(op.hunks, 1):
         if not hunk.old:
@@ -455,9 +899,14 @@ def updated_bytes(before: bytes, op: Operation) -> bytes:
         if start < cursor:
             raise PatchError(f"{op.path}: hunks overlap or are out of order; combine them")
         result.extend(original[cursor:start])
+        if placed is not None:
+            placed.append((len(result) + 1, len(result) + len(hunk.new)))
         result.extend(hunk.new)
+        matched.append((hunk, start))
         cursor = start + len(hunk.old)
     result.extend(original[cursor:])
+    if edits is not None:
+        edits.extend(_block_spans(original, _line_blocks(matched)))
     return (eol.join(result) + (eol if result and final_newline else "")).encode("utf-8")
 
 
@@ -475,26 +924,31 @@ def _normalised(data: bytes) -> str | None:
     return "\n".join(lines)
 
 
-def _collapsed_edit(before: str, after: str) -> list[tuple[int, int, int]]:
-    """One span covering everything that differs, in ``before``'s offsets.
+def _terminated(text: str, data: bytes) -> str:
+    """``text`` (`_normalised` ``data``) with every line ending in a newline,
+    the last one too: the offsets the journal records in."""
+    return text + "\n" if data else ""
 
-    For a V4A hunk batch the engine knows the two texts but not a per-hunk
-    span it could state in characters (a whole-line deletion is not a
-    character range), so it states the truth it does have: the region between
-    the first and last difference changed. Coordinates outside it translate;
-    coordinates inside it are refused, which is correct — they may be anywhere.
+
+def _spans_account_for(old: str, new: str, spans) -> bool:
+    """True when ``spans`` turn ``old`` into ``new`` outside the spans' own text.
+
+    Every character outside a span must reappear, in order, exactly where the
+    spans say it moved to; that is what `citations.translate` will assume. It
+    cannot say WHICH of two valid readings an edit was — that comes from the
+    applier — only that the recorded one is a reading of this edit at all.
     """
-    if before == after:
-        return []
-    head = 0
-    limit = min(len(before), len(after))
-    while head < limit and before[head] == after[head]:
-        head += 1
-    tail = 0
-    while (tail < limit - head
-           and before[len(before) - 1 - tail] == after[len(after) - 1 - tail]):
-        tail += 1
-    return [(head, len(before) - tail, len(after) - tail - head)]
+    position = 0
+    cursor = 0
+    for start, end, new_length in sorted(spans):
+        if start < cursor or end < start or end > len(old):
+            return False
+        kept = old[cursor:start]
+        if new[position:position + len(kept)] != kept:
+            return False
+        position += len(kept) + new_length
+        cursor = end
+    return new[position:] == old[cursor:]
 
 
 @dataclass(frozen=True)
@@ -555,18 +1009,27 @@ def _journal(run_id: str, op: Operation, before, after: bytes,
              spans: list[tuple[int, int, int]]) -> None:
     """Tell the citation journal what this publication did to ``op.path``.
 
+    The one recorder for every edit format. ``spans`` are what the applier
+    that made this edit wrote — `cited_bytes` for references, spans and
+    windows, `updated_bytes` for V4A hunks — never a diff of the two texts
+    taken afterwards: next to repeated lines a diff has two readings, and
+    the wrong one moves older citations onto the wrong copy.
+
+    Offsets are those of the text with every line ending in its newline
+    (`_terminated`), so a removed blank line is a removed character.
+
     Recorded AFTER the write, so a citation is never translated through an
     edit that did not land. Anything the engine cannot describe as spans
-    (an Add, a text it cannot frame) breaks the chain instead of being guessed
-    at: a broken chain costs a reread, a wrong span costs a corrupted file.
+    (an Add, a text it cannot frame, spans that do not account for the
+    change) breaks the chain instead of being guessed at: a broken chain
+    costs a reread, a wrong span costs a corrupted file.
     """
     old = _normalised(before.data) if before is not None else None
     new = _normalised(after)
-    if old is None or new is None:
+    if old is None or new is None or not _spans_account_for(
+            _terminated(old, before.data), _terminated(new, after), spans):
         citations.break_journal(run_id, op.path)
         return
-    if op.kind != "Cite":
-        spans = _collapsed_edit(old, new)
     citations.journal_edit(run_id, op.path, edits=spans,
                            sha_before=citations.text_sha(old),
                            sha_after=citations.text_sha(new))
@@ -587,6 +1050,7 @@ def apply_code_patch(patch: str, root: Path, references=None,
     changed: list[str] = []
     deleted: list[str] = []
     replaced: list[dict] = []
+    now_reads: list[dict] = []
     phase = "preflight"
     root_fd = None
     try:
@@ -609,6 +1073,7 @@ def apply_code_patch(patch: str, root: Path, references=None,
             before = _snapshot(root_fd, op.path)
             spans: list[tuple[int, int, int]] = []
             echo: list[dict] = []
+            placed: list[tuple[int, int]] = []
             if op.kind == "Add":
                 if before is not None:
                     raise PatchError(f"{op.path}: Add File refuses an existing file")
@@ -617,10 +1082,10 @@ def apply_code_patch(patch: str, root: Path, references=None,
                 if before is None:
                     raise PatchError(f"{op.path}: {op.kind} File requires an existing file")
                 if op.kind == "Update":
-                    after = updated_bytes(before.data, op)
+                    after = updated_bytes(before.data, op, edits=spans, placed=placed)
                 elif op.kind == "Cite":
                     after = cited_bytes(before.data, op, run_id, edits=spans,
-                                        echo=echo)
+                                        echo=echo, placed=placed)
                 else:
                     after = None
             if after is not None and len(after) > MAX_FILE_BYTES:
@@ -628,12 +1093,12 @@ def apply_code_patch(patch: str, root: Path, references=None,
             size += (len(before.data) if before else 0) + (len(after) if after else 0)
             if size > MAX_BATCH_BYTES:
                 raise PatchError("Batch exceeds the 64 MiB preflight content budget")
-            prepared.append((op, before, after, spans, echo))
-        for op, before, _, _, _ in prepared:
+            prepared.append((op, before, after, spans, echo, placed))
+        for op, before, _, _, _, _ in prepared:
             if _snapshot(root_fd, op.path) != before:
                 raise PatchError(f"{op.path}: changed since preflight")
         phase = "publish"
-        for op, before, after, spans, echo in prepared:
+        for op, before, after, spans, echo, placed in prepared:
             if _snapshot(root_fd, op.path) != before:
                 raise PatchError(f"{op.path}: changed before publication")
             target = code_path(root, op.path)
@@ -650,8 +1115,15 @@ def apply_code_patch(patch: str, root: Path, references=None,
                 changed.append(op.path)
                 replaced.extend(echo)
                 _journal(run_id, op, before, after, spans)
+                if placed:
+                    now_reads.extend(_echoes(root_fd, op.path, placed))
         result = {"written": changed, "deleted": deleted, "applied": True,
                   "output_target": "code"}
+        if now_reads:
+            # What the file says now, read back from disk after the write,
+            # around each edit. An applied splice used to surface only on a
+            # later read or at the gate.
+            result["echo"] = now_reads
         if replaced:
             # What the engine took out, said back. A span can be legal and
             # still be the wrong one; before this, the only way to find that
@@ -660,9 +1132,14 @@ def apply_code_patch(patch: str, root: Path, references=None,
             result["replaced"] = replaced
         return result
     except (PatchError, OSError, UnicodeError) as exc:
-        return {"error": f"apply_patch {phase}: {exc}", "phase": phase,
-                "written": changed, "deleted": deleted, "applied": False,
-                "partial": bool(changed or deleted), "output_target": "code"}
+        refused = {"error": f"apply_patch {phase}: {exc}", "phase": phase,
+                   "written": changed, "deleted": deleted, "applied": False,
+                   "partial": bool(changed or deleted), "output_target": "code"}
+        if isinstance(exc, UncorroboratedColumns):
+            refused["spans"] = exc.spans
+        if now_reads:
+            refused["echo"] = now_reads
+        return refused
     finally:
         if root_fd is not None:
             os.close(root_fd)
