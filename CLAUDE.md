@@ -108,6 +108,15 @@ Native tools (13): read_file, write, list_tree, dir_tree, json_schema, syntax_li
 - `skill_runner` — host-delegated runner mode. Three transports over one core: `RunnerService` (`service.py` — in-process embed: start guard, seeding, stateless reconnect, `execute_step_tool` proxy with host-tool redirect, finish_step→submit mapping), the `skillflow-run` CLI, and `skillflow-mcp` (`mcp_server.py`, typed MCP tools over stdio; optional extra `skillflow-py[mcp]`). PromptAssembler emits a transport-neutral slot contract — never advertise write_*/finish_step as directly-callable functions.
 - `skill_converter` — skill→pipeline graph (host-mode agents) behind `skillflow-convert`; AItelier registers it to power its `generate_pipeline` butler tool.
 
+## Trace connection ownership
+
+`SkillFlow.trace_connection(project_id)` borrows under the engine RLock for the
+complete SQL transaction/cursor use. The per-project idle LRU is bounded to 32;
+actual nested borrowers pin their entries, with invalidation deferred until
+release. Trace/query APIs use the same scope. Raw connections/cursors must not
+escape it; hosts must migrate from the removed private `_get_trace_conn`.
+The unpublished `1.5.81+trace1` candidate requires coordinated host adaptation.
+
 ## Host integration
 
 - `WorkspaceManager(code_path_resolver=…)` — optional hook mapping a project to a host-managed code path (e.g. an existing repo), so `repo_apply` commits into the real repo. `SkillFlow(code_path_resolver=…)` forwards it.

@@ -614,6 +614,24 @@ sf.prune_trace(keep_last_runs=200)                    # cap to recent runs
 
 `delete_project` removes a project's trace automatically. This is what turns "why did this run do X?" from forensic git-archaeology into one query.
 
+Per-project SQLite connections use a 32-entry LRU cache. Only an actively
+borrowed connection can keep the cache above 32; the idle bound is restored on
+release. Trace reads, writes and eviction share the engine RLock. Raw-SQL host
+consumers must borrow explicitly and materialize results before leaving:
+
+```python
+with sf.trace_connection(project_id) as conn:
+    rows = conn.execute("SELECT * FROM skillflow_trace WHERE run_id = ?",
+                        (run_id,)).fetchall()
+```
+
+The scope falls back to the shared DB when per-project tracing is disabled.
+Connections and cursors must not escape the scope. Nested borrows remain pinned;
+`prune_trace(run_id=...)` invalidates the connection after its last borrow releases,
+and the next trace access reopens the durable file. The old private raw getter
+is removed, so hosts using it must migrate together with this SDK change.
+`1.5.81+trace1` is an unpublished source candidate, not an official release.
+
 ## Artifact History
 
 The trace records *what happened*; **artifact history records the actual files each step produced**. A step's output is promoted `{step}.tmp/ → {step}/` on commit, and `_step_commit` **rmtree's the old `{step}/` before renaming the new one in** — so a goal/review loop that re-runs the same step (re-plan, re-implement, re-verify) would otherwise **overwrite and lose** every earlier iteration's output.

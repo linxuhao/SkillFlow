@@ -373,6 +373,8 @@ class SkillFlow:
         # skillflow_trace table in self._conn.
         self._trace_db_path = trace_db_path
         self._trace_conns: dict[str, sqlite3.Connection] = {}
+        self._trace_borrows: dict[str, int] = {}
+        self._trace_close_pending: set[str] = set()
         # Activity-based liveness: each trace() marks the claimed step alive by
         # bumping its updated_at (throttled via this map: (run_id, step_id) ->
         # last-heartbeat epoch). recover_stale_claims then measures SILENCE
@@ -525,27 +527,68 @@ class SkillFlow:
             return None
         return Path(self._trace_db_path) / project_id / "trace.db"
 
-    def _get_trace_conn(self, project_id: str) -> sqlite3.Connection | None:
-        """Get or create a cached SQLite connection for a project's trace.db.
+    _TRACE_CONN_CAPACITY = 32
 
-        Returns None when per-project trace DBs are not configured (backward
-        compat — caller should fall back to self._conn).
-        """
-        if not self._trace_db_path:
+    def _trace_conn_locked(self, project_id: str) -> sqlite3.Connection | None:
+        """Open/touch an LRU entry; only trace_connection may call this."""
+        if not self._trace_db_path or not project_id:
             return None
         if project_id in self._trace_conns:
-            return self._trace_conns[project_id]
+            conn = self._trace_conns.pop(project_id)
+            self._trace_conns[project_id] = conn
+            return conn
+        self._trim_trace_conns_locked(self._TRACE_CONN_CAPACITY - 1)
         db_path = self._trace_db_path_for(project_id)
-        if db_path is None:
-            return None
         db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA busy_timeout = 5000;")
-        self._ensure_trace_table(conn)
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA busy_timeout = 5000;")
+            self._ensure_trace_table(conn)
+        except Exception:
+            conn.close()
+            raise
         self._trace_conns[project_id] = conn
         return conn
+
+    def _trim_trace_conns_locked(self, limit: int = _TRACE_CONN_CAPACITY) -> None:
+        # Borrowed entries are never evicted, including reentrant host uses.
+        # More than CAPACITY entries are possible only while actually borrowed.
+        for pid in list(self._trace_conns):
+            if len(self._trace_conns) <= limit:
+                break
+            if not self._trace_borrows.get(pid):
+                self._trace_conns.pop(pid).close()
+
+    @contextmanager
+    def trace_connection(self, project_id: str = ""):
+        """Borrow the project's trace connection (or the shared DB).
+
+        The engine RLock covers the complete borrow, transaction and cursor
+        materialization. Do not retain the connection/cursor beyond this scope.
+        Idle connections are bounded; nested borrows pin their own entries until
+        release. Hosts that need raw SQL must use this scope, not a raw getter.
+        """
+        with self._lock:
+            conn = self._trace_conn_locked(project_id)
+            if conn is None:
+                yield self._conn
+                return
+            self._trace_borrows[project_id] = self._trace_borrows.get(project_id, 0) + 1
+            self._trim_trace_conns_locked()
+            try:
+                yield conn
+            finally:
+                remaining = self._trace_borrows[project_id] - 1
+                if remaining:
+                    self._trace_borrows[project_id] = remaining
+                else:
+                    del self._trace_borrows[project_id]
+                    if project_id in self._trace_close_pending:
+                        self._trace_close_pending.remove(project_id)
+                        self._trace_conns.pop(project_id).close()
+                self._trim_trace_conns_locked()
 
     @staticmethod
     def _ensure_trace_table(conn: sqlite3.Connection) -> None:
@@ -574,13 +617,14 @@ class SkillFlow:
         conn.commit()
 
     def _close_trace_conn(self, project_id: str) -> None:
-        """Close and evict a cached per-project trace connection."""
-        conn = self._trace_conns.pop(project_id, None)
-        if conn:
-            try:
+        """Invalidate an entry, closing it once any active borrow releases."""
+        with self._lock:
+            if self._trace_borrows.get(project_id):
+                self._trace_close_pending.add(project_id)
+                return
+            conn = self._trace_conns.pop(project_id, None)
+            if conn is not None:
                 conn.close()
-            except Exception:
-                pass
 
     @contextmanager
     def _tx(self):
@@ -6652,9 +6696,7 @@ class SkillFlow:
             # claim_next_step) still route to the per-project trace.db.
             if not project_id:
                 project_id = self._get_project_id(run_id)
-            conn = self._get_trace_conn(project_id) if project_id else None
-            target = conn or self._conn
-            with self._lock:
+            with self.trace_connection(project_id) as target:
                 # seq is computed INSIDE the insert, atomically per statement.
                 # The old in-process counter (seeded once from MAX) was only
                 # race-free within ONE SkillFlow instance: every additional
@@ -6740,45 +6782,39 @@ class SkillFlow:
         ``limit`` bounds the page. With no cursor/limit the full ordered trace is
         returned (original behavior).
         """
-        # Resolve target connection: per-project trace DB when active.
-        conn = self._conn
-        if self._trace_db_path:
-            pid = self._get_project_id(run_id)
-            if pid:
-                pconn = self._get_trace_conn(pid)
-                if pconn:
-                    conn = pconn
-
-        descending = str(order).lower() == "desc"
-        q = "SELECT seq, step_id, step_instance_id, category, event, payload_json, created_at " \
-            "FROM skillflow_trace WHERE run_id = ?"
-        args: list = [run_id]
-        if step_instance_id is not None:
-            q += " AND step_instance_id = ?"
-            args.append(step_instance_id)
-        if category is not None:
-            q += " AND category = ?"
-            args.append(category)
-        if after_seq is not None:
-            q += " AND seq > ?"
-            args.append(after_seq)
-        if before_seq is not None:
-            q += " AND seq < ?"
-            args.append(before_seq)
-        q += " ORDER BY seq DESC" if descending else " ORDER BY seq ASC"
-        if limit is not None:
-            q += " LIMIT ?"
-            args.append(limit)
-        out = []
-        for r in conn.execute(q, args).fetchall():
-            out.append({
-                "seq": r["seq"], "step_id": r["step_id"],
-                "step_instance_id": r["step_instance_id"],
-                "category": r["category"], "event": r["event"],
-                "payload": self._deserialize(r["payload_json"]),
-                "created_at": r["created_at"],
-            })
-        return out
+        with self._lock:
+            pid = self._get_project_id(run_id) if self._trace_db_path else ""
+            with self.trace_connection(pid) as conn:
+                descending = str(order).lower() == "desc"
+                q = "SELECT seq, step_id, step_instance_id, category, event, payload_json, created_at " \
+                    "FROM skillflow_trace WHERE run_id = ?"
+                args: list = [run_id]
+                if step_instance_id is not None:
+                    q += " AND step_instance_id = ?"
+                    args.append(step_instance_id)
+                if category is not None:
+                    q += " AND category = ?"
+                    args.append(category)
+                if after_seq is not None:
+                    q += " AND seq > ?"
+                    args.append(after_seq)
+                if before_seq is not None:
+                    q += " AND seq < ?"
+                    args.append(before_seq)
+                q += " ORDER BY seq DESC" if descending else " ORDER BY seq ASC"
+                if limit is not None:
+                    q += " LIMIT ?"
+                    args.append(limit)
+                out = []
+                for r in conn.execute(q, args).fetchall():
+                    out.append({
+                        "seq": r["seq"], "step_id": r["step_id"],
+                        "step_instance_id": r["step_instance_id"],
+                        "category": r["category"], "event": r["event"],
+                        "payload": self._deserialize(r["payload_json"]),
+                        "created_at": r["created_at"],
+                    })
+                return out
 
     def trace_query(self, run_id: str, sql: str,
                     params: tuple = ()) -> list[sqlite3.Row]:
@@ -6792,14 +6828,10 @@ class SkillFlow:
         if not sql.strip().upper().lstrip().startswith("SELECT"):
             raise ValueError("trace_query only supports SELECT statements")
 
-        conn = self._conn
-        if self._trace_db_path:
-            pid = self._get_project_id(run_id)
-            if pid:
-                pconn = self._get_trace_conn(pid)
-                if pconn:
-                    conn = pconn
-        return conn.execute(sql, params).fetchall()
+        with self._lock:
+            pid = self._get_project_id(run_id) if self._trace_db_path else ""
+            with self.trace_connection(pid) as conn:
+                return conn.execute(sql, params).fetchall()
 
     def _get_project_id(self, run_id: str) -> str:
         with self._lock:
