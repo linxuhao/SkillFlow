@@ -355,13 +355,14 @@ def chain_intact(run_id: str, path: str, generation, file_sha: str,
 # Why `translate` refuses. Each names one row of the translation table.
 REMOVED = "removed"   # an edit removed bytes the citation covers
 SPLIT = "split"       # an insertion landed strictly inside the citation
+NEIGHBOR = "neighbor"  # a point lost its immediately preceding anchor
 POINT = "point"       # an empty citation sits exactly where text was inserted
 
 
 def translate(run_id: str, path: str, generation: int, start: int, end: int):
     """``[start, end)`` in ``generation``'s coordinates, in the current text's.
 
-    Returns ``(start, end)``, or one of `REMOVED`, `SPLIT`, `POINT` naming why
+    Returns ``(start, end)``, or `REMOVED`, `SPLIT`, `POINT`, `NEIGHBOR` naming why
     the range cannot be placed. Each edit since ``generation`` is a removed
     range ``[a, b)`` plus the length of the text written there (``b > a``
     whenever any character was removed, a lone newline included), and is
@@ -369,6 +370,9 @@ def translate(run_id: str, path: str, generation: int, start: int, end: int):
 
     - the removed range overlaps the citation: `REMOVED` (for an empty
       citation at ``p``: ``a <= p < b``);
+    - a removed range ends exactly at an empty citation: `NEIGHBOR`.
+      Its left anchor was rewritten or deleted, so the empty text alone
+      cannot corroborate the insertion point;
     - a pure insertion strictly inside a non-empty citation: `SPLIT`;
     - a pure insertion at a non-empty citation's start or end: the citation
       follows its own characters (it moves past text inserted at its start
@@ -392,6 +396,8 @@ def translate(run_id: str, path: str, generation: int, start: int, end: int):
                 if start == end:
                     if a <= start < b:
                         return REMOVED
+                    if b == start:
+                        return NEIGHBOR
                 elif start < b and a < end:
                     return REMOVED
                 if b <= start:
@@ -426,3 +432,17 @@ def forget_run(run_id: str) -> None:
     with _LOCK:
         _LEDGER.pop(run_id, None)
         _JOURNAL.pop(run_id, None)
+
+
+def journal_coverage(run_id: str, path: str) -> dict:
+    """Bounded remap coverage returned to the mutation caller after a write."""
+    with _LOCK:
+        entry = (_JOURNAL.get(run_id) or {}).get(path)
+        depth = len(entry["edits"]) if entry else 0
+        result = {"file": path, "retained_generations": depth,
+                  "max_generations": MAX_GENERATIONS_PER_FILE,
+                  "max_files": MAX_JOURNAL_FILES, "max_runs": MAX_RUNS}
+        if not depth:
+            result["warning"] = ("No edit generations retained for this file; "
+                                 "citations from an older chain require reread")
+        return result

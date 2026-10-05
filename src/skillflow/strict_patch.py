@@ -462,6 +462,11 @@ def _span_range(op: Operation, number: int, ref: Reference, record: dict,
     placed = citations.translate(run_id, op.path, record["generation"],
                                  record["start_char"],
                                  record["start_char"] + len(record["text"]))
+    if placed == citations.NEIGHBOR:
+        raise PatchError(
+            f"{op.path} reference {number}: insertion point neighbor was "
+            "replaced or deleted by an earlier edit; reread the neighboring "
+            "range and cite the new digest")
     if placed == citations.POINT:
         raise PatchError(
             f"{op.path} reference {number}: span {_coords(*span)} is an "
@@ -668,6 +673,11 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
             translated = citations.translate(run_id, op.path, generation,
                                          window_start + local_from,
                                          window_start + local_to + own)
+            if translated == citations.NEIGHBOR:
+                raise PatchError(
+                    f"{op.path} reference {number}: insertion point neighbor "
+                    "was replaced or deleted by an earlier edit; reread the "
+                    "neighboring range and cite the new digest")
             if translated == citations.REMOVED:
                 raise PatchError(
                     f"{op.path} reference {number}: lines {from_line}-"
@@ -1119,6 +1129,9 @@ def apply_code_patch(patch: str, root: Path, references=None,
                     now_reads.extend(_echoes(root_fd, op.path, placed))
         result = {"written": changed, "deleted": deleted, "applied": True,
                   "output_target": "code"}
+        if run_id and changed:
+            result["remap_history"] = [citations.journal_coverage(run_id, path)
+                                       for path in changed]
         if now_reads:
             # What the file says now, read back from disk after the write,
             # around each edit. An applied splice used to surface only on a
