@@ -830,6 +830,18 @@ Filesystem I/O can still fail after an earlier per-file atomic publication; in
 that case `partial`, `written`, and `deleted` report the exact completed subset.
 Read those paths and repair the remainder instead of replaying the original batch.
 
+A reference whose citation no longer resolves (the cited text was edited, split
+by an insertion, or the file was written from outside the run) is refused with
+the same wording as before and writes nothing. The refusal now also carries
+`fresh`: the current text of the cited lines, capped at `MAX_FRESH_CHARS`
+(6000), with a newly issued `sha` for exactly the text shown, so the caller can
+resend without a separate read. `fresh.placement` distinguishes text found where
+the cited text now sits from the lines at the cited numbers after a write the
+journal cannot account for. A range this run's edits removed or replaced gets
+`text: null` and a reason, never an invented replacement. Only the first
+refused reference is reported per call. Issuing the sha frames the file in the
+journal exactly as a read does.
+
 Generated `edit` and `edit_<slot>` have a different lifecycle. For artifact
 outputs, success means the new bytes exist only in the step's staged candidate;
 read them with `read(..., source='self', raw=true)` and do not claim publication

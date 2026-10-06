@@ -59,7 +59,13 @@ description: |
     because its current position cannot be proved. Reread to obtain a new sha.
     Legacy citations issued without a frame retain the strict whole-window
     text comparison; this fallback does not relocate a framed citation.
-  After either refusal, reread the range and cite the new sha.
+  After either refusal, cite the new sha the refusal carries in `fresh`
+  (the current text of the cited lines, at most about 6000 characters,
+  with `from_line`/`to_line` and a `sha` issued for exactly that text),
+  or reread the range if `fresh.text` is null or you need more than it
+  shows. `fresh.placement` says whether the text is where the cited text
+  sits now or only the lines at the numbers you cited. Nothing is shown
+  for a range this run's edits removed.
   There is no fuzzy matching.
 
   An insert keeps the line it lands on: new_text is placed in front of it,

@@ -33,6 +33,20 @@ class UncorroboratedColumns(PatchError):
         self.spans = spans
 
 
+class StaleCitation(PatchError):
+    """A citation that no longer resolves; carries what the cited lines say now.
+
+    The refusal used to end with "reread the range", which cost the caller a
+    turn and a window of context for text the engine had in hand when it
+    refused. ``fresh`` is that reread, done in the refusal: the current text
+    and a newly issued sha for exactly the text shown.
+    """
+
+    def __init__(self, message: str, fresh: dict):
+        super().__init__(message)
+        self.fresh = fresh
+
+
 @dataclass(frozen=True)
 class Hunk:
     """One V4A hunk: the lines it matches and the lines it writes.
@@ -335,6 +349,10 @@ def _window_offset(op: Operation, number: int, record: dict, line_no: int,
 
 
 MAX_ECHO_CHARS = 240
+# What a stale refusal may show of the cited lines. A read serves up to its own
+# cap; the refusal is the same service, so it stays well under it and says what
+# it left out rather than growing the failure it is attached to.
+MAX_FRESH_CHARS = 6000
 # The resulting-text echo: a touched range longer than ECHO_HEAD + ECHO_TAIL
 # lines shows its first ECHO_HEAD and last ECHO_TAIL lines and says how many
 # it left out; ECHO_CONTEXT unchanged lines frame it on each side.
@@ -428,6 +446,101 @@ def _shown(text: str) -> str:
     return text[:MAX_ECHO_CHARS] + "…" + text[-MAX_ECHO_CHARS:]
 
 
+def _stale(message: str, op: Operation, number: int, run_id: str, record: dict,
+           joined: str, current_sha: str, placed: bool,
+           from_line: int | None = None,
+           to_line: int | None = None) -> StaleCitation:
+    """The refusal for a citation that no longer resolves, with the reread in it.
+
+    ``placed`` says the journal still connects the citation to the file, so
+    the cited text can be found where it sits now (even when an earlier edit
+    of this run changed it, or inserted text inside it). When it cannot —
+    something outside this run wrote the file, or the history is gone — the
+    lines at the cited NUMBERS are shown instead and labelled as such, which
+    is exactly what a reread of that range would have returned. A range the
+    journal says was removed has no place to read from, and no text is shown:
+    nothing here invents a replacement for it.
+
+    The sha is issued by the same call a read uses, over the exact lines
+    shown, so it can only cite text the caller was just handed. Issuing it
+    re-frames the file in the journal the way a read does.
+    """
+    fresh = {"file": op.path, "reference": number, "text": None}
+    lines = joined.split("\n") if joined else []
+    text = record.get("text") or ""
+    # The reference's own lines, not the whole window it cited: a window
+    # served a file and the caller cited three lines of it.
+    if from_line is None:
+        from_line, to_line, lo, hi = (record["start_line"], record["end_line"],
+                                      0, len(text))
+    else:
+        rows = text.split("\n")
+        a, b = from_line - record["start_line"], to_line - record["start_line"]
+        lo = sum(len(row) + 1 for row in rows[:a])
+        hi = lo + sum(len(row) + 1 for row in rows[a:b + 1]) - 1
+    first = last = None
+    if placed and hi > lo and record.get("start_char") is not None:
+        base, generation = record["start_char"], record["generation"]
+        head = citations.translate(run_id, op.path, generation, base + lo,
+                                   base + lo + 1)
+        tail = citations.translate(run_id, op.path, generation, base + hi - 1,
+                                   base + hi)
+        if isinstance(head, tuple) and isinstance(tail, tuple):
+            first = 1 + joined.count("\n", 0, head[0])
+            last = 1 + joined.count("\n", 0, tail[1])
+            fresh["placement"] = "where the cited text sits now"
+        else:
+            fresh["reason"] = ("an earlier edit in this run removed or replaced "
+                               "the cited text, so there is no place to read it from")
+    elif not placed:
+        first, last = from_line, to_line
+        fresh["placement"] = ("the same line numbers the citation named; the "
+                              "journal cannot say whether that content moved")
+    if first is not None:
+        last = min(last, len(lines))
+        if first > last:
+            fresh["reason"] = "the cited line numbers are past the end of the file"
+        else:
+            kept, size = [], 0
+            for line in lines[first - 1:last]:
+                if kept and size + len(line) + 1 > MAX_FRESH_CHARS:
+                    break
+                kept.append(line)
+                size += len(line) + 1
+            if size > MAX_FRESH_CHARS and len(kept) == 1:
+                fresh["reason"] = (f"line {first} alone is longer than "
+                                   f"{MAX_FRESH_CHARS} characters; read it with a "
+                                   "narrower window")
+            else:
+                shown = first + len(kept) - 1
+                body = "\n".join(kept)
+                start_char = sum(len(line) + 1 for line in lines[:first - 1])
+                start_byte = len(joined[:start_char].encode("utf-8"))
+                issued = citations.issue(
+                    run_id, path=op.path, source=record.get("source", ""),
+                    start_line=first, end_line=shown, start_byte=start_byte,
+                    end_byte=start_byte + len(body.encode("utf-8")), text=body,
+                    start_char=start_char, file_sha=current_sha)
+                if issued.get("citable"):
+                    fresh.update({"from_line": first, "to_line": shown,
+                                  "sha": issued["sha"], "text": body})
+                    if shown < last:
+                        fresh["left_out"] = (f"lines {shown + 1}-{last} were not "
+                                             "shown; read them if you need them")
+                else:
+                    fresh["reason"] = "this run has no citation ledger to issue a sha"
+    # The refusal's own wording is unchanged: it is what callers and tests
+    # match on. What the engine adds is `fresh`, and what to do with it.
+    fresh["note"] = (
+        "the current text of the cited lines is in `text`: cite `sha` instead "
+        "of rereading, or reread the range only if you need more than it shows"
+        if fresh["text"] is not None else
+        "nothing is shown for this reference (" + fresh.get(
+            "reason", "the cited text could not be placed") + "); reread the "
+        "range and cite the new digest")
+    return StaleCitation(message, fresh)
+
+
 def _span_range(op: Operation, number: int, ref: Reference, record: dict,
                 run_id: str, joined: str, current_sha: str) -> tuple[int, int]:
     """Where a span citation's text sits now, or a refusal.
@@ -449,16 +562,20 @@ def _span_range(op: Operation, number: int, ref: Reference, record: dict,
             f"{op.path} reference {number}: that sha is the span "
             f"{_coords(*span)} and this reference names {_coords(*named)}; a "
             "span citation corroborates only the coordinates it was issued for")
-    stale = PatchError(
-        f"{op.path} reference {number}: span {_coords(*span)} changed since "
-        "its citation was issued: the text it showed was edited, or the file "
-        "was written by something other than this run's apply_patch; reread "
-        "the range and resend the reference with the new digest to be shown "
-        "the text it covers now")
+    said = (f"{op.path} reference {number}: span {_coords(*span)} changed since "
+            "its citation was issued: the text it showed was edited, or the file "
+            "was written by something other than this run's apply_patch; reread "
+            "the range and resend the reference with the new digest to be shown "
+            "the text it covers now")
+
+    def stale(placed: bool) -> StaleCitation:
+        return _stale(said, op, number, run_id, record, joined, current_sha,
+                      placed)
+
     if not citations.chain_intact(run_id, op.path, record.get("generation"),
                                   record.get("file_sha", ""), current_sha,
                                   epoch=record.get("epoch")):
-        raise stale
+        raise stale(False)
     placed = citations.translate(run_id, op.path, record["generation"],
                                  record["start_char"],
                                  record["start_char"] + len(record["text"]))
@@ -476,7 +593,7 @@ def _span_range(op: Operation, number: int, ref: Reference, record: dict,
             "digest to be shown where it lands now")
     start, end = placed if isinstance(placed, tuple) else (None, None)
     if start is None or end is None or joined[start:end] != record["text"]:
-        raise stale
+        raise stale(True)
     return start, end
 
 
@@ -679,17 +796,21 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
                     "was replaced or deleted by an earlier edit; reread the "
                     "neighboring range and cite the new digest")
             if translated == citations.REMOVED:
-                raise PatchError(
+                raise _stale(
                     f"{op.path} reference {number}: lines {from_line}-"
                     f"{to_line} changed since the digest was issued: they were "
                     "removed or replaced by an earlier edit in this run; "
-                    "reread the range and cite the new digest")
+                    "reread the range and cite the new digest",
+                    op, number, run_id, record, joined, current_sha, True,
+                    from_line, to_line)
             if translated == citations.SPLIT:
-                raise PatchError(
+                raise _stale(
                     f"{op.path} reference {number}: lines {from_line}-"
                     f"{to_line} changed since the digest was issued: an "
                     "earlier edit in this run inserted text inside them; "
-                    "reread the range and cite the new digest")
+                    "reread the range and cite the new digest",
+                    op, number, run_id, record, joined, current_sha, True,
+                    from_line, to_line)
             if translated == citations.POINT:
                 raise PatchError(
                     f"{op.path} reference {number}: columns {ref.from_col}.."
@@ -699,10 +820,12 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
                     "and cite the new digest")
             start, end = translated[0], translated[1] - own
             if joined[start:end] != record["text"][local_from:local_to]:
-                raise PatchError(
+                raise _stale(
                     f"{op.path} reference {number}: lines {from_line}-"
                     f"{to_line} changed since the digest was issued; "
-                    "reread the range and cite the new digest")
+                    "reread the range and cite the new digest",
+                    op, number, run_id, record, joined, current_sha, True,
+                    from_line, to_line)
         else:
             if window_start is not None:
                 # The read placed this window in a frame the journal can no
@@ -710,19 +833,23 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
                 # READ the same may be different lines: a file of repeated
                 # lines with one written in above looks unchanged at every
                 # line number.
-                raise PatchError(
+                raise _stale(
                     f"{op.path} reference {number}: lines {record['start_line']}-"
                     f"{record['end_line']} changed since the digest was issued, "
                     "by a write this run's journal does not account for (a "
                     "write from outside the run, or history the engine no "
                     "longer holds), so where they are now is unknown; reread "
-                    "the range and cite the new digest")
+                    "the range and cite the new digest",
+                    op, number, run_id, record, joined, current_sha, False,
+                    from_line, to_line)
             window = "\n".join(original[record["start_line"] - 1:record["end_line"]])
             if not citations.matches(record, run_id, window):
-                raise PatchError(
+                raise _stale(
                     f"{op.path} reference {number}: lines {record['start_line']}-"
                     f"{record['end_line']} changed since the digest was issued; "
-                    "reread the range and cite the new digest")
+                    "reread the range and cite the new digest",
+                    op, number, run_id, record, joined, current_sha, False,
+                    from_line, to_line)
             start = _offset(from_line, ref.from_col, "from")
             end = _offset(to_line, ref.to_col, "to")
         if end < start:
@@ -1150,6 +1277,8 @@ def apply_code_patch(patch: str, root: Path, references=None,
                    "partial": bool(changed or deleted), "output_target": "code"}
         if isinstance(exc, UncorroboratedColumns):
             refused["spans"] = exc.spans
+        if isinstance(exc, StaleCitation):
+            refused["fresh"] = exc.fresh
         if now_reads:
             refused["echo"] = now_reads
         return refused
