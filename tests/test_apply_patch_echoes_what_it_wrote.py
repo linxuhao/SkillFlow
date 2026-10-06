@@ -65,6 +65,14 @@ def apply(root, references=None, patch=""):
     raise AssertionError("span confirmation did not settle")
 
 
+def shape(echo):
+    """The echo as these tests pinned it, before each entry grew a citation
+    (1.5.83): file, lines, text and elision. The citation has its own tests
+    in test_a_write_hands_back_the_coordinates.py."""
+    keep = ("file", "from_line", "to_line", "text", "elided", "error")
+    return [{k: v for k, v in e.items() if k in keep} for e in echo]
+
+
 def on_disk(root):
     return (root / PATH).read_text()
 
@@ -82,7 +90,7 @@ def test_the_fusing_reference_echoes_the_fused_line_verbatim(repo, monkeypatch):
     assert got["applied"] is True, got
     fused = "\tif state != \"\":\tvar out: Array = []"
     assert fused in on_disk(repo).split("\n")
-    assert got["echo"] == [{
+    assert shape(got["echo"]) == [{
         "file": PATH, "from_line": 2, "to_line": 3,
         "text": "\n".join([
             "1\tfunc _make_sample_rows_(options: Dictionary) -> Array:",
@@ -109,7 +117,7 @@ def test_the_echo_is_read_from_disk_after_the_write(repo, monkeypatch):
 
 def test_a_whole_line_replacement_echoes_that_line_and_its_neighbours(repo):
     got = apply(repo, [ref(cite(repo)["sha"], 3, 0, 3, 16, "\tif state == \"\":")])
-    assert got["echo"] == [{"file": PATH, "from_line": 3, "to_line": 3,
+    assert shape(got["echo"]) == [{"file": PATH, "from_line": 3, "to_line": 3,
                             "text": "2\t\tvar out: Array = []\n"
                                     "3\t\tif state == \"\":\n"
                                     "4\t"}]
@@ -117,7 +125,7 @@ def test_a_whole_line_replacement_echoes_that_line_and_its_neighbours(repo):
 
 def test_an_insert_ending_in_a_newline_echoes_the_new_line(repo):
     got = apply(repo, [ref(cite(repo)["sha"], 2, 0, 2, 0, "\tvar a = 1\n")])
-    assert got["echo"] == [{"file": PATH, "from_line": 2, "to_line": 2,
+    assert shape(got["echo"]) == [{"file": PATH, "from_line": 2, "to_line": 2,
                             "text": "1\tfunc _make_sample_rows_(options: "
                                     "Dictionary) -> Array:\n"
                                     "2\t\tvar a = 1\n"
@@ -152,7 +160,7 @@ def test_every_update_hunk_gets_its_own_resulting_range(repo):
     ])
     got = apply(repo, patch=patch)
     assert got["applied"] is True, got
-    assert got["echo"] == [
+    assert shape(got["echo"]) == [
         {"file": PATH, "from_line": 1, "to_line": 3,
          "text": "1\tfunc _make_sample_rows_(options: Dictionary) -> Array:\n"
                  "2\t\tvar out: Array = []\n3\t\tvar extra := 0\n"
@@ -216,7 +224,7 @@ def test_a_partial_publish_echoes_the_files_it_wrote(repo, monkeypatch):
                        {**ref(there, 1, 0, 1, 1, "A"), "file": OTHER}])
     assert got["applied"] is False and got["partial"] is True, got
     assert got["phase"] == "publish" and got["written"] == [PATH]
-    assert got["echo"] == [{"file": PATH, "from_line": 3, "to_line": 3,
+    assert shape(got["echo"]) == [{"file": PATH, "from_line": 3, "to_line": 3,
                             "text": "2\t\tvar out: Array = []\n"
                                     "3\t\tif state == \"\":\n"
                                     "4\t"}]

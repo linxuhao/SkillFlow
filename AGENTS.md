@@ -117,6 +117,17 @@ release. Trace/query APIs use the same scope. Raw connections/cursors must not
 escape it; hosts must migrate from the removed private `_get_trace_conn`.
 The unpublished `1.5.81+trace1` candidate requires coordinated host adaptation.
 
+## apply_patch hands back coordinates (1.5.83)
+
+A refused reference carries `fresh` (current text of the lines it named + a
+sha for exactly that text) for stale, outside-window, never-issued-sha and
+missing-sha cases; a successful write's `echo` entries carry `citation` /
+`citations` in the file's current line numbers. Both are issued through
+`citations.issue` after `_journal`, so they frame the file at the generation
+the write produced. The refusal wording is unchanged; only the payload grew.
+See README "The native `apply_patch(patch)` tool" and
+`tests/test_a_write_hands_back_the_coordinates.py`.
+
 ## Host integration
 
 - `WorkspaceManager(code_path_resolver=…)` — optional hook mapping a project to a host-managed code path (e.g. an existing repo), so `repo_apply` commits into the real repo. `SkillFlow(code_path_resolver=…)` forwards it.

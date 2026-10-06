@@ -65,7 +65,17 @@ description: |
   or reread the range if `fresh.text` is null or you need more than it
   shows. `fresh.placement` says whether the text is where the cited text
   sits now or only the lines at the numbers you cited. Nothing is shown
-  for a range this run's edits removed.
+  for a range this run's edits removed. A reference whose lines fall
+  outside its cited window, whose sha was never issued, or that has no sha
+  but names file and lines, is refused with the same `fresh` for the lines
+  it named.
+  A SUCCESSFUL write needs no read either: each `echo` entry carries
+  `citation` ({from_line, to_line, sha}) over the lines it shows, in the
+  file's CURRENT line numbers; an elided echo carries `citations` for its
+  head and its tail. Cite that sha with those line numbers for the next
+  edit in that region.
+  An insertion point is from_line == to_line with from_col == to_col (for
+  example 7,0..7,0 inserts before line 7); to_line 0 is refused.
   There is no fuzzy matching.
 
   An insert keeps the line it lands on: new_text is placed in front of it,

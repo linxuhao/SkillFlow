@@ -47,6 +47,20 @@ class StaleCitation(PatchError):
         self.fresh = fresh
 
 
+class MissingSha(PatchError):
+    """A reference that names a file and lines but no sha; carries the place.
+
+    Raised while parsing, before any file is open, so the host attaches the
+    current text of those lines (`fresh`) when it has the root in hand.
+    """
+
+    def __init__(self, message: str, path: str, index: int, from_line: int,
+                 to_line: int):
+        super().__init__(message)
+        self.path, self.index = path, index
+        self.from_line, self.to_line = from_line, to_line
+
+
 @dataclass(frozen=True)
 class Hunk:
     """One V4A hunk: the lines it matches and the lines it writes.
@@ -261,7 +275,17 @@ def parse_references(references) -> tuple[Operation, ...]:
                 "hunk carries only the NEW text")
         missing = sorted(_REQUIRED_REFERENCE_KEYS - set(raw))
         if missing:
-            raise PatchError(f"reference {index}: missing field(s) {missing}")
+            said = f"reference {index}: missing field(s) {missing}"
+            where = (raw.get("file"), raw.get("from_line"), raw.get("to_line"))
+            if (missing == ["sha"] and isinstance(where[0], str)
+                    and all(type(v) is int for v in where[1:])
+                    and 1 <= where[1] <= where[2]):
+                try:
+                    named = patch_path(where[0])
+                except PatchError:
+                    raise PatchError(said) from None
+                raise MissingSha(said, named, index, where[1], where[2])
+            raise PatchError(said)
         path = raw["file"]
         if not isinstance(path, str):
             raise PatchError(f"reference {index}: file must be a string")
@@ -291,7 +315,9 @@ def parse_references(references) -> tuple[Operation, ...]:
             to_line = _int_field(raw, "to_line", index)
             if from_line < 1 or to_line < from_line:
                 raise PatchError(
-                    f"reference {index}: require 1 <= from_line <= to_line")
+                    f"reference {index}: require 1 <= from_line <= to_line; "
+                    "an insertion point is from_line == to_line with "
+                    "from_col == to_col, not to_line 0")
         ref = Reference(sha.strip(), from_line,
                         _optional_col(raw, "from_col", index),
                         to_line, _optional_col(raw, "to_col", index), new_text)
@@ -391,8 +417,19 @@ def _refuse_fusing_insert(op: Operation, number: int, ref: Reference,
         f"{line}, end new_text with a newline")
 
 
-def _echo(path: str, lines: list[str], first: int, last: int) -> dict:
-    """Lines ``first``..``last`` (1-based) of ``lines``, numbered like a read."""
+def _echo(path: str, lines: list[str], first: int, last: int,
+          run_id: str = "", current_sha: str = "") -> dict:
+    """Lines ``first``..``last`` (1-based) of ``lines``, numbered like a read.
+
+    With a run, each contiguous block the echo shows (the touched lines with
+    their context, or the head and the tail of an elided range) gets a
+    citation issued over exactly that text in the file's CURRENT coordinates.
+    Measured (run 22ae403c, 2026-10-06): 19 of 82 reads directly followed a
+    successful write, because the echo gave the new line numbers and the
+    caller's sha only answered to the old ones. The sha here is good for the
+    next edit in this region with no read in between; it never covers a line
+    the echo left out.
+    """
     total = len(lines)
     last = max(first, last)
     first, last = min(first, max(total, 1)), min(last, max(total, 1))
@@ -414,11 +451,44 @@ def _echo(path: str, lines: list[str], first: int, last: int) -> dict:
              "text": "\n".join(rows)}
     if elided:
         entry["elided"] = elided
+    if run_id and current_sha and total:
+        lo, hi = (before.start if before else first), (after[-1] if after else last)
+        blocks = ([(lo, min(hi, first + ECHO_HEAD - 1)), (max(lo, last - ECHO_TAIL + 1), hi)]
+                  if elided else [(lo, hi)])
+        issued = [c for c in (_cite_lines(path, lines, run_id, current_sha, a, b)
+                              for a, b in blocks) if c]
+        if issued and not elided:
+            entry["citation"] = issued[0]
+        elif issued:
+            entry["citations"] = issued
+        if issued:
+            entry["note"] = ("cite this sha with these line numbers for the next "
+                             "edit here; the lines shown are the file as it is now")
     return entry
 
 
-def _echoes(root_fd: int, path: str, placed: list[tuple[int, int]]) -> list[dict]:
-    """What the file now says around each edit, read back from disk."""
+def _cite_lines(path: str, lines: list[str], run_id: str, current_sha: str,
+                first: int, last: int) -> dict | None:
+    """A citation over lines ``first``..``last`` of the current text, or None."""
+    body = "\n".join(lines[first - 1:last])
+    start_char = sum(len(line) + 1 for line in lines[:first - 1])
+    start_byte = len("\n".join(lines[:first - 1]).encode("utf-8")) + (1 if first > 1 else 0)
+    issued = citations.issue(
+        run_id, path=path, source="apply_patch", start_line=first, end_line=last,
+        start_byte=start_byte, end_byte=start_byte + len(body.encode("utf-8")),
+        text=body, start_char=start_char, file_sha=current_sha)
+    if not issued.get("citable"):
+        return None
+    return {"from_line": first, "to_line": last, "sha": issued["sha"]}
+
+
+def _echoes(root_fd: int, path: str, placed: list[tuple[int, int]],
+            run_id: str = "") -> list[dict]:
+    """What the file now says around each edit, read back from disk.
+
+    Called after `_journal`, so the citations the echoes issue are framed
+    against the generation that write produced.
+    """
     try:
         snapshot = _snapshot(root_fd, path)
         if snapshot is None:
@@ -426,7 +496,8 @@ def _echoes(root_fd: int, path: str, placed: list[tuple[int, int]]) -> list[dict
         lines = _framed(snapshot.data, path)[0]
     except (PatchError, OSError) as exc:
         return [{"file": path, "error": f"could not read the file back: {exc}"}]
-    return [_echo(path, lines, first, last) for first, last in placed]
+    current_sha = citations.text_sha("\n".join(lines)) if run_id else ""
+    return [_echo(path, lines, first, last, run_id, current_sha) for first, last in placed]
 
 
 def _coords(from_line, from_col, to_line, to_col) -> str:
@@ -446,6 +517,94 @@ def _shown(text: str) -> str:
     return text[:MAX_ECHO_CHARS] + "…" + text[-MAX_ECHO_CHARS:]
 
 
+def _fresh_lines(fresh: dict, path: str, source: str, run_id: str,
+                 lines: list[str], joined: str, current_sha: str,
+                 first: int, last: int) -> None:
+    """Put lines ``first``..``last`` as they are now, and a sha for them, in ``fresh``.
+
+    Bounded by MAX_FRESH_CHARS, and what was left out is named; a line that
+    alone exceeds the cap is not shown. The sha is issued by the same call a
+    read uses, over exactly the text shown, so it can cite nothing the caller
+    was not handed; issuing it frames the file in the journal the way a read
+    does.
+    """
+    last = min(last, len(lines))
+    if first > last:
+        fresh["reason"] = "the cited line numbers are past the end of the file"
+        return
+    kept, size = [], 0
+    for line in lines[first - 1:last]:
+        if kept and size + len(line) + 1 > MAX_FRESH_CHARS:
+            break
+        kept.append(line)
+        size += len(line) + 1
+    if size > MAX_FRESH_CHARS and len(kept) == 1:
+        fresh["reason"] = (f"line {first} alone is longer than {MAX_FRESH_CHARS} "
+                           "characters; read it with a narrower window")
+        return
+    shown = first + len(kept) - 1
+    body = "\n".join(kept)
+    start_char = sum(len(line) + 1 for line in lines[:first - 1])
+    start_byte = len(joined[:start_char].encode("utf-8"))
+    issued = citations.issue(
+        run_id, path=path, source=source, start_line=first, end_line=shown,
+        start_byte=start_byte, end_byte=start_byte + len(body.encode("utf-8")),
+        text=body, start_char=start_char, file_sha=current_sha)
+    if not issued.get("citable"):
+        fresh["reason"] = "this run has no citation ledger to issue a sha"
+        return
+    fresh.update({"from_line": first, "to_line": shown, "sha": issued["sha"],
+                  "text": body})
+    if shown < last:
+        fresh["left_out"] = (f"lines {shown + 1}-{last} were not shown; read "
+                             "them if you need them")
+
+
+def _noted(fresh: dict) -> dict:
+    """Say what to do with ``fresh``; the refusal's own wording stays as it was."""
+    fresh["note"] = (
+        "the current text of the cited lines is in `text`: cite `sha` instead "
+        "of rereading, or reread the range only if you need more than it shows"
+        if fresh["text"] is not None else
+        "nothing is shown for this reference (" + fresh.get(
+            "reason", "the cited text could not be placed") + "); reread the "
+        "range and cite the new digest")
+    return fresh
+
+
+def _refusal_with_fresh(message: str, path: str, number: int, run_id: str,
+                        joined: str, current_sha: str, first: int, last: int,
+                        source: str = "") -> StaleCitation:
+    """A refusal that names lines the caller asked for, with those lines in it.
+
+    For a reference whose coordinates the engine cannot check against any
+    citation (lines outside the cited window, a sha never issued, no sha at
+    all): what the file says at those numbers now, and a sha for exactly that.
+    """
+    fresh = {"file": path, "reference": number, "text": None,
+             "placement": "the line numbers you asked for, in the file as it is now"}
+    lines = joined.split("\n") if joined else []
+    _fresh_lines(fresh, path, source, run_id, lines, joined, current_sha, first, last)
+    return StaleCitation(message, _noted(fresh))
+
+
+def _fresh_for_missing_sha(root_fd: int, exc: "MissingSha", run_id: str) -> dict:
+    """`fresh` for a reference parsed without a sha, read from the root now."""
+    fresh = {"file": exc.path, "reference": exc.index, "text": None}
+    try:
+        snapshot = _snapshot(root_fd, exc.path)
+        if snapshot is None:
+            raise PatchError("no such file")
+        lines = _framed(snapshot.data, exc.path)[0]
+    except (PatchError, OSError) as oops:
+        fresh["reason"] = f"could not read {exc.path}: {oops}"
+        return _noted(fresh)
+    joined = "\n".join(lines)
+    return _refusal_with_fresh(str(exc), exc.path, exc.index, run_id, joined,
+                               citations.text_sha(joined), exc.from_line,
+                               exc.to_line).fresh
+
+
 def _stale(message: str, op: Operation, number: int, run_id: str, record: dict,
            joined: str, current_sha: str, placed: bool,
            from_line: int | None = None,
@@ -460,10 +619,6 @@ def _stale(message: str, op: Operation, number: int, run_id: str, record: dict,
     is exactly what a reread of that range would have returned. A range the
     journal says was removed has no place to read from, and no text is shown:
     nothing here invents a replacement for it.
-
-    The sha is issued by the same call a read uses, over the exact lines
-    shown, so it can only cite text the caller was just handed. Issuing it
-    re-frames the file in the journal the way a read does.
     """
     fresh = {"file": op.path, "reference": number, "text": None}
     lines = joined.split("\n") if joined else []
@@ -497,48 +652,9 @@ def _stale(message: str, op: Operation, number: int, run_id: str, record: dict,
         fresh["placement"] = ("the same line numbers the citation named; the "
                               "journal cannot say whether that content moved")
     if first is not None:
-        last = min(last, len(lines))
-        if first > last:
-            fresh["reason"] = "the cited line numbers are past the end of the file"
-        else:
-            kept, size = [], 0
-            for line in lines[first - 1:last]:
-                if kept and size + len(line) + 1 > MAX_FRESH_CHARS:
-                    break
-                kept.append(line)
-                size += len(line) + 1
-            if size > MAX_FRESH_CHARS and len(kept) == 1:
-                fresh["reason"] = (f"line {first} alone is longer than "
-                                   f"{MAX_FRESH_CHARS} characters; read it with a "
-                                   "narrower window")
-            else:
-                shown = first + len(kept) - 1
-                body = "\n".join(kept)
-                start_char = sum(len(line) + 1 for line in lines[:first - 1])
-                start_byte = len(joined[:start_char].encode("utf-8"))
-                issued = citations.issue(
-                    run_id, path=op.path, source=record.get("source", ""),
-                    start_line=first, end_line=shown, start_byte=start_byte,
-                    end_byte=start_byte + len(body.encode("utf-8")), text=body,
-                    start_char=start_char, file_sha=current_sha)
-                if issued.get("citable"):
-                    fresh.update({"from_line": first, "to_line": shown,
-                                  "sha": issued["sha"], "text": body})
-                    if shown < last:
-                        fresh["left_out"] = (f"lines {shown + 1}-{last} were not "
-                                             "shown; read them if you need them")
-                else:
-                    fresh["reason"] = "this run has no citation ledger to issue a sha"
-    # The refusal's own wording is unchanged: it is what callers and tests
-    # match on. What the engine adds is `fresh`, and what to do with it.
-    fresh["note"] = (
-        "the current text of the cited lines is in `text`: cite `sha` instead "
-        "of rereading, or reread the range only if you need more than it shows"
-        if fresh["text"] is not None else
-        "nothing is shown for this reference (" + fresh.get(
-            "reason", "the cited text could not be placed") + "); reread the "
-        "range and cite the new digest")
-    return StaleCitation(message, fresh)
+        _fresh_lines(fresh, op.path, record.get("source", ""), run_id, lines,
+                     joined, current_sha, first, last)
+    return StaleCitation(message, _noted(fresh))
 
 
 def _span_range(op: Operation, number: int, ref: Reference, record: dict,
@@ -746,9 +862,12 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
     for number, ref in enumerate(op.refs, 1):
         record = citations.lookup(run_id, ref.sha)
         if record is None:
-            raise PatchError(
-                f"{op.path} reference {number}: sha {ref.sha[:12]}… was never issued "
-                "by a read in this run; cite a digest a read handed you")
+            said = (f"{op.path} reference {number}: sha {ref.sha[:12]}… was never issued "
+                    "by a read in this run; cite a digest a read handed you")
+            if ref.from_line is None:
+                raise PatchError(said)
+            raise _refusal_with_fresh(said, op.path, number, run_id, joined,
+                                      current_sha, ref.from_line, ref.to_line)
         if record["path"] != op.path:
             raise PatchError(
                 f"{op.path} reference {number}: that digest was issued for "
@@ -767,10 +886,12 @@ def cited_bytes(before: bytes, op: Operation, run_id: str,
         else:
             from_line, to_line = ref.from_line, ref.to_line
         if from_line < record["start_line"] or to_line > record["end_line"]:
-            raise PatchError(
+            raise _refusal_with_fresh(
                 f"{op.path} reference {number}: lines {from_line}-{to_line} "
                 f"fall outside the cited window {record['start_line']}-"
-                f"{record['end_line']}; cite the window that contains them")
+                f"{record['end_line']}; cite the window that contains them",
+                op.path, number, run_id, joined, current_sha, from_line, to_line,
+                record.get("source", ""))
         whole_lines = ref.from_col is None and ref.to_col is None
         generation = record.get("generation")
         window_start = record.get("start_char")
@@ -1191,6 +1312,11 @@ def apply_code_patch(patch: str, root: Path, references=None,
     phase = "preflight"
     root_fd = None
     try:
+        # The root first: a reference parsed without a sha is answered with
+        # the lines it named, which needs the root open before the parse.
+        if not root.is_absolute() or not root.is_dir():
+            raise PatchError("Require an existing injected absolute code root")
+        root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         ops = (parse_patch(patch) if patch else ()) + parse_references(references)
         if not ops:
             raise PatchError("nothing to apply: pass a patch, references, or both")
@@ -1201,9 +1327,6 @@ def apply_code_patch(patch: str, root: Path, references=None,
             seen.add(op.path)
         if len(ops) > MAX_FILES:
             raise PatchError(f"At most {MAX_FILES} files per patch")
-        if not root.is_absolute() or not root.is_dir():
-            raise PatchError("Require an existing injected absolute code root")
-        root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         prepared = []
         size = 0
         for op in ops:
@@ -1253,7 +1376,7 @@ def apply_code_patch(patch: str, root: Path, references=None,
                 replaced.extend(echo)
                 _journal(run_id, op, before, after, spans)
                 if placed:
-                    now_reads.extend(_echoes(root_fd, op.path, placed))
+                    now_reads.extend(_echoes(root_fd, op.path, placed, run_id))
         result = {"written": changed, "deleted": deleted, "applied": True,
                   "output_target": "code"}
         if run_id and changed:
@@ -1279,6 +1402,8 @@ def apply_code_patch(patch: str, root: Path, references=None,
             refused["spans"] = exc.spans
         if isinstance(exc, StaleCitation):
             refused["fresh"] = exc.fresh
+        if isinstance(exc, MissingSha) and root_fd is not None:
+            refused["fresh"] = _fresh_for_missing_sha(root_fd, exc, run_id)
         if now_reads:
             refused["echo"] = now_reads
         return refused

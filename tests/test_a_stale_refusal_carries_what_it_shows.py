@@ -190,10 +190,12 @@ def test_one_line_longer_than_the_cap_is_not_shown_at_all(repo):
     assert "longer than" in fresh["reason"]
 
 
-def test_a_refusal_that_is_not_staleness_carries_no_fresh(repo):
+def test_a_refusal_that_names_no_lines_to_show_carries_no_fresh(repo):
+    """Overlapping references are refused for their relation to each other,
+    not for where they point; there is nothing to show for that."""
     cite = read(repo)["citation"]
-    got = apply(repo, [ref(cite, 3, 40, "x")])
-    assert got["applied"] is False
+    got = apply(repo, [ref(cite, 2, 4, "x"), ref(cite, 3, 5, "y")])
+    assert got["applied"] is False and "overlaps" in got["error"]
     assert "fresh" not in got
 
 
