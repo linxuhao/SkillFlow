@@ -7709,14 +7709,20 @@ class SkillFlow:
         )
 
     def _complete_run_in_tx(self, conn: sqlite3.Connection, run_id: str, reason: str):
-        conn.execute(
+        # An admitted tool publishes its result before retiring its operation.
+        # If a stop won first, leave the run draining so that retirement can
+        # finish the cancellation with its original reason.
+        changed = conn.execute(
             """
             UPDATE skillflow_runs SET status = 'completed',
                 completed_at = datetime('now'), updated_at = datetime('now')
-            WHERE id = ?
+            WHERE id = ? AND cancel_requested_at IS NULL
+                AND status NOT IN ('completed', 'failed')
             """,
             (run_id,),
-        )
+        ).rowcount
+        if not changed:
+            return
         self.notifications.publish_sync(
             "run_completed",
             {"run_id": run_id, "reason": reason},
