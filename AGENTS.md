@@ -51,6 +51,11 @@ SkillFlow (orchestrator)  ← SQLite (WAL mode)
   ├── reject_checkpoint() → fresh non-loop revision identity; loop-body rejection refused
   └── drain_outbox()     → event stream
 
+ReadTools / native read_file → one original byte snapshot after path checks
+  # file_byte_sha256 + byte_size describe that whole snapshot; text still uses
+  # existing UTF-8/newline/window policies. Byte digest is not citation.sha
+  # or edit authorization and does not promise future file stability.
+
 ToolLoader (multi-source)
   ├── Native: src/skillflow/tools/
   └── Custom: host app adds via add_tools_dir()
@@ -172,3 +177,12 @@ quiesce the old run and preserve provenance before producing that recovery commi
 
 The private local-version build `1.5.72+aitelier.output1` is for the coordinated
 AItelier migration; no public package publication is implied.
+
+## Read byte identity (SOURCE candidate)
+
+Unified read and native read_file return file_byte_sha256 and byte_size for the
+complete original byte snapshot, including partial/clipped/raw/outline reads.
+The snapshot is decoded using the prior text policies; path permissions, source
+precedence, edit citations and read accounting are unchanged. Byte identity is
+not an edit citation or a guarantee of future file stability. This candidate
+does not bump the release version, publish, or change an installed engine.

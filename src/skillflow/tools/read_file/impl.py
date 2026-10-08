@@ -7,6 +7,8 @@ Searches multiple directories in order:
 """
 from pathlib import Path
 
+from skillflow._file_read import read_text_snapshot
+
 
 def read_file(path: str, start_line: int = 0, end_line: int | None = None,
               *, workspace_root: str = "",
@@ -43,12 +45,13 @@ def read_file(path: str, start_line: int = 0, end_line: int | None = None,
     if full is None:
         return {"error": f"File not found: {path}"}
 
-    content = full.read_text(encoding="utf-8", errors="replace")
+    content, byte_identity = read_text_snapshot(full)
     lines = content.splitlines()
     if end_line is None:
         end_line = len(lines)
     result = lines[start_line:end_line]
     return {
+        **byte_identity,
         "content": "\n".join(
             f"{start_line + i + 1}\t{line}" for i, line in enumerate(result)
         ),

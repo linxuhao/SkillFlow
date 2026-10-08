@@ -275,6 +275,17 @@ working tree, staging-first so an agent sees its own just-written edits).
 `read` pages by 0-based `start_line`/`end_line`, so a truncated injection is
 recoverable rather than terminal.
 
+Successful `read` results include `file_byte_sha256` (SHA-256 of the complete
+original file bytes) and `byte_size`, computed from the same byte buffer decoded
+for the text. These fields describe the whole selected file even when the text is
+a partial or clipped window, raw output, an outline, or a recovered basename.
+The native `read_file` tool returns the same byte metadata, retaining its existing
+search order and uncapped line-range behavior. UTF-8 replacement decoding and
+newline handling remain unchanged; refused or unreadable files yield no metadata.
+This digest is distinct from the engine-issued `citation.sha` for served text:
+it is not an edit citation or additional authorization. It identifies the read
+snapshot, not a guarantee of what a later read or write will find.
+
 **A wrong path is not a dead end.** Agents routinely address one namespace with
 another's path (a live one asked a step source for `novel/chapters/ch0003/
 chapter_draft.md` when the step held `chapter_draft.md` at its root — then

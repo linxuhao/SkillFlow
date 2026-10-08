@@ -21,6 +21,7 @@ import os
 import re
 from pathlib import Path
 
+from skillflow._file_read import read_text_snapshot
 from skillflow.source_visibility import iter_visible_source_files
 from skillflow import citations, read_accounting
 from skillflow.workspace import route_step_read_dir
@@ -416,7 +417,12 @@ def generate_read_tool_schemas(
                 "it. A truncated window also reports `pages_remaining` and "
                 "`next_start_line`, so the cost of seeing the rest is known "
                 "before you spend it. `repaid: true` means this window was "
-                "already served to this run."),
+                "already served to this run. Successful reads also return "
+                "`file_byte_sha256` and `byte_size` for the complete original "
+                "file bytes from the same read snapshot, even for partial, "
+                "clipped, raw or outline results. This byte digest differs "
+                "from `citation.sha`: it is not an edit citation or permission "
+                "and does not guarantee the file remains unchanged."),
             "parameters": {
                 "path": {"type": "string", "required": True,
                          "description": "Repo-relative file path (e.g. 'core/db.py')."},
@@ -783,13 +789,13 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
             continue
         if cand.is_file():
             try:
-                with cand.open(encoding="utf-8", errors="replace", newline="" if raw else None) as stream:
-                    text = stream.read()
+                text, byte_identity = read_text_snapshot(cand, raw=raw)
             except Exception as e:
                 return {"error": str(e)}
             if outline:
-                return _outline_result(text, tag, path, run_id)
+                return {**_outline_result(text, tag, path, run_id), **byte_identity}
             out = _page_lines(text, start_line, end_line, raw=raw)
+            out.update(byte_identity)
             out["source"] = tag
             out["path"] = path
             return _attach_citation(out, run_id)
@@ -824,13 +830,14 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
     if len(matches) == 1:
         tag, rel, f = matches[0]
         try:
-            with f.open(encoding="utf-8", errors="replace", newline="" if raw else None) as stream:
-                text = stream.read()
+            text, byte_identity = read_text_snapshot(f, raw=raw)
         except Exception as e:
             return {"error": str(e)}
         if outline:
-            return _outline_result(text, tag, rel, run_id, requested=path)
+            return {**_outline_result(text, tag, rel, run_id, requested=path),
+                    **byte_identity}
         out = _page_lines(text, start_line, end_line, raw=raw)
+        out.update(byte_identity)
         out["source"] = tag
         out["path"] = rel
         out["resolved_from"] = path  # the requested path was wrong; this is where it really lives

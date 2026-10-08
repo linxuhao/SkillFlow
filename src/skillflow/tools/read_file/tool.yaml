@@ -7,6 +7,10 @@ description: >
   Returns the file content with line numbers, and indicates which
   directory the file was found in ("found_in"). Returns the WHOLE file
   unless start_line/end_line are given; no size cap, no truncation flag.
+  Successful reads also return file_byte_sha256 and byte_size for the complete
+  original file bytes from the same read snapshot, even for a partial line range.
+  The byte digest is not an engine-issued edit citation or permission and does not
+  guarantee the file remains unchanged after the read.
   On an artifact step's first pass, the current candidate overlays the repo; during a true revision, reads use only the complete candidate so deletions remain absent.
 parameters:
   path:
