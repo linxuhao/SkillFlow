@@ -47,6 +47,7 @@ from skillflow.exceptions import (
     SkillFlowError,
     TerminalRunFenced,
     ToolArgumentsUnavailable,
+    ToolExecutionRefused,
 )
 from skillflow.identity import owner_is_dead, worker_identity
 
@@ -5562,8 +5563,10 @@ class SkillFlow:
         """Fail a claimed tool step AND its run, with no retry.
 
         The sibling of `_reopen_tool_step_in_tx`, for a failure that a retry
-        cannot change. Two callers, and both are about a tool that did not do the
-        step's work:
+        cannot change. Callers are about a tool that did not do the step's work:
+
+        * the tool explicitly raised ``ToolExecutionRefused`` at a known
+          deterministic validation/constraint refusal;
 
         * the tool's signature cannot bind the arguments this step has
           (`ToolArgumentsUnavailable`) — the same graph, step and signature next
@@ -5599,7 +5602,14 @@ class SkillFlow:
                     "WHERE id = ?",
                     (error, row["id"]),
                 )
-            self._fail_run_in_tx(conn, run_id, error)
+            # A stop already owns the run's terminal reason. Leave it draining
+            # until the admitted tool's existing finally retires its operation.
+            run = conn.execute(
+                "SELECT cancel_requested_at FROM skillflow_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            if not run or not run["cancel_requested_at"]:
+                self._fail_run_in_tx(conn, run_id, error)
             self.notifications.publish_sync(
                 "step_failed",
                 {"run_id": run_id, "step_id": step_id, "error": error,
@@ -5670,12 +5680,10 @@ class SkillFlow:
                             tool_result = self._execute_tool_inline(
                                 tool_node, run_id=run_id,
                                 graph_name=run_row["graph_name"])
-                        except ToolArgumentsUnavailable as exc:
-                            # The tool could not be CALLED. Deterministic — the next
-                            # tick binds the same arguments against the same
-                            # signature — so reopening it only reproduces the
-                            # failure, and confirming it would record a step that
-                            # never ran as completed. Fail the step and the run.
+                        except (ToolArgumentsUnavailable, ToolExecutionRefused) as exc:
+                            # Missing arguments and explicit definitive refusals
+                            # cannot be corrected by automatically calling again.
+                            # Preserve the reason and never confirm or route them.
                             self._fail_tool_step_in_tx(run_id, current, str(exc))
                             return None
                         except Exception:
