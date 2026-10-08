@@ -15,11 +15,13 @@ INTERNAL_SOURCE_STORAGE_DIRS = frozenset({".zvec-grep"})
 
 
 def is_protected_source_file(path: str | Path) -> bool:
-    """Known credential paths, relative to a granted source root.
+    """Known credential paths, source-relative or rooted.
 
     This is a filename policy, not a content scan. Ordinary dotfiles and
     explicit environment examples remain source; it makes no claim about
-    credentials stored under arbitrary names.
+    credentials stored under arbitrary names. Callers pass the full lexical
+    and resolved paths so narrowing the source root cannot erase a protected
+    parent such as ``.aws`` or ``.ssh``.
     """
     parts = Path(path).parts
     name = Path(path).name

@@ -8,6 +8,7 @@ Searches multiple directories in order:
 from pathlib import Path
 
 from skillflow._file_read import read_text_snapshot
+from skillflow.source_visibility import is_protected_source_file
 
 
 def read_file(path: str, start_line: int = 0, end_line: int | None = None,
@@ -37,6 +38,9 @@ def read_file(path: str, start_line: int = 0, end_line: int | None = None,
         ws = Path(root).resolve()
         if not candidate.is_relative_to(ws):
             continue  # traversal denied for this root
+        if (is_protected_source_file(Path(root) / path)
+                or is_protected_source_file(candidate)):
+            continue
         if candidate.is_file():
             full = candidate
             found_label = label

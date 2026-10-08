@@ -280,13 +280,17 @@ including basename recovery, search and listing. In-root symlinks remain readabl
 links outside that root are excluded. Absolute paths and `..` components cannot
 be recovered into another file. Source names and staging precedence are unchanged.
 
-Their protected-file policy excludes `.env` and `.env.*` except `.env.example`,
+The unified tools and native `read_file` share a protected-file policy excluding
+`.env` and `.env.*` except `.env.example`,
 `.env.sample` and `.env.template`; `.git-credentials`, `.netrc`, `.aws/credentials`,
 and `.ssh/{id_rsa,id_dsa,id_ecdsa,id_ed25519,identity}`. It checks both the addressed
 name and the resolved target before reading text, byte metadata or citations.
+Full rooted identities retain protected parents even when a workspace directory
+or exact-file source narrows its addressing root to `.aws` or `.ssh`.
 Ordinary dotfiles, public SSH keys and environment examples remain readable.
 This is a new explicit filename policy, not a content scan or a guarantee about
-credentials under arbitrary filenames; native `read_file` retains its own policy.
+credentials under arbitrary filenames. Native `read_file` retains its existing
+root precedence, containment checks and line-range behavior.
 
 Successful `read` results include `file_byte_sha256` (SHA-256 of the complete
 original file bytes) and `byte_size`, computed from the same byte buffer decoded

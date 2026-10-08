@@ -670,10 +670,11 @@ def _within(base: Path, rel: str):
 def _readable_path(base: Path, rel: str):
     """Apply source visibility to both the addressed and actual path."""
     cand = _within(base, rel)
-    if cand is None or _is_blocked_path(rel) or is_protected_source_file(rel):
+    if (cand is None or _is_blocked_path(rel)
+            or is_protected_source_file(base / rel)):
         return None
     actual = cand.relative_to(base.resolve())
-    if _is_blocked_path(actual) or is_protected_source_file(actual):
+    if _is_blocked_path(actual) or is_protected_source_file(cand):
         return None
     return cand
 

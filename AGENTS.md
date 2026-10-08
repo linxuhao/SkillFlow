@@ -55,10 +55,11 @@ ReadTools / native read_file → one original byte snapshot after path checks
   # file_byte_sha256 + byte_size describe that whole snapshot; text still uses
   # existing UTF-8/newline/window policies. Byte digest is not citation.sha
   # or edit authorization and does not promise future file stability.
-  # Unified read/search/list also apply resolved-root containment and the
+  # Unified read/search/list apply resolved-root containment and the
   # protected credential filename policy to direct, recovered and enumerated
   # paths. In-root links, ordinary dotfiles and explicit .env examples remain
-  # readable. This policy does not scan content or cover native read_file.
+  # readable. Native read_file shares that protected-file policy. Both lexical
+  # and resolved rooted identities retain .aws/.ssh when source roots narrow.
 
 ToolLoader (multi-source)
   ├── Native: src/skillflow/tools/
@@ -196,6 +197,8 @@ does not bump the release version, publish, or change an installed engine.
 Unified read/search/list reuse source-root containment for basename recovery
 and enumeration. The new explicit credential filename policy is documented in
 README's Read Surface section; it applies before byte/text access and checks
-both lexical and resolved paths. Tests use only owned synthetic populated
+both lexical and resolved rooted paths, including narrowed source containers.
+Native read_file uses that same policy before its snapshot read. Tests use
+actual native claims and only owned synthetic populated
 credentials and outside-root fixtures. This source candidate does not bump,
 publish, install or deploy an engine.
