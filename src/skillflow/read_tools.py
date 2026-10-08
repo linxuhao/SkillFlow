@@ -896,8 +896,9 @@ def unified_search(smap, pattern, source=None, glob=None, context_lines=0,
     layers, err = _layers_for(smap, source)
     if err:
         return err
-    if path and (Path(path).is_absolute() or ".." in Path(path).parts
-                 or _is_blocked_path(path) or is_protected_source_file(path)):
+    if path and (Path(path).is_absolute() or ".." in Path(path).parts):
+        return {"error": f"search: invalid path '{path}': path traversal denied"}
+    if path and (_is_blocked_path(path) or is_protected_source_file(path)):
         return {"error": f"search: access denied: {path}"}
     try:
         regex = re.compile(pattern, re.IGNORECASE)
