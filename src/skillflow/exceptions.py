@@ -111,6 +111,17 @@ class ToolArgumentsUnavailable(SkillFlowError):
     """
 
 
+class ToolExecutionRefused(SkillFlowError):
+    """A tool definitively refused this invocation; automatic retry cannot help.
+
+    Opt in only at a known deterministic validation/constraint refusal. Do not
+    use for transient I/O, incomplete external effects, or unknown failures.
+    Inline tool-node dispatch fails the step and run with the original reason,
+    without confirmation, retry, or downstream routing (even tool_error=route).
+    Correct the input or constraint and start a new run to try again.
+    """
+
+
 class IsolationUnavailable(SkillFlowError):
     """A run declares an isolated code root and the engine cannot resolve it.
 
