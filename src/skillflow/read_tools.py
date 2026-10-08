@@ -22,7 +22,8 @@ import re
 from pathlib import Path
 
 from skillflow._file_read import read_text_snapshot
-from skillflow.source_visibility import iter_visible_source_files
+from skillflow.source_visibility import (iter_visible_source_files,
+                                        is_protected_source_file)
 from skillflow import citations, read_accounting
 from skillflow.workspace import route_step_read_dir
 
@@ -666,13 +667,32 @@ def _within(base: Path, rel: str):
     return cand
 
 
+def _readable_path(base: Path, rel: str):
+    """Apply source visibility to both the addressed and actual path."""
+    cand = _within(base, rel)
+    if cand is None or _is_blocked_path(rel) or is_protected_source_file(rel):
+        return None
+    actual = cand.relative_to(base.resolve())
+    if _is_blocked_path(actual) or is_protected_source_file(actual):
+        return None
+    return cand
+
+
+def _readable_files(base: Path, glob=None):
+    """Enumeration and basename recovery obey the same gate as direct reads."""
+    for file in iter_visible_source_files(base, glob):
+        rel = str(file.relative_to(base))
+        if _readable_path(base, rel) is not None:
+            yield file
+
+
 def _sources_containing_path(
         smap: dict, path: str, *, directory: bool = False) -> list[str]:
     """Named, already-authorized sources containing the exact relative path."""
     found = []
     for source, layers in sorted(smap["named"].items()):
         for _, root in layers:
-            candidate = _within(Path(root), path)
+            candidate = _readable_path(Path(root), path)
             exists = (candidate.is_dir() if directory
                       else candidate.is_file()) if candidate is not None else False
             if exists:
@@ -779,12 +799,15 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
     layers, err = _layers_for(smap, source)
     if err:
         return err
+    if (Path(path).is_absolute() or ".." in Path(path).parts
+            or _is_blocked_path(path) or is_protected_source_file(path)):
+        return {"error": f"read: access denied: {path}"}
     # Reading the working tree / own scratch reflects a deletion queued this
     # step (the repo copy still exists until repo_delete runs on deliver).
     if deleted and path in deleted and source in (None, "", "self", "staging"):
         return {"error": f"'{path}' was deleted this step", "source": "staging"}
     for tag, root in layers:
-        cand = _within(Path(root), path)
+        cand = _readable_path(Path(root), path)
         if cand is None:
             continue
         if cand.is_file():
@@ -817,7 +840,7 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
             d = Path(root)
             if not d.is_dir():
                 continue
-            for f in iter_visible_source_files(d, base):
+            for f in _readable_files(d, base):
                 if not (f.is_file() and f.name == base):
                     continue
                 rel = str(f.relative_to(d))
@@ -854,7 +877,7 @@ def unified_read(smap, path, source=None, start_line=0, end_line=None,
         if not d.is_dir():
             continue
         names = []
-        for f in iter_visible_source_files(d):
+        for f in _readable_files(d):
             if f.is_file() and f.name != ".gitkeep" \
                     and not _is_blocked_path(str(f.relative_to(d))):
                 names.append(str(f.relative_to(d)))
@@ -873,6 +896,9 @@ def unified_search(smap, pattern, source=None, glob=None, context_lines=0,
     layers, err = _layers_for(smap, source)
     if err:
         return err
+    if path and (Path(path).is_absolute() or ".." in Path(path).parts
+                 or _is_blocked_path(path) or is_protected_source_file(path)):
+        return {"error": f"search: access denied: {path}"}
     try:
         regex = re.compile(pattern, re.IGNORECASE)
     except re.error:
@@ -887,7 +913,7 @@ def unified_search(smap, pattern, source=None, glob=None, context_lines=0,
         d = Path(root)
         if not d.is_dir():
             continue
-        search_root = _within(d, path) if path else d
+        search_root = _readable_path(d, path) if path else d
         if search_root is None:
             return {"error": f"search: invalid path '{path}': path traversal denied"}
         if not search_root.exists():
@@ -896,8 +922,10 @@ def unified_search(smap, pattern, source=None, glob=None, context_lines=0,
         if search_root.is_file():
             candidates = [search_root]
         else:
-            candidates = iter_visible_source_files(search_root, glob)
+            candidates = _readable_files(search_root, glob)
         for f in candidates:
+            if _readable_path(d, str(f.relative_to(d))) is None:
+                continue
             if not f.is_file() or f.name == ".gitkeep":
                 continue
             if search_root.is_file() and glob and not f.match(glob):
@@ -963,7 +991,7 @@ def unified_list(smap, source=None, glob=None):
         d = Path(root)
         if not d.is_dir():
             continue
-        for f in iter_visible_source_files(d, glob):
+        for f in _readable_files(d, glob):
             if not (f.is_file() and f.name != ".gitkeep"):
                 continue
             rel = str(f.relative_to(d))

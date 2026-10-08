@@ -14,6 +14,28 @@ from typing import Iterator
 INTERNAL_SOURCE_STORAGE_DIRS = frozenset({".zvec-grep"})
 
 
+def is_protected_source_file(path: str | Path) -> bool:
+    """Known credential paths, relative to a granted source root.
+
+    This is a filename policy, not a content scan. Ordinary dotfiles and
+    explicit environment examples remain source; it makes no claim about
+    credentials stored under arbitrary names.
+    """
+    parts = Path(path).parts
+    name = Path(path).name
+    if name in {".git-credentials", ".netrc"}:
+        return True
+    if name == ".env" or (name.startswith(".env.") and name not in {
+            ".env.example", ".env.sample", ".env.template"}):
+        return True
+    return any(
+        (parent == ".aws" and child == "credentials")
+        or (parent == ".ssh" and child in {
+            "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "identity"})
+        for parent, child in zip(parts, parts[1:])
+    )
+
+
 def is_internal_source_storage(path: str | Path) -> bool:
     """Return whether a relative path enters engine-owned source storage."""
     return any(part in INTERNAL_SOURCE_STORAGE_DIRS for part in Path(path).parts)

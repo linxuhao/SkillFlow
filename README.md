@@ -275,6 +275,19 @@ working tree, staging-first so an agent sees its own just-written edits).
 `read` pages by 0-based `start_line`/`end_line`, so a truncated injection is
 recoverable rather than terminal.
 
+The unified tools enforce the selected source root on the actual resolved path,
+including basename recovery, search and listing. In-root symlinks remain readable;
+links outside that root are excluded. Absolute paths and `..` components cannot
+be recovered into another file. Source names and staging precedence are unchanged.
+
+Their protected-file policy excludes `.env` and `.env.*` except `.env.example`,
+`.env.sample` and `.env.template`; `.git-credentials`, `.netrc`, `.aws/credentials`,
+and `.ssh/{id_rsa,id_dsa,id_ecdsa,id_ed25519,identity}`. It checks both the addressed
+name and the resolved target before reading text, byte metadata or citations.
+Ordinary dotfiles, public SSH keys and environment examples remain readable.
+This is a new explicit filename policy, not a content scan or a guarantee about
+credentials under arbitrary filenames; native `read_file` retains its own policy.
+
 Successful `read` results include `file_byte_sha256` (SHA-256 of the complete
 original file bytes) and `byte_size`, computed from the same byte buffer decoded
 for the text. These fields describe the whole selected file even when the text is

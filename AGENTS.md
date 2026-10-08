@@ -55,6 +55,10 @@ ReadTools / native read_file → one original byte snapshot after path checks
   # file_byte_sha256 + byte_size describe that whole snapshot; text still uses
   # existing UTF-8/newline/window policies. Byte digest is not citation.sha
   # or edit authorization and does not promise future file stability.
+  # Unified read/search/list also apply resolved-root containment and the
+  # protected credential filename policy to direct, recovered and enumerated
+  # paths. In-root links, ordinary dotfiles and explicit .env examples remain
+  # readable. This policy does not scan content or cover native read_file.
 
 ToolLoader (multi-source)
   ├── Native: src/skillflow/tools/
@@ -186,3 +190,12 @@ The snapshot is decoded using the prior text policies; path permissions, source
 precedence, edit citations and read accounting are unchanged. Byte identity is
 not an edit citation or a guarantee of future file stability. This candidate
 does not bump the release version, publish, or change an installed engine.
+
+## Generic source read boundary (SOURCE candidate)
+
+Unified read/search/list reuse source-root containment for basename recovery
+and enumeration. The new explicit credential filename policy is documented in
+README's Read Surface section; it applies before byte/text access and checks
+both lexical and resolved paths. Tests use only owned synthetic populated
+credentials and outside-root fixtures. This source candidate does not bump,
+publish, install or deploy an engine.
