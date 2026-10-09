@@ -25,6 +25,17 @@ def smap_for(root):
     return {"working_tree": [("repo", str(root))], "named": {}, "allowed": set()}
 
 
+# These claims are about what the echo reports (ranges, verbatim text, splices,
+# partial publishes); they were written against the 1.5.83 geometry and keep
+# it. The shipped geometry has its own claims in
+# test_a_write_echo_shows_its_surroundings.py.
+@pytest.fixture(autouse=True)
+def _legacy_echo_geometry(monkeypatch):
+    monkeypatch.setattr(strict_patch, "ECHO_HEAD", 20)
+    monkeypatch.setattr(strict_patch, "ECHO_TAIL", 20)
+    monkeypatch.setattr(strict_patch, "ECHO_CONTEXT", 1)
+
+
 @pytest.fixture
 def repo(tmp_path):
     (tmp_path / "src" / "parts").mkdir(parents=True)

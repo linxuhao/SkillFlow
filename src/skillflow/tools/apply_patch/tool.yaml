@@ -110,9 +110,11 @@ description: |
   stopped partway through writing, for the files it had already written: for
   every reference and every Update hunk in those files, the file, the resulting line range (from_line..to_line)
   and those lines as the file now reads them on disk, numbered like a read,
-  plus the line before and the line after as context. A range longer than 40 lines
-  shows its first 20 and last 20 lines and states how many it elided. Check
-  the echo before your next edit; a splice shows up there.
+  plus up to 20 unchanged lines before and after as context. A range longer
+  than 80 lines shows its first 40 and last 40 lines and states how many it
+  elided. The echo IS the file as it now reads around your edit: check it
+  before your next edit (a splice shows up there) and read only for lines it
+  does not show.
 
   Common to both: repo-relative paths only; no .git, symlinks, traversal or
   caller-selected roots. A file may appear in `patch` or in `references`, not

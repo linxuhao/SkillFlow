@@ -874,7 +874,10 @@ A successful reference write needs no read before the next one either. Each
 `echo` entry carries `citation` (`from_line`, `to_line`, `sha`) issued over the
 lines it shows — the touched lines with their context — in the file's current
 line numbers; an echo that elides its middle carries `citations` for its head
-and its tail and nothing for the gap. The same `fresh` as above is attached to
+and its tail and nothing for the gap. Each echoed block shows up to 20
+unchanged lines on each side, and a touched range over 80 lines shows its
+first 40 and last 40: measured 2026-10-09, most reads right after a write
+asked for the edited lines plus 10-40 lines around them. The same `fresh` as above is attached to
 a reference whose lines fall outside its cited window, whose sha was never
 issued, or that has no sha but names a file and lines. Measured driver (run
 22ae403c, 2026-10-06): 19 of 82 reads directly followed a successful write and

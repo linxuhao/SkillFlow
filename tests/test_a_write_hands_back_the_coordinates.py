@@ -21,7 +21,20 @@ import pytest
 
 from skillflow import citations, read_accounting
 from skillflow.read_tools import unified_read
-from skillflow.strict_patch import ECHO_HEAD, ECHO_TAIL, apply_code_patch
+from skillflow import strict_patch
+from skillflow.strict_patch import apply_code_patch
+
+# These claims are about what the echo cites, not how much it shows; they were
+# written against the 1.5.83 geometry and keep it. The shipped geometry has its
+# own claims in test_a_write_echo_shows_its_surroundings.py.
+ECHO_HEAD, ECHO_TAIL, ECHO_CONTEXT = 20, 20, 1
+
+
+@pytest.fixture(autouse=True)
+def _legacy_echo_geometry(monkeypatch):
+    monkeypatch.setattr(strict_patch, "ECHO_HEAD", ECHO_HEAD)
+    monkeypatch.setattr(strict_patch, "ECHO_TAIL", ECHO_TAIL)
+    monkeypatch.setattr(strict_patch, "ECHO_CONTEXT", ECHO_CONTEXT)
 
 RUN = "run-write-hands-back-coordinates"
 BODY = "\n".join([

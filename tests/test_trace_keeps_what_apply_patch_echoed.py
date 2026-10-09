@@ -121,8 +121,9 @@ def test_the_trace_row_carries_the_echo_the_agent_received(tmp_path):
     assert received["applied"] is True, received
     assert (root / "a.gd").read_text() == (
         "line 1\nline 2\nline three\nline 3b\nline 4\nline 5\nline 5b\nline 6\n")
-    assert [e["text"].split("\n")[1] for e in received["echo"]] == [
-        "3\tline three", "7\tline 5b"]
+    # The row numbered from_line, wherever the echo's context puts it.
+    assert [next(r for r in e["text"].split("\n") if r.startswith(f"{e['from_line']}\t"))
+            for e in received["echo"]] == ["3\tline three", "7\tline 5b"]
 
     rows = result_rows(sf, rid, "apply_patch")
     assert len(rows) == 2 and rows[0]["payload"]["applied"] is False
