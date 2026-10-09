@@ -382,11 +382,11 @@ MAX_FRESH_CHARS = 6000
 # The resulting-text echo: a touched range longer than ECHO_HEAD + ECHO_TAIL
 # lines shows its first ECHO_HEAD and last ECHO_TAIL lines and says how many
 # it left out; ECHO_CONTEXT unchanged lines frame it on each side.
-# Measured 2026-10-09 over recorded flash steps since 1.5.83: of the first read
-# of a file after its echo, 1% asked only for lines the echo had shown, 55-62%
-# asked for the echoed lines plus more around them (median 11-18 extra lines,
-# p75 26-43) and 5-6% for the elided middle. Replayed against this geometry,
-# 44% (V4.1) and 49% (GLM) of those reads fall entirely inside the echo.
+# Recorded-read replay (2026-10-09; since 1.5.83): upper bounds, not avoided reads.
+# Use actual read-turn endpoints/returned windows and latest-generation echo blocks.
+# Measurable: V4.1 241/517 (46.6%), GLM 12/39 (30.8%), Haiku 5/5 (100%).
+# V4.1 has 9 unmeasurable reads: full cohort 526, known-covered 241/526 (45.8%).
+# If all 9 unknowns fit, at most 250/526 (47.5%); original attribution was invalid.
 ECHO_HEAD = 40
 ECHO_TAIL = 40
 ECHO_CONTEXT = 20
