@@ -12,6 +12,16 @@ description: |
   read sent you. Quote it back and supply ONLY the new text; the engine does
   the copying. You never retype the original, so you never have to wonder
   whether your copy of it is still accurate.
+  new_text is literal Source text: preserve its tabs, spaces and multiline
+  indentation verbatim. Numbered read and echo lines are LINE_NUMBER + TAB +
+  raw Source; the first TAB is a display delimiter, NOT indentation. In the
+  escaped example "17\t\tfoo()", the gutter is "17\t" and the Source is
+  "\tfoo()" (one indentation tab, not two). For a nested multiline edit,
+  displayed "17\t\tif ready:\n18\t\t\tfoo()" corresponds to new_text
+  "\tif ready:\n\t\tbar()" when changing foo to bar; exclude BOTH numbered
+  gutters and retain the one/two Source tabs. Use read(raw=true) when you
+  need an exact Source snippet. apply_patch writes the text you supply;
+  it does not dedent or repair indentation.
   Address the edit with the fewest numbers that say what you mean; every
   number you leave out is taken from the citation, not counted by you:
     Replace exactly what that read served — no line or column numbers:
