@@ -465,7 +465,10 @@ def test_a_window_on_a_blank_line_away_from_this_run_s_edit_still_writes(root):
 # line, S[k], in the text with every line ending in its newline (inserting
 # "\n" + text before a newline and text + "\n" after it are one change). The
 # table then decides: a point at S[k] is refused; a window or point inside a
-# deleted line is refused; everything else lands where its line went.
+# deleted line is refused; so is the point just after a deleted line, whose left
+# neighbor the deletion consumed (docs/cited-point-history.md: a point has no
+# characters of its own to corroborate where it sits); everything else lands
+# where its line went.
 #
 # A reference call is only coordinates and text. When two different edits
 # send the identical call (on a blank line, "\n" at its end appends a blank
@@ -559,7 +562,7 @@ def _expected(lines, edit, probe):
     at_offset = starts[i] if i < n else starts[n] - 1
     if kind == "insert" and at_offset == starts[k]:
         return None
-    if kind == "delete" and starts[k] <= at_offset < starts[k + 1]:
+    if kind == "delete" and starts[k] <= at_offset <= starts[k + 1]:
         return None
     result = list(after)
     result.insert(moved[i] if i < n else moved[n - 1] + 1, "P")

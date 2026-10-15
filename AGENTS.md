@@ -216,6 +216,6 @@ already-tracked ignored files; artifact writes and declared artifact appends
 are unaffected. Missing/non-Git runtime failures remain errors. Existing final
 delivery checks remain in place. README's output-destinations section and
 tests/test_code_write_ignore_preflight.py describe and exercise this change;
-no graph syntax was added. This source-only candidate keeps version 1.5.89 and
-does not publish, install or deploy; version/package/pin/deployment decisions
-and independent review belong to the coordinator.
+no graph syntax was added. Prepared as package 1.5.90 (docs/releases/1.5.90.md);
+that preparation does not publish, install or deploy; publication, pin and
+deployment decisions and independent review belong to the coordinator.
