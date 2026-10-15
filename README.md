@@ -841,6 +841,19 @@ publication remains backward-compatible. New tasks require a clean code tree;
 resume retains the owning step's pending changes, and review revisions of the
 same task preserve its original base. No automatic reset or rollback is performed.
 
+Before a generated code-target `write`/`create`/`edit` (including fixed-slot
+variants) changes files or records output ownership, Git checks the destination
+against its normal ignore rules. An ignored untracked path is refused with the
+matching rule's file, line and pattern; choose a non-ignored name and retry in
+the same step. Already-tracked files remain writable even when an ignore rule
+matches. Native `apply_patch` uses the same guard for every Add/Update/reference
+destination during whole-batch preflight. Git probe failures report their
+runtime error; they are never treated as permission to write. Finalization still
+checks deliverability. Artifact writes and `on_exists: append` keep their
+existing behavior; code slots already forbid `on_exists: append`/`new`, and no
+separate `append_*` tool is currently declared. Custom tools still own their
+effects and must report actual changed paths.
+
 Do not point STEP_TMP_DIR at a worktree. Do not use code targets for tool nodes: a
 tool's effects are explicit in its implementation. Custom agent tools declare
 `output_dir` and `output_target` keyword parameters and return actual changed

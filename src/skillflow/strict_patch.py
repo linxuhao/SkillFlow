@@ -1299,13 +1299,15 @@ def _journal(run_id: str, op: Operation, before, after: bytes,
 
 
 def apply_code_patch(patch: str, root: Path, references=None,
-                     run_id: str = "") -> dict:
+                     run_id: str = "", *, write_guard=None) -> dict:
     """Preflight a patch, then use the existing direct-code mutation backend.
 
     Validation and matching failures are atomic for the complete batch: all
     operations are preflighted before publication. Publication is atomic per file,
     not per batch. On an I/O error, report the actual completed operations for
     SkillFlow's code journal and agent recovery.
+    The native tool supplies its Git delivery guard; standalone text splicing
+    does not require a Git repository.
     """
     from skillflow.output_targets import code_path
     from skillflow.write_tools import _write_output_text
@@ -1335,6 +1337,11 @@ def apply_code_patch(patch: str, root: Path, references=None,
         prepared = []
         size = 0
         for op in ops:
+            if write_guard is not None and op.kind != "Delete":
+                try:
+                    write_guard(root, op.path)
+                except (ValueError, OSError, RuntimeError) as exc:
+                    raise PatchError(str(exc)) from exc
             before = _snapshot(root_fd, op.path)
             spans: list[tuple[int, int, int]] = []
             echo: list[dict] = []

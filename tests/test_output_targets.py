@@ -339,9 +339,10 @@ def test_code_target_rejects_unsupported_or_ambiguous_shapes():
 
 def test_ignored_output_cannot_be_reported_as_delivered(tmp_path):
     sf,rid,claim,root=engine(tmp_path)
-    # An exclude rule is repo metadata, not an unrelated candidate source edit.
-    (root/'.git/info/exclude').write_text('ignored.py\n')
     call(sf,rid,claim,'write',file='ignored.py',content='not_delivered=True')
+    # An exclude rule is repo metadata, not an unrelated candidate source edit.
+    # Rules may change after an admitted write: retain the final delivery guard.
+    (root/'.git/info/exclude').write_text('ignored.py\n')
     base=git(root,'rev-parse','HEAD')
     sf.confirm_step(claim.token,StepResult(outputs={},flags={}))
     assert (root/'ignored.py').exists()

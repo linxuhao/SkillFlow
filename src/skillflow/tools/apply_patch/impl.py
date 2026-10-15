@@ -2,6 +2,7 @@
 from pathlib import Path
 
 from skillflow.strict_patch import apply_code_patch
+from skillflow.output_targets import code_write_path
 
 
 def apply_patch(patch: str = "", references=None, *, project_root: str = "",
@@ -20,4 +21,5 @@ def apply_patch(patch: str = "", references=None, *, project_root: str = "",
         # a citation could be checked against, and accepting it would mean
         # editing coordinates on trust.
         return {"error": "apply_patch references require a run; none was injected"}
-    return apply_code_patch(patch, root, references=references, run_id=run_id)
+    return apply_code_patch(patch, root, references=references, run_id=run_id,
+                            write_guard=code_write_path)

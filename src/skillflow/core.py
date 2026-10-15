@@ -7318,7 +7318,7 @@ class SkillFlow:
         if allowed and name not in allowed:
             return {"error": f"Tool '{name}' not allowed. Allowed: {sorted(allowed)}"}
 
-        from skillflow.output_targets import target_for, code_path
+        from skillflow.output_targets import target_for, code_path, code_write_path
         fixed = node.output_fixed if node else {}
         revision = bool(node is not None and node.output_carry_forward)
         if node is not None and target_for(node) == "code":
@@ -7338,8 +7338,9 @@ class SkillFlow:
             direct = target_for(node, slot) == "code"
             if direct:
                 try:
-                    code_path(tmp_dir, resolve_write_target(slot, fixed, params))
-                except (ValueError, TypeError) as exc:
+                    check = code_path if name.startswith("delete_") else code_write_path
+                    check(tmp_dir, resolve_write_target(slot, fixed, params))
+                except (ValueError, TypeError, OSError, RuntimeError) as exc:
                     return {"error": str(exc)}
             if name.startswith("delete_"):
                 res = execute_delete(slot, fixed, params, str(tmp_dir))
@@ -7373,6 +7374,14 @@ class SkillFlow:
             gname = self._get_graph_name(run_id)
             tmp_dir = self.output_directory(run_id, step_id)
             direct = target_for(node) == "code"
+            if direct:
+                keys = (("file", "file_path", "filename", "path") if name == "edit"
+                        else ("file", "filename", "path"))
+                raw = next((params[k] for k in keys if params.get(k)), "")
+                try:
+                    code_write_path(tmp_dir, raw)
+                except (ValueError, TypeError, OSError, RuntimeError) as exc:
+                    return {"error": str(exc)}
             from skillflow.write_tools import (execute_generic_create,
                                                execute_generic_edit,
                                                execute_generic_write)

@@ -78,6 +78,9 @@ ContextResolver → assemble prompt context from:
 
 StepValidator → run validation specs: [{files, tool, inline_schema}]
 WriteTools → generate constrained write_*/create_*/edit_* tools from output.fixed
+  # code-target destinations → shared Git ignore preflight before mutation /
+  # ownership; native apply_patch guards its entire write batch the same way.
+  # Tracked ignored files stay writable; artifact append behavior is unchanged.
   # edit baseline: staging → repo → own promoted dir (same-run gated)
   # staging FIRST so a step's successive edits COMPOUND; the repo copy is only
   # the pre-step baseline (repo_apply refreshes it after the step ends)
@@ -202,3 +205,17 @@ Native read_file uses that same policy before its snapshot read. Tests use
 actual native claims and only owned synthetic populated
 credentials and outside-root fixtures. This source candidate does not bump,
 publish, install or deploy an engine.
+
+## Early ignored code output refusal (SOURCE candidate; iss-78f25187ffd64730)
+
+Generated code-target write/create/edit tools and native apply_patch Add/Update/
+reference operations use one Git delivery preflight before filesystem or output
+ownership mutation. Refusals name the matching ignore source, line and pattern
+and allow a corrected path in the same claim. Git index semantics preserve
+already-tracked ignored files; artifact writes and declared artifact appends
+are unaffected. Missing/non-Git runtime failures remain errors. Existing final
+delivery checks remain in place. README's output-destinations section and
+tests/test_code_write_ignore_preflight.py describe and exercise this change;
+no graph syntax was added. This source-only candidate keeps version 1.5.89 and
+does not publish, install or deploy; version/package/pin/deployment decisions
+and independent review belong to the coordinator.

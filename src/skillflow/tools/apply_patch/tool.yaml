@@ -117,7 +117,12 @@ description: |
   does not show.
 
   Common to both: repo-relative paths only; no .git, symlinks, traversal or
-  caller-selected roots. A file may appear in `patch` or in `references`, not
+  caller-selected roots. Ignored untracked write destinations are refused in
+  preflight with the matching Git ignore rule; choose a non-ignored name and
+  retry in the same step. Already-tracked ignored files remain writable. No
+  filesystem mutation occurs on an ignore refusal. Git probe failures refuse
+  the write with their runtime error.
+  A file may appear in `patch` or in `references`, not
   both. Maximum 128 files, 1024 hunks or references per file, 2 MiB of patch
   text and 2 MiB of references, 16 MiB per file and 64 MiB combined preflight
   content. Validation and review still gate delivery. Every check of what you

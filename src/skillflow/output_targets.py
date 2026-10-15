@@ -100,6 +100,37 @@ def code_path(root: Path, relative: str) -> Path:
     return result
 
 
+def code_write_path(root: Path, relative: str) -> Path:
+    """Refuse undeliverable writes before content or ownership can change.
+
+    Let Git consult its index and normal exclude sources: a tracked file stays
+    writable even when an ignore rule matches its name. Verbose output also
+    reports negated rules, which explicitly allow the path.
+    """
+    path = code_path(root, relative)
+    relative = path.relative_to(root.resolve()).as_posix()
+    try:
+        probe = subprocess.run(["git", "check-ignore", "--verbose", "-z", "--stdin"],
+                               input=relative + "\0", cwd=root, capture_output=True,
+                               text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"Could not check Git ignore status for code output {relative!r}: {exc}") from exc
+    if probe.returncode == 1:
+        return path
+    if probe.returncode != 0:
+        raise RuntimeError("Could not check Git ignore status for code output "
+                           f"{relative!r}: {(probe.stderr or probe.stdout).strip()}")
+    fields = probe.stdout.split("\0")
+    if len(fields) != 5 or fields[-1] != "":
+        raise RuntimeError(f"Invalid Git ignore response for code output {relative!r}")
+    source, line, pattern, _ = fields[:4]
+    if pattern.startswith("!"):
+        return path
+    raise ValueError(f"Code output is git-ignored and would not be delivered: {relative!r} "
+                     f"(matched {source}:{line}: {pattern!r}). "
+                     "Choose a non-ignored output path and retry in this step.")
+
+
 def atomic_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".output-", dir=path.parent)
