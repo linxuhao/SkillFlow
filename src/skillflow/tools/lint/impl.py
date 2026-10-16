@@ -136,12 +136,12 @@ def _run_backend(backend: str, fp: Path, *, run_id: str = "",
         result = {"file": str(fp),
                   "passed": bool(res.get("passed", False)),
                   "error_message": str(res.get("error_message", ""))}
-        details = res.get("details")
-        if isinstance(details, Mapping):
-            try:
+        try:
+            details = res.get("details")
+            if isinstance(details, Mapping):
                 result["details"] = json.loads(json.dumps(dict(details), allow_nan=False))
-            except (TypeError, ValueError, RecursionError):
-                pass  # Optional non-JSON data does not change the lint outcome.
+        except Exception:
+            pass  # Optional data failures do not change the actual lint outcome.
         return result
     if backend == "ruff":
         return _lint_ruff(fp)

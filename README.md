@@ -390,7 +390,8 @@ into the same normalized per-file lint result. Nested data is detached from the
 backend's objects. Nonmapping/non-JSON details are omitted; absent data, built-in
 or skipped outcomes and caught backend exceptions do not acquire metadata.
 `file`, `passed` and `error_message` keep their existing normalization, including
-failed parser results that return details. These are caller-defined data, not
+failed parser results that return details. Ordinary failures while reading or
+copying optional data are omitted; cancellation/BaseException still propagates. These are caller-defined data, not
 SDK verification or authorization. Hosts must interpret actual returned data;
 the SDK neither infers a receipt from a manifest nor changes backend selection,
 defaults or ownership policy.

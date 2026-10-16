@@ -228,7 +228,8 @@ deployment decisions and independent review belong to the coordinator.
 
 Native lint preserves a custom backend's optional JSON mapping `details` in the
 same per-file normalized result, using a detached JSON copy. Invalid/nonmapping
-data is omitted without changing the actual lint outcome. Built-in/no-op and
+data is omitted without changing the actual lint outcome. Ordinary optional-data
+retrieval/conversion errors are isolated; cancellation/BaseException propagates. Built-in/no-op and
 caught-exception results do not gain details. This is caller data, not authority;
 dispatch, defaults, host context and ownership policy are unchanged. See README
 "Output Validation" and tests/test_lint_result_details.py.
