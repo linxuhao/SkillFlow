@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 import skillflow
@@ -176,7 +177,7 @@ def test_manifest_mutated_during_callback_cannot_relabel_the_result(tmp_path):
 def test_excessively_nested_details_do_not_change_the_actual_outcome(tmp_path):
     fp = candidate(tmp_path)
     details = {}
-    for _ in range(1500):
+    for _ in range(sys.getrecursionlimit() + 100):
         details = {"nested": details}
     register_backend("receipt", lambda path: {"passed": True, "details": details})
     assert run(tmp_path)["results"] == [{"file": str(fp), "passed": True, "error_message": ""}]
