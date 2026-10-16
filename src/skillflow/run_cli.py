@@ -17,6 +17,7 @@ Usage:
 
 import argparse
 import json
+import dataclasses
 import logging
 import os
 import sys
@@ -27,7 +28,7 @@ logger = logging.getLogger("skillflow-run")
 from skillflow.core import SkillFlow
 from skillflow.graph import PipelineGraph
 from skillflow.tool_loader import ToolLoader
-from skillflow.plugins.skill_runner import SkillTool
+from skillflow.plugins.skill_runner import RunnerService, SkillResponse, SkillTool
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -50,6 +51,30 @@ def _register_graph_and_agents(sf: SkillFlow, graph: PipelineGraph,
             logger.debug("Converter agents module not available")
         except Exception:
             logger.warning("Converter agent registration failed", exc_info=True)
+
+
+def _submit(sf: SkillFlow, run_id: str, step_id: str, result: dict) -> SkillResponse:
+    """Submit via RunnerService; --step-id defaults to the current step."""
+    service = RunnerService(sf)
+    if not step_id:
+        step_id = service.next(run_id).get("step", "")
+        if not step_id:
+            # Not in progress (paused/completed/failed/unknown run): report
+            # that state instead of submitting into it.
+            return _to_response(service.next(run_id))
+    out = service.submit(run_id, step_id, result)
+    if "current" in out:  # wrong --step-id: show the step actually waiting
+        return _to_response({**out["current"], "error": out["error"]})
+    return _to_response(out)
+
+
+def _to_response(d: dict) -> SkillResponse:
+    """RunnerService dict → SkillResponse (the CLI's fixed output shape)."""
+    known = {f.name for f in dataclasses.fields(SkillResponse)}
+    resp = SkillResponse(**{k: v for k, v in d.items() if k in known})
+    if not d.get("status") and d.get("error"):
+        resp.status = "failed"
+    return resp
 
 
 def _ensure_graph_loaded(sf: SkillFlow, run_id: str) -> str:
@@ -214,15 +239,23 @@ def main():
         graph_name = _ensure_graph_loaded(sf, args.run_id)
         run = sf.get_run(args.run_id)
         pid = project_id or (run.get("project_id") if run else None)
-        tool = SkillTool(sf, graph_name, project_id=pid)
-        resp = tool(
-            action=args.action,
-            run_id=args.run_id,
-            step_id=args.step_id,
-            result=result if result else None,
-            feedback=args.feedback,
-            redirect_to=args.redirect_to,
-        )
+        if args.action == "submit":
+            # Through RunnerService, like MCP: it stages each result slot
+            # into the step's declared output file before confirming. Calling
+            # SkillTool directly only recorded the dict as step outputs, so
+            # validation saw "File not found" and later steps' context was
+            # empty.
+            resp = _submit(sf, args.run_id, args.step_id, result)
+        else:
+            tool = SkillTool(sf, graph_name, project_id=pid)
+            resp = tool(
+                action=args.action,
+                run_id=args.run_id,
+                step_id=args.step_id,
+                result=result if result else None,
+                feedback=args.feedback,
+                redirect_to=args.redirect_to,
+            )
 
     # Output response as JSON
     output = {

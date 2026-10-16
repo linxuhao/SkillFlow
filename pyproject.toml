@@ -32,7 +32,7 @@ dev = [
 ]
 # skillflow-mcp server (runner protocol over MCP stdio)
 mcp = [
-    "mcp>=1.2",
+    "mcp>=1.2,<2",  # skillflow-mcp uses FastMCP, removed in mcp 2.x
 ]
 
 [project.scripts]

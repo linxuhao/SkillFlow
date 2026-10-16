@@ -2,8 +2,8 @@
 
 Execute a skillflow pipeline through a stateless protocol: state lives in
 SQLite + the workspace, never in the process. You get an instruction, do the
-work, hand in the result, repeat. You never see the graph — the runner tells
-you what to do next.
+work, hand in the result, repeat. Each instruction maps the whole graph first
+(Pipeline overview), then tells you the one step to do now.
 
 Two transports, same protocol:
 
@@ -77,9 +77,25 @@ on MCP, by writing it first via the `skillflow_tool` proxy
 (`skillflow_tool(run_id, step_id, name="write_<slot>", params={"content": ...})`)
 and then submitting with an empty result. Do NOT write these files with your
 own file tools — the staging directory belongs to skillflow. The instruction's
-"Expected outputs" section lists each slot and its format.
+"Expected outputs" section lists each slot and its format. A `.json` slot
+takes an object or a JSON string.
+
+The result dict is also the step's routing flags: if a transition matches on a
+field (e.g. `match: { approved: true }` in the overview's "if approved=true"),
+put that field at the **top level** of the result as well, e.g.
+`{"verdict": {"approved": false, "issues": [...]}, "approved": false}`.
 
 If `validation_error` is non-empty, the previous `submit` was rejected. Fix the issue described and re-submit.
+
+### Pipeline overview
+
+Every `instruction` starts with `## Pipeline overview`: all steps in graph
+order, each with its type, checkpoint, outgoing conditions and loop bounds;
+`▶` marks the step you are on and `[done ×N]` how often a step has completed.
+Read it to plan and pace the whole run (what comes after this step, where the
+human checkpoints are, how many review rounds remain) and tell your user where
+the run stands. Then do only the current step: the engine decides what runs
+next.
 
 ### Paused at checkpoint
 ```json

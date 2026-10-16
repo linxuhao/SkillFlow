@@ -153,7 +153,15 @@ class RunnerService:
                               f"first."),
                     "current": _response_dict(current)}
         if result:
-            tool.write_output_files(step_id, result)
+            try:
+                tool.write_output_files(step_id, result)
+            except ValueError as e:
+                # A slot the write tool refused (bad JSON, missing field):
+                # the step stays claimed, so hand it back with the reason
+                # instead of raising through the transport.
+                resp = _response_dict(current)
+                resp["validation_error"] = str(e)
+                return resp
         return _response_dict(tool(action="submit", step_id=step_id,
                                    result=result))
 

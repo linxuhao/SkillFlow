@@ -3,8 +3,9 @@
 The agent calls ``skillflow-run --action start --graph pipeline.yaml`` to begin,
 does the work, then calls ``skillflow-run --action submit --run-id <id> --result '...'``
 to hand in output. Each call is a fresh process — state lives in SQLite.
-The agent never knows about the graph structure — skillflow handles
-gates, loops, checkpoints, and error routing behind the tool facade.
+Each instruction opens with a whole-pipeline overview for planning, but
+skillflow alone decides what runs next — gates, loops, checkpoints and error
+routing stay behind the tool facade.
 """
 
 from pathlib import Path

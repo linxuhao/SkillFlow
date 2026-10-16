@@ -49,6 +49,77 @@ class SkillResponse:
     validation_error: str = ""
 
 
+_OVERVIEW_MAX_STEPS = 30
+
+
+def _describe_edge(t) -> str:
+    """One outgoing transition as short prose: target plus its condition."""
+    target = f"`{t.to}`" if t.to else "end"
+    match = dict(t.match or {})
+    if match.get("from") == "checkpoint":
+        cond = f"when {match.get('value', 'approved')}"
+    elif match:
+        cond = "if " + ", ".join(f"{k}={str(v).lower() if isinstance(v, bool) else v}"
+                                 for k, v in match.items())
+    else:
+        cond = ""
+    loop = f" (at most {t.max_loop} times)" if t.max_loop else ""
+    return " ".join(p for p in (target, cond) if p) + loop
+
+
+def pipeline_overview(graph, current_step: str, done: dict[str, int]) -> str:
+    """Whole-pipeline map shown before every step instruction.
+
+    A driving agent that only ever sees the current step cannot pace itself
+    or anticipate a review loop or checkpoint; showing every step first and
+    then the current one measured better (agent-depth research, 2026-10).
+    Built from the run's pinned graph; ``done`` counts completed executions
+    per step id. Large graphs are windowed around the current step.
+    """
+    steps = list(getattr(graph, "steps", []) or [])
+    if not steps:
+        return ""
+    lines = []
+    for i, node in enumerate(steps, 1):
+        kind = node.step_type
+        if kind == "tool" and node.tool_name:
+            kind = f"tool `{node.tool_name}`"
+        elif kind == "gate":
+            kind = "gate (automatic)"
+        if node.checkpoint:
+            label = f': "{node.checkpoint_label}"' if node.checkpoint_label else ""
+            kind += f", human checkpoint{label}"
+        edges = "; ".join(_describe_edge(t) for t in node.transitions) or "end"
+        mark = "▶ " if node.id == current_step else ""
+        count = done.get(node.id, 0)
+        done_note = f" [done ×{count}]" if count else ""
+        lines.append(f"{i}. {mark}`{node.id}` — {kind} → {edges}{done_note}")
+
+    if len(lines) > _OVERVIEW_MAX_STEPS:
+        cur = next((i for i, n in enumerate(steps) if n.id == current_step), 0)
+        keep = set(range(3)) | set(range(len(lines) - 2, len(lines)))
+        keep |= set(range(max(0, cur - 10), min(len(lines), cur + 11)))
+        shown, prev = [], -1
+        for i in sorted(keep):
+            if i != prev + 1:
+                shown.append(f"   … {i - prev - 1} more steps …")
+            shown.append(lines[i])
+            prev = i
+        lines = shown
+
+    desc = (graph.description or "").strip().replace("\n", " ")
+    if len(desc) > 200:
+        desc = desc[:197] + "..."
+    head = f"`{graph.name}`" + (f" — {desc}" if desc else "")
+    pos = next((i for i, n in enumerate(steps, 1) if n.id == current_step), None)
+    where = (f"You are on step {pos} of {len(steps)} (`{current_step}`)"
+             if pos else f"Current step: `{current_step}`")
+    total_done = sum(done.values())
+    return (f"## Pipeline overview\n\n{head}\n{where}; completed step "
+            f"executions so far: {total_done}. The engine decides the next "
+            f"step; this map is for planning only.\n\n" + "\n".join(lines) + "\n")
+
+
 class PromptAssembler:
     """Turns a ClaimedStep into an agent-facing instruction string.
 
@@ -313,11 +384,16 @@ class SkillTool:
                 "path-variable resolution failed for delegated tool params",
                 exc_info=True)
 
+        instruction = self._assembler.assemble(claimed)
+        overview = self._overview(claimed.step_id)
+        if overview:
+            instruction = overview + "\n" + instruction
+
         return SkillResponse(
             status="in_progress",
             run_id=self.run_id or "",
             step=claimed.step_id,
-            instruction=self._assembler.assemble(claimed),
+            instruction=instruction,
             tools=claimed.inputs.get("_tool_schemas", {}),
             tool_name=tool_name,
             tool_params=tool_params,
@@ -328,6 +404,19 @@ class SkillTool:
             expected_files=claimed.inputs.get("_expected_files", []),
             validation_error=claimed.validation_error or claimed.inputs.get("_validation_error", ""),
         )
+
+    def _overview(self, step_id: str) -> str:
+        """Pipeline overview for this run's pinned graph ("" if unavailable)."""
+        if not self.run_id:
+            return ""
+        graph = self.sf._graph_for_run(self.run_id)
+        if graph is None:
+            return ""
+        done: dict[str, int] = {}
+        for s in self.sf.get_steps(self.run_id):
+            if s.get("status") == "completed":
+                done[s["step_id"]] = done.get(s["step_id"], 0) + 1
+        return pipeline_overview(graph, step_id, done)
 
     def write_output_files(self, step_id: str, result: dict):
         """Write output_fixed files to step tmp_dir before confirm.

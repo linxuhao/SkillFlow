@@ -60,10 +60,15 @@ def build_skillflow(db: str, workspace: str | None, projects: str | None,
                 if isinstance(cfg, dict):
                     sf.register_agent_config_from_dict(name, cfg)
 
+    # A graphs directory may hold its agents.yaml too (the documented layout);
+    # that file is a role table, not a graph.
+    role_files = {Path(p).expanduser().resolve() for p in agent_configs}
     for spec in graphs:
         p = Path(spec).expanduser()
         files = sorted(p.glob("*.yaml")) if p.is_dir() else [p]
         for f in files:
+            if p.is_dir() and f.resolve() in role_files:
+                continue
             sf.register_graph(PipelineGraph.from_yaml(f))
 
     return sf

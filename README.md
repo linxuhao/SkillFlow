@@ -130,6 +130,10 @@ $ skillflow-run --action reject --run-id abc123 \
 
 **The agent drives this inline — there is no driver code.** The agent itself calls `skillflow-run` as a command inside its own turn loop: call → read the JSON → do the work (stage the expected output files, or run a delegated tool) → call again, reacting to `status` each turn (`in_progress` → submit, `paused` → ask the human to approve/reject, `completed`/`failed` → done). *The agent is the loop* — it never writes a program to drive skillflow. The full, injectable manual is [`AGENT.md`](src/skillflow/plugins/skill_runner/AGENT.md); load it via `load_agent_guide()` from `skillflow.plugins.skill_runner` and put it in the agent's system prompt.
 
+**Every `instruction` opens with a `## Pipeline overview`**: all steps in graph order with their type, checkpoints, outgoing conditions and loop bounds, the current step marked `▶`, per-step completion counts and the run's position. It is built from the graph version the run is pinned to and windowed around the current step for graphs over 30 steps. The agent sees the whole plan first and then the one step it must do now; the engine still decides what runs next.
+
+**Submitting outputs:** `--result` carries one key per output slot (`{"draft": "..."}`; a `.json` slot takes an object or a JSON string). Both CLI and MCP stage each slot into its declared file before the step is confirmed; a value the slot rejects comes back as `validation_error` on the same step. The same dict is the step's routing flags, so a field a transition matches on (`match: {approved: true}`) must also be a **top-level** key of `--result`. `--step-id` is optional on submit; it defaults to the current step.
+
 **Response fields beyond status:**
 
 | Field | When present | Meaning |
@@ -165,7 +169,7 @@ tracing; host-tool names are bounced with a redirecting error. Stdio
 transport means no standing server: the agent spawns the process per session,
 and all state lives in SQLite — a crashed client reconnects with
 `runner_next(run_id)`. Requires the optional extra: `pip install
-skillflow-py[mcp]`.
+skillflow-py[mcp]` (the extra pins `mcp<2`: mcp 2.x removed the FastMCP API this server uses).
 
 Both transports (and in-process hosts) share one core:
 `RunnerService` in `skillflow.plugins.skill_runner` — embed it directly when
