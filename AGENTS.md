@@ -233,3 +233,13 @@ retrieval/conversion errors are isolated; cancellation/BaseException propagates.
 caught-exception results do not gain details. This is caller data, not authority;
 dispatch, defaults, host context and ownership policy are unchanged. See README
 "Output Validation" and tests/test_lint_result_details.py.
+
+## Runner protocol fixes and pipeline overview (1.5.93)
+
+CLI submit stages result slots through RunnerService.submit (as MCP does), so
+validated content steps and skillflow-convert work from the CLI; rejected slot
+values return validation_error. Every runner instruction is prefixed with a
+whole-pipeline overview from the run's pinned graph (current step marked,
+windowed beyond 30 steps); routing is unchanged. The mcp extra excludes mcp 2.x
+(FastMCP removed) and --graphs dirs skip their agents.yaml. See
+docs/releases/1.5.93.md, README "Runner Mode" and the skill_runner tests.
