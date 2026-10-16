@@ -285,3 +285,14 @@ unrelated-change, receipt and add -A semantics are preserved. Do not add a
 native `git add`/`status`/`commit`/`diff`-against-worktree call to the engine.
 See README "Closed Git" and tests/test_git_consumers_run_no_repository_programs.py.
 This source candidate does not bump, publish, install or deploy an engine.
+
+
+## Complete runner instruction composition (1.5.94 Source preparation)
+
+The default pinned overview policy also applies to checkpoint-paused instructions;
+explicit custom assembler opt-out remains effective. This private composition
+retains accepted scoped claim recovery, retained checkpoint CAS and closed Git
+behavior while preserving CLI/MCP slot staging and invalid-slot feedback.
+Legacy test drivers now pass retained approval identities and request next after
+an approved response; their tested graph outcomes are unchanged. See
+`docs/releases/1.5.94.md`. Source preparation is not release or installation.

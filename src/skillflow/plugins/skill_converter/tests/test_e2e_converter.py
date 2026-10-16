@@ -124,7 +124,11 @@ class MockLLMAgent:
 
         while resp.status not in ("completed", "failed"):
             if resp.status == "paused":
-                resp = self.tool(action="approve")
+                resp = self.tool(action="approve",
+                    expected_checkpoint=resp.expected_checkpoint,
+                    decision_id=f"test-approval-{resp.expected_checkpoint['step_instance_id']}")
+                assert resp.status == "approved"
+                resp = self.tool(action="next")
                 continue
 
             if resp.status != "in_progress":
@@ -419,7 +423,11 @@ def test_converter_reject_explanation_redirects_to_design(sf_with_ws):
                         reject_done = True
                         continue
                     else:
-                        resp = self.tool(action="approve")
+                        resp = self.tool(action="approve",
+                            expected_checkpoint=resp.expected_checkpoint,
+                            decision_id=f"test-approval-{resp.expected_checkpoint['step_instance_id']}")
+                        assert resp.status == "approved"
+                        resp = self.tool(action="next")
                         continue
 
                 if resp.status != "in_progress":

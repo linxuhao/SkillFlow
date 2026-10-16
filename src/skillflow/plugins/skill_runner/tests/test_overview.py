@@ -188,3 +188,39 @@ def test_custom_assembler_can_opt_out(tmp_path):
     resp = tool(action="next", run_id=rid)
     assert resp.step == "write"
     assert "Pipeline overview" not in resp.instruction
+
+
+def test_paused_instruction_uses_pinned_overview_and_position(tmp_path):
+    svc = _service(tmp_path)
+    rid = svc.start("ov", project_id="p")["run_id"]
+    svc.submit(rid, "write", {"text": "actual draft"})
+    paused = svc.submit(rid, "check", {"note": "actual retained review"})
+    assert paused["status"] == "paused" and paused["step"] == "check"
+    assert paused["instruction"].startswith("## Pipeline overview")
+    assert "2. ▶ `check`" in paused["instruction"]
+    assert "You are on step 2 of 3" in paused["instruction"]
+    assert "completed step executions so far: 2" in paused["instruction"]
+    assert "Pipeline paused at checkpoint: Approve the text" in paused["instruction"]
+    assert paused["outputs"] == {"note": "actual retained review"}
+    original = svc.sf.get_run(rid)["graph_version"]
+    changed = PipelineGraph._from_dict({"name": "ov", "begin": "replacement",
+        "steps": [{"id": "replacement", "step_type": "agent"}]})
+    svc.sf.register_graph(changed)
+    resumed = svc.next(rid)
+    assert resumed["instruction"] == paused["instruction"]
+    assert "replacement" not in resumed["instruction"]
+    assert svc.sf.get_run(rid)["graph_version"] == original
+
+
+def test_custom_assembler_overview_opt_out_applies_to_pause(tmp_path):
+    from skillflow.plugins.skill_runner.runner import PromptAssembler, SkillTool
+    class Plain(PromptAssembler):
+        include_overview = False
+    svc = _service(tmp_path)
+    rid = svc.start("ov", project_id="p")["run_id"]
+    svc.submit(rid, "write", {"text": "draft"})
+    svc.submit(rid, "check", {"note": "review"})
+    response = SkillTool(svc.sf, "ov", prompt_assembler=Plain())(run_id=rid)
+    assert response.status == "paused"
+    assert response.instruction.startswith("Pipeline paused at checkpoint:")
+    assert "Pipeline overview" not in response.instruction

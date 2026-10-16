@@ -90,7 +90,7 @@ If `validation_error` is non-empty, the previous `submit` was rejected. Fix the 
 
 ### Pipeline overview
 
-Every `instruction` starts with `## Pipeline overview`: all steps in graph
+Every `instruction`, including a checkpoint pause, starts with `## Pipeline overview`: all steps in graph
 order, each with its type, checkpoint, outgoing conditions and loop bounds;
 `▶` marks the step you are on and `[done ×N]` how often a step has completed.
 Read it to plan and pace the whole run (what comes after this step, where the
@@ -104,7 +104,7 @@ next.
   "status": "paused",
   "step": "summarize",
   "checkpoint_label": "Review Summary",
-  "instruction": "Pipeline paused. Call approve or reject."
+  "instruction": "## Pipeline overview\n1. ▶ `summarize` — agent (human checkpoint)\nYou are on step 1 of 1; completed step executions so far: 1\n\nPipeline paused at checkpoint: Review Summary\nApprove to continue, or reject with feedback to request changes."
 }
 ```
 Call `--action approve` with the exact returned identity and durable decision id, then `--action next` to continue, or `--action reject` with `--feedback` to redo the step. Add `--redirect-to <step>` to loop the run back to a *different* earlier step instead of redoing this one — the feedback is carried to that target (e.g. reject a final review back to the planning step).

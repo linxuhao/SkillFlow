@@ -426,11 +426,7 @@ class SkillTool:
                 "path-variable resolution failed for delegated tool params",
                 exc_info=True)
 
-        instruction = self._assembler.assemble(claimed)
-        overview = (self._overview(claimed.step_id)
-                    if getattr(self._assembler, "include_overview", True) else "")
-        if overview:
-            instruction = overview + "\n" + instruction
+        instruction = self._instruction(self._assembler.assemble(claimed), claimed.step_id)
 
         return SkillResponse(
             status="in_progress",
@@ -447,6 +443,12 @@ class SkillTool:
             expected_files=claimed.inputs.get("_expected_files", []),
             validation_error=claimed.validation_error or claimed.inputs.get("_validation_error", ""),
         )
+
+    def _instruction(self, text: str, step_id: str) -> str:
+        """Prefix every instruction using the same pinned overview policy."""
+        overview = (self._overview(step_id)
+                    if getattr(self._assembler, "include_overview", True) else "")
+        return overview + "\n" + text if overview else text
 
     def _overview(self, step_id: str) -> str:
         """Pipeline overview for this run's pinned graph ("" if unavailable)."""
@@ -576,5 +578,7 @@ class SkillTool:
             status="paused", run_id=self.run_id or "", step=checkpoint["step_id"],
             checkpoint_label=label, checkpoint_reject_to=checkpoint["reject_to"],
             expected_checkpoint=checkpoint["expected_checkpoint"], outputs=checkpoint["outputs"],
-            instruction=f"Pipeline paused at checkpoint: {label}\nApprove to continue, or reject with feedback to request changes.",
+            instruction=self._instruction(
+                f"Pipeline paused at checkpoint: {label}\nApprove to continue, or reject with feedback to request changes.",
+                checkpoint["step_id"]),
         )

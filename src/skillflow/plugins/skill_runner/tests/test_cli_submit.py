@@ -153,3 +153,32 @@ def test_convert_first_step_submits(tmp_path):
     assert out["step"] == "design_graph"
     assert "summary written" in out["instruction"]
     assert list(Path(tmp_path, ".skillflow").rglob("skill_analysis.json"))
+
+
+def test_cli_checkpoint_overview_and_exact_approval_replay(tmp_path):
+    import sqlite3
+    graph = tmp_path / "checkpoint.yaml"
+    graph.write_text(GRAPH.replace("    agent_config: writer", "    agent_config: writer\n    checkpoint: true", 1))
+    started = _cli(tmp_path, "--action", "start", "--graph", str(graph))
+    rid = started["run_id"]
+    paused = _submit(tmp_path, rid, {"draft": "CLI RETAINED CHECKPOINT"})
+    assert paused["status"] == "paused"
+    assert paused["instruction"].startswith("## Pipeline overview")
+    assert paused["outputs"] == {"draft": "CLI RETAINED CHECKPOINT"}
+    token = paused["expected_checkpoint"]
+    bad = dict(token, version=token["version"] + 1)
+    refused = _cli(tmp_path, "--action", "approve", "--run-id", rid,
+        "--expected-checkpoint", json.dumps(bad), "--decision-id", "cli-decision")
+    assert refused["status"] == "failed" and "Stale" in refused["error"]
+    approved = _cli(tmp_path, "--action", "approve", "--run-id", rid,
+        "--expected-checkpoint", json.dumps(token), "--decision-id", "cli-decision")
+    assert approved["status"] == "approved" and approved["step"] == "review"
+    assert _cli(tmp_path, "--action", "next", "--run-id", rid)["step"] == "review"
+    def rows():
+        with sqlite3.connect(tmp_path / "runs.db") as db:
+            return db.execute("SELECT * FROM skillflow_steps ORDER BY id").fetchall()
+    before = rows()
+    replay = _cli(tmp_path, "--action", "approve", "--run-id", rid,
+        "--expected-checkpoint", json.dumps(token), "--decision-id", "cli-decision")
+    assert replay == approved
+    assert rows() == before

@@ -2075,6 +2075,8 @@ def test_reaping_a_dead_claim_keeps_a_paused_run_s_resume_target(sf: SkillFlow, 
     sf.recover_stale_claims(1)
 
     assert sf.get_run(run_id)["current_node"] == "B", "resume target was cleared"
-    assert sf.approve_checkpoint(run_id) == "B"
+    assert sf.approve_checkpoint(run_id,
+        expected_checkpoint=sf.get_checkpoint(run_id)["expected_checkpoint"],
+        decision_id="test-recovered-checkpoint") == "B"
     assert sf.advance_run(run_id) == "B"
     assert sf.get_run(run_id)["status"] == "running"
