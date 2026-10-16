@@ -112,15 +112,22 @@ def _run_backend(backend: str, fp: Path, *, run_id: str = "",
     if custom is not None:
         try:
             try:
-                params = inspect.signature(custom).parameters
+                signature = inspect.signature(custom)
+                params = signature.parameters
+                bound = signature.bind_partial(fp).arguments
+                # The Path already occupies its positional parameter, whatever
+                # that parameter is named. **kwargs cannot bind it a second time.
+                consumed = {key for key in bound
+                            if params[key].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD}
             except (TypeError, ValueError):
-                params = {}  # opaque legacy callables retain their Path-only convention
+                params, consumed = {}, set()  # opaque Path-only callables
             accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD
                                  for p in params.values())
             context = {"run_id": run_id, "step_id": step_id, "project_root": project_root}
             supported = {key: value for key, value in context.items()
-                         if accepts_kwargs or (key in params and params[key].kind in
-                             (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY))}
+                         if key not in consumed and (accepts_kwargs or
+                             (key in params and params[key].kind in
+                              (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)))}
             res = custom(fp, **supported)
         except Exception as e:  # a buggy backend fails the file, not the process
             return {"file": str(fp), "passed": False,
