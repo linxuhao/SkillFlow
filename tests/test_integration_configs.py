@@ -30,10 +30,25 @@ def _execute(sf: SkillFlow, run_id: str, step_id: str,
     claimed = sf.claim_next_step(run_id)
     assert claimed is not None, f"Failed to claim '{step_id}'"
     assert claimed.step_id == step_id, f"Expected '{step_id}', got '{claimed.step_id}'"
+    node = sf._get_resolver_for_run(run_id).get_node(step_id)
+    if node.checkpoint and sf._workspace:
+        for slot, content in (outputs or {}).items():
+            written = sf.execute_tool("write_" + slot, {"content": content},
+                run_id=run_id, step_id=step_id,
+                step_instance_id=claimed.token.step_instance_id,
+                claim_epoch=claimed.token.claim_epoch)
+            assert "error" not in written, written
     result = StepResult(outputs=outputs or {}, flags=flags or {})
     sf.confirm_step(claimed.token, result)
     return result
 
+
+
+def _approve(sf: SkillFlow, run_id: str):
+    checkpoint = sf.get_checkpoint(run_id)
+    token = checkpoint["expected_checkpoint"]
+    return sf.approve_checkpoint(run_id, expected_checkpoint=token,
+        decision_id=f"fixture-approval-{token['step_instance_id']}")
 
 def _load_and_register(sf: SkillFlow, fixture_name: str,
                         agent_configs: dict[str, list[str]] | None = None):
@@ -182,7 +197,7 @@ def test_checkpoint_pause_resume(sf_with_tools):
     assert sf.get_run(run_id)["status"] == "paused"
 
     # Resume → checkpoint resolves to publish
-    sf.resume_run(run_id)
+    _approve(sf, run_id)
     next_node = sf.advance_run(run_id)
     assert next_node == "publish"
 
@@ -219,7 +234,7 @@ def test_checkpoint_reject_reexecute(sf_with_tools):
     assert sf.get_run(run_id)["status"] == "paused"
 
     # Resume → publish → done → complete
-    sf.resume_run(run_id)
+    _approve(sf, run_id)
     next_node = sf.advance_run(run_id)
     assert next_node == "publish"
     _execute(sf, run_id, "publish")
@@ -796,9 +811,9 @@ def test_dpe_full_no_tasks_flow(sf_with_workspace):
 
     # Step 1 (checkpoint)
     sf.advance_run(run_id)
-    _execute(sf, run_id, "1")
+    _execute(sf, run_id, "1", outputs={"sota": "Fixture research findings"})
     sf.advance_run(run_id)  # pause
-    sf.resume_run(run_id)
+    _approve(sf, run_id)
 
     # Step 1_review → passes (from_file match needs verdict file)
     sf.advance_run(run_id)
@@ -812,9 +827,9 @@ def test_dpe_full_no_tasks_flow(sf_with_workspace):
 
     # Step 2 (checkpoint)
     sf.advance_run(run_id)
-    _execute(sf, run_id, "2")
+    _execute(sf, run_id, "2", outputs={"design": "Fixture architecture"})
     sf.advance_run(run_id)  # pause
-    sf.resume_run(run_id)
+    _approve(sf, run_id)
 
     # Step 2_review → passes
     sf.advance_run(run_id)
@@ -833,7 +848,7 @@ def test_dpe_full_no_tasks_flow(sf_with_workspace):
                        flags={"has_tasks": False},
                        extra_files={"tasks_manifest.json": json.dumps({"tasks": [], "execution_order": []})})
     sf.advance_run(run_id)  # pause
-    sf.resume_run(run_id)
+    _approve(sf, run_id)
 
     # Step 3_review → passes → task_loop
     sf.advance_run(run_id)
@@ -872,9 +887,9 @@ def test_dpe_full_research_review_loop(sf_with_workspace):
 
     # Step 1 (checkpoint)
     sf.advance_run(run_id)
-    _execute(sf, run_id, "1")
+    _execute(sf, run_id, "1", outputs={"sota": "Fixture research findings"})
     sf.advance_run(run_id)  # pause
-    sf.resume_run(run_id)
+    _approve(sf, run_id)
 
     # 1_review fails twice, loops back each time
     for i in range(2):
@@ -888,9 +903,9 @@ def test_dpe_full_research_review_loop(sf_with_workspace):
         assert next_node == "1"  # loops back
 
         sf.advance_run(run_id)
-        _execute(sf, run_id, "1")
+        _execute(sf, run_id, "1", outputs={"sota": "Fixture research findings"})
         sf.advance_run(run_id)  # pause
-        sf.resume_run(run_id)
+        _approve(sf, run_id)
 
     # Third review: pass → resolves to 2
     sf.advance_run(run_id)
@@ -926,8 +941,8 @@ def test_dpe_full_task_loop_with_tasks(sf_with_workspace):
 
     # Step 1 (checkpoint)
     sf.advance_run(run_id)
-    _execute(sf, run_id, "1")
-    sf.advance_run(run_id); sf.resume_run(run_id)
+    _execute(sf, run_id, "1", outputs={"sota": "Fixture research findings"})
+    sf.advance_run(run_id); _approve(sf, run_id)
 
     # Step 1_review pass
     sf.advance_run(run_id)
@@ -939,8 +954,8 @@ def test_dpe_full_task_loop_with_tasks(sf_with_workspace):
 
     # Step 2 (checkpoint)
     sf.advance_run(run_id)
-    _execute(sf, run_id, "2")
-    sf.advance_run(run_id); sf.resume_run(run_id)
+    _execute(sf, run_id, "2", outputs={"design": "Fixture architecture"})
+    sf.advance_run(run_id); _approve(sf, run_id)
 
     # Step 2_review pass
     sf.advance_run(run_id)
@@ -962,7 +977,7 @@ def test_dpe_full_task_loop_with_tasks(sf_with_workspace):
         flags={"has_tasks": True}
     ))
     sf.advance_run(run_id)  # pause
-    sf.resume_run(run_id)
+    _approve(sf, run_id)
 
     # Step 3_review pass → task_loop → t_plan
     sf.advance_run(run_id)
@@ -1170,7 +1185,7 @@ def test_crash_mid_pipeline_recovery_from_yaml(sf_tmp, crash_the_owner):
     sf.advance_run(run_id)
     _execute(sf, run_id, "draft")
     sf.advance_run(run_id)  # pause
-    sf.resume_run(run_id)
+    _approve(sf, run_id)
 
     # Advance to publish, claim but don't confirm — "crash"
     sf.advance_run(run_id)
