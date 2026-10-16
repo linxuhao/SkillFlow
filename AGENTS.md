@@ -48,6 +48,8 @@ SkillFlow (orchestrator)  ← SQLite (WAL mode)
   │     path), re-read the edges' from_file targets and put their human-readable
   │     field in error_reason BEFORE the edge detail (hosts truncate for status
   │     chips). null fields skipped. Bounded (3 files / 300 chars), never raises.
+  ├── get_checkpoint() → retained outputs + exact expected checkpoint identity
+  ├── approve_checkpoint(expected_checkpoint, decision_id) → atomic CAS + durable replay-safe approval event
   ├── reject_checkpoint() → fresh non-loop revision identity; loop-body rejection refused
   └── drain_outbox()     → event stream
 
@@ -233,3 +235,23 @@ retrieval/conversion errors are isolated; cancellation/BaseException propagates.
 caught-exception results do not gain details. This is caller data, not authority;
 dispatch, defaults, host context and ownership policy are unchanged. See README
 "Output Validation" and tests/test_lint_result_details.py.
+
+
+## Retained checkpoint approval identity (SOURCE candidate)
+
+Before checkpoint confirmation, literal fixed slots are captured from their
+framework-resolved artifact/code destinations; JSON remains structured. Missing,
+malformed or escaped slots cannot complete. Carried slots and CodeOutput delivery
+keep their existing lifecycle. No model-provided path selects a read.
+
+`get_checkpoint` exposes retained outputs and the completed instance/version/
+completion sequence/canonical outputs SHA256. `approve_checkpoint` requires that
+exact expected identity and a durable unique decision id. One SQLite transaction
+checks the pinned checkpoint, records its approval outbox event and transitions
+the paused run. Exact decision replay is inert; collisions and stale identities
+refuse. Normal outbox ack retains approval identity; deleting run history removes
+it. RunnerService, MCP and CLI forward the explicit pair and return `approved`;
+`next` requests the next instruction separately, so replay cannot reclaim a later
+worker. Hosts authenticate actual human decisions separately. This private Source
+candidate does not bump, publish, install or deploy an engine. Official1.5.93
+runner slot/overview composition belongs to the coordinator's separate round.

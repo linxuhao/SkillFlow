@@ -171,6 +171,32 @@ Both transports (and in-process hosts) share one core:
 `RunnerService` in `skillflow.plugins.skill_runner` — embed it directly when
 your host process already owns a `SkillFlow` instance.
 
+### Checkpoint approval identity (SOURCE candidate)
+
+Paused runner responses include the completed checkpoint's retained `outputs`
+and `expected_checkpoint` (`step_instance_id`, `version`, `completion_seq`,
+`outputs_sha256`). Literal fixed checkpoint slots are captured from their
+framework-owned output destinations before confirmation; JSON slots remain
+structured. Globs remain collections under the existing output contract.
+Reading a checkpoint never reopens its mutable output files.
+
+A host must authenticate the human separately, retain the exact displayed
+identity with a durable unique `decision_id`, and call
+`sf.approve_checkpoint(run_id, expected_checkpoint=token, decision_id=id)` or
+`RunnerService.approve` with those same arguments. Neither an actor string nor
+an approval flag grants human authority. Approval checks the pinned graph and
+retained row in the same SQLite transaction as the run transition and durable
+approval outbox event. Exact decision replay is inert; payload collisions or
+stale identities refuse. Normal outbox acknowledgement retains this record;
+explicit history deletion also removes its replay history.
+
+Approval returns an `approved` receipt; call `runner_next` separately for the
+next instruction. This prevents a lost-response retry from resetting a later
+worker's claim. MCP accepts `expected_checkpoint` and `decision_id`; CLI uses
+`--expected-checkpoint '<exact JSON>' --decision-id '<unique id>'`. Missing
+identity is refused; hosts must update their callers before adopting this
+Source candidate. No release/version/pin/deployment change is included.
+
 ## Node Types
 
 | Type | Description |

@@ -26,7 +26,8 @@ skillflow-run --graph pipeline.yaml --action start
 
 # All subsequent calls use --run-id to reconnect state
 skillflow-run --action submit --run-id <id> --result '{"key":"val"}'
-skillflow-run --action approve --run-id <id>
+skillflow-run --action approve --run-id <id> --expected-checkpoint '<exact paused JSON>' --decision-id <unique-id>
+skillflow-run --action next --run-id <id>  # after the approved receipt
 skillflow-run --action reject --run-id <id> --feedback "reason"
 skillflow-run --action reject --run-id <id> --feedback "reason" --redirect-to <step>  # loop back to a different step
 skillflow-run --action abort --run-id <id>
@@ -90,7 +91,7 @@ If `validation_error` is non-empty, the previous `submit` was rejected. Fix the 
   "instruction": "Pipeline paused. Call approve or reject."
 }
 ```
-Call `--action approve` to continue, or `--action reject` with `--feedback` to redo the step. Add `--redirect-to <step>` to loop the run back to a *different* earlier step instead of redoing this one — the feedback is carried to that target (e.g. reject a final review back to the planning step).
+Call `--action approve` with the exact returned identity and durable decision id, then `--action next` to continue, or `--action reject` with `--feedback` to redo the step. Add `--redirect-to <step>` to loop the run back to a *different* earlier step instead of redoing this one — the feedback is carried to that target (e.g. reject a final review back to the planning step).
 
 ### Completed
 ```json
@@ -180,7 +181,7 @@ the human user behind you**. Do NOT auto-approve or reject.
 Your job:
 1. Show the checkpoint label and outputs to the user
 2. Ask if they approve
-3. If yes → `--action approve`
+3. If yes → host records the displayed identity and unique decision id, calls `--action approve` with both, then `--action next`
 4. If no → `--action reject --feedback "reason"`
 
 ## What you don't need to worry about
@@ -208,3 +209,9 @@ text. Prefer it for edits to existing files — the engine does the copying, so
 answer by reading again. If a V4A hunk comes back stale or ambiguous, reread
 that range and cite its sha rather than retyping or widening the context.
 Never ask for whitespace-fuzzy replacement.
+
+Checkpoint approval requires the exact `expected_checkpoint` returned with the
+retained paused `outputs` and a host-recorded unique `decision_id`. The host
+must authenticate the user's decision separately. Reuse that same pair after
+a lost response; never replace the expected identity with a fresh checkpoint
+sample. `approved` is a replay-safe receipt; use `next` for the next instruction.

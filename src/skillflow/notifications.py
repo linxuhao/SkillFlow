@@ -80,7 +80,7 @@ class NotificationBus:
     async def publish(self, event_type: str, payload: dict,
                       step_id: str | None = None,
                       run_id: str | None = None,
-                      target: str = "ui") -> None:
+                      target: str = "ui", *, persist: bool = True) -> None:
         """Publish an event to all subscribers AND outbox."""
         notification = Notification(
             event_type=event_type,
@@ -97,12 +97,13 @@ class NotificationBus:
                 pass  # subscriber errors must not break the pipeline
 
         # Write to outbox (persistent)
-        self._write_outbox(notification)
+        if persist:
+            self._write_outbox(notification)
 
     def publish_sync(self, event_type: str, payload: dict,
                      step_id: str | None = None,
                      run_id: str | None = None,
-                     target: str = "ui") -> None:
+                     target: str = "ui", *, persist: bool = True) -> None:
         """Synchronous publish — safe from any thread.
 
         From the event loop thread: schedules publish as async task.
@@ -115,7 +116,7 @@ class NotificationBus:
             # On the event loop thread — schedule as async task
             task = loop.create_task(self.publish(event_type, payload,
                                                  step_id=step_id, run_id=run_id,
-                                                 target=target))
+                                                 target=target, persist=persist))
             self._bg_tasks.add(task)
             task.add_done_callback(self._bg_tasks.discard)
         except RuntimeError:
@@ -124,7 +125,7 @@ class NotificationBus:
             if self._main_loop and self._main_loop.is_running():
                 self._main_loop.call_soon_threadsafe(
                     lambda: self._schedule_publish(event_type, payload,
-                                                   step_id, run_id, target)
+                                                   step_id, run_id, target, persist)
                 )
             else:
                 notification = Notification(
@@ -134,14 +135,15 @@ class NotificationBus:
                 # `_write_outbox` takes the lock itself now, for every caller
                 # rather than only this one — the loop-thread path through
                 # `publish()` was the one that had none.
-                self._write_outbox(notification)
+                if persist:
+                    self._write_outbox(notification)
 
     def _schedule_publish(self, event_type: str, payload: dict,
                           step_id: str | None, run_id: str | None,
-                          target: str) -> None:
+                          target: str, persist: bool = True) -> None:
         """Schedule publish on the event loop (called via call_soon_threadsafe)."""
         task = asyncio.ensure_future(self.publish(
-            event_type, payload, step_id=step_id, run_id=run_id, target=target))
+            event_type, payload, step_id=step_id, run_id=run_id, target=target, persist=persist))
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 

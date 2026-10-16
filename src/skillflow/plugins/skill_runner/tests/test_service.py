@@ -105,7 +105,9 @@ class TestProtocolFlow:
         assert "add tests" in again["instruction"]
 
         service.submit(run_id, "plan", {"plan": "## plan v2"})
-        released = service.approve(run_id)
+        approved = service.approve(run_id, expected_checkpoint=service.sf.get_checkpoint(run_id)["expected_checkpoint"], decision_id="test-approval")
+        assert approved["status"] == "approved"
+        released = service.next(run_id)
         assert released["status"] == "in_progress"
         assert released["step"] == "implement"
         assert "## plan v2" in released["instruction"]  # prior step context

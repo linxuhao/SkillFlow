@@ -2968,6 +2968,26 @@ class SkillFlow:
         # same row, and let a cancellation report an in-flight delivery over a
         # hook that had not started. It is taken immediately before the lifecycle
         # loop instead; see the block below.
+        resolver = self._get_resolver_for_run(token.run_id)
+        node = resolver.get_node(token.step_id)
+        if node and node.checkpoint and self._workspace:
+            # Capture the fixed slot actually written by the claim, before
+            # validation/promotion. Submitted prose is not a filename selector.
+            from skillflow.write_tools import _get_pattern
+            from skillflow.output_targets import code_path
+            retained = dict(result.outputs)
+            for slot in node.output_fixed:
+                pattern = _get_pattern(slot, node.output_fixed)
+                if any(c in pattern for c in "*?["):
+                    continue  # a collection has no single canonical slot value
+                try:
+                    path = code_path(self.output_directory(token.run_id, token.step_id, slot), pattern)
+                    text = path.read_text(encoding="utf-8")
+                    retained[slot] = json.loads(text) if path.suffix.lower() == ".json" else text
+                    self._checkpoint_json(retained[slot])
+                except (ValueError, OSError, UnicodeError) as exc:
+                    raise OutputValidationError(f"Checkpoint output {slot!r} is unavailable or malformed: {exc}") from exc
+            result = StepResult(outputs=retained, flags=result.flags)
         # The claim is over — drop the read tools it owned. Identity-guarded on
         # (instance id, claim epoch), so neither a zombie executor of an earlier
         # instance nor a superseded re-claim of the same row can release the
@@ -6286,87 +6306,104 @@ class SkillFlow:
             run["project_id"], run["graph_name"], redirect_to or step_id,
             feedback, run_id)
 
-    def approve_checkpoint(self, run_id: str) -> str:
-        """Approve the current checkpoint and advance the pipeline.
+    @staticmethod
+    def _checkpoint_json(value: Any) -> str:
+        return json.dumps(value, sort_keys=True, ensure_ascii=False,
+                          separators=(",", ":"), allow_nan=False)
 
-        The run must be in 'paused' status on a checkpoint step.  This method
-        resumes execution and emits a ``checkpoint_approved`` outbox event so
-        downstream consumers (TUI, SSE) can react without polling.
+    def _checkpoint_in_transaction(self, conn, run_id: str) -> dict:
+        run = conn.execute("SELECT * FROM skillflow_runs WHERE id = ?", (run_id,)).fetchone()
+        if not run or run["status"] != "paused":
+            raise SkillFlowError(f"Run '{run_id}' is not paused")
+        row = conn.execute(
+            "SELECT * FROM skillflow_steps WHERE run_id = ? AND status = 'completed' "
+            "ORDER BY completion_seq DESC, id DESC LIMIT 1", (run_id,)).fetchone()
+        resolver = self._get_resolver(run["graph_name"], version=run["graph_version"])
+        node = resolver.get_node(row["step_id"]) if row else None
+        if node is None or not node.checkpoint:
+            raise SkillFlowError("The latest completed step is not a checkpoint")
+        latest = conn.execute(
+            "SELECT id FROM skillflow_steps WHERE run_id = ? AND step_id = ? "
+            "ORDER BY id DESC LIMIT 1", (run_id, row["step_id"])).fetchone()
+        if latest["id"] != row["id"]:
+            raise SkillFlowError("Checkpoint has a newer execution")
+        outputs = self._deserialize(row["outputs_json"])
+        expected = {"step_instance_id": row["id"], "version": row["version"],
+                    "completion_seq": row["completion_seq"],
+                    "outputs_sha256": hashlib.sha256(
+                        self._checkpoint_json(outputs).encode("utf-8")).hexdigest()}
+        return {"step_id": row["step_id"], "outputs": outputs,
+                "expected_checkpoint": expected, "next_node": run["current_node"] or "",
+                "label": node.checkpoint_label, "reject_to": node.checkpoint_reject_to,
+                "project_id": run["project_id"], "graph_version": run["graph_version"],
+                "graph_digest": run["graph_digest"]}
 
-        Returns the next node id (the review step) so the host can surface it
-        in the response without an extra DB round-trip.
+    def get_checkpoint(self, run_id: str) -> dict:
+        """Read the paused checkpoint's retained outputs and approval identity.
 
-        Raises SkillFlowError if the run is not paused, or if the last
-        completed step is not a checkpoint.
+        Never reads mutable output files. Hosts must authenticate the human
+        separately and retain this exact identity with their approval decision.
         """
+        with self._ro() as conn:
+            return self._checkpoint_in_transaction(conn, run_id)
+
+    def approve_checkpoint(self, run_id: str, *, expected_checkpoint: dict | None = None,
+                           decision_id: str = "") -> str:
+        """Atomically approve one retained checkpoint, or replay that exact decision.
+
+        ``expected_checkpoint`` comes from :meth:`get_checkpoint`. A decision id
+        is globally unique in this engine DB: reuse with another run or expected
+        identity is refused. Exact replay returns the recorded next node without
+        advancing or approving a later checkpoint. This CAS is not human auth.
+        """
+        keys = {"step_instance_id", "version", "completion_seq", "outputs_sha256"}
+        if (not isinstance(expected_checkpoint, dict) or set(expected_checkpoint) != keys
+                or any(type(expected_checkpoint[k]) is not int or expected_checkpoint[k] < 0
+                       for k in ("step_instance_id", "version", "completion_seq"))
+                or not isinstance(expected_checkpoint["outputs_sha256"], str)
+                or len(expected_checkpoint["outputs_sha256"]) != 64
+                or any(c not in "0123456789abcdef" for c in expected_checkpoint["outputs_sha256"])
+                or not isinstance(decision_id, str) or not decision_id.strip()):
+            raise SkillFlowError("Expected checkpoint identity and decision_id are required")
+        expected_json = self._checkpoint_json(expected_checkpoint)
+        expected_checkpoint = json.loads(expected_json)  # detach the caller-owned token
         with self._tx() as conn:
-            run = conn.execute(
-                "SELECT * FROM skillflow_runs WHERE id = ?", (run_id,)
-            ).fetchone()
-            if not run:
-                raise SkillFlowError(f"Run not found: {run_id}")
-            if run["status"] != "paused":
-                raise SkillFlowError(
-                    f"Run '{run_id}' is not paused (status: '{run['status']}')"
-                )
-
-            resolver = self._get_resolver(run["graph_name"],
-                                          version=run["graph_version"])
-
-            # Find the last completed checkpoint step (completion order;
-            # completed_at alone has 1s resolution so same-second completions
-            # would tie-break by nothing — completion_seq is a strict order)
-            steps = conn.execute(
-                "SELECT step_id FROM skillflow_steps "
-                "WHERE run_id = ? AND status = 'completed' "
-                "ORDER BY completion_seq DESC, id DESC",
-                (run_id,),
-            ).fetchall()
-
-            checkpoint_step_id = ""
-            checkpoint_node = None
-            for s in steps:
-                node = resolver.get_node(s["step_id"])
-                if node and node.checkpoint:
-                    checkpoint_step_id = s["step_id"]
-                    checkpoint_node = node
-                    break
-
-            if not checkpoint_step_id:
-                raise SkillFlowError(
-                    f"No checkpoint step found in completed steps for run '{run_id}'"
-                )
-
-            # The run's current_node was already set to the review step when
-            # advance_run paused the run.  Just resume — advance_run on the
-            # next tick will claim the review step.
-            next_node = run["current_node"] or ""
+            prior = conn.execute(
+                "SELECT payload_json FROM skillflow_outbox WHERE event_type='checkpoint_approved' "
+                "AND json_extract(payload_json, '$.decision_id') = ?", (decision_id,)).fetchone()
+            if prior:
+                recorded = self._deserialize(prior["payload_json"])
+                if (recorded["run_id"] != run_id or
+                        self._checkpoint_json(recorded["expected_checkpoint"]) != expected_json):
+                    raise SkillFlowError("Approval decision_id collision")
+                return recorded["next_node"]
+            checkpoint = self._checkpoint_in_transaction(conn, run_id)
+            if self._checkpoint_json(checkpoint["expected_checkpoint"]) != expected_json:
+                raise SkillFlowError("Stale checkpoint approval identity")
+            previous_approval = conn.execute(
+                "SELECT 1 FROM skillflow_outbox WHERE event_type='checkpoint_approved' "
+                "AND json_extract(payload_json, '$.run_id') = ? "
+                "AND json_extract(payload_json, '$.expected_checkpoint.step_instance_id') = ? LIMIT 1",
+                (run_id, expected_checkpoint["step_instance_id"])).fetchone()
+            if previous_approval:
+                raise SkillFlowError("Checkpoint instance was already approved")
+            payload = {k: checkpoint[k] for k in
+                       ("step_id", "next_node", "label", "project_id", "graph_version", "graph_digest")}
+            payload.update(run_id=run_id, decision_id=decision_id,
+                           expected_checkpoint=expected_checkpoint,
+                           _run_id=run_id, _step_id=checkpoint["step_id"])
             conn.execute(
-                "UPDATE skillflow_runs SET status = 'running', "
-                "updated_at = datetime('now') WHERE id = ?",
-                (run_id,),
-            )
-
-            # Emit via notification bus for real-time TUI/SSE notification
-            self.notifications.publish_sync(
-                "checkpoint_approved",
-                {
-                    "run_id": run_id,
-                    "step_id": checkpoint_step_id,
-                    "project_id": run["project_id"],
-                    "label": checkpoint_node.checkpoint_label if checkpoint_node else "",
-                    "next_node": next_node,
-                },
-                step_id=checkpoint_step_id, run_id=run_id,
-            )
-
-            # Durable trace record
-            self.trace(run_id, "step", "checkpoint_approved", {
-                "step_id": checkpoint_step_id,
-                "next_node": next_node,
-            })
-
-            return next_node
+                "INSERT INTO skillflow_outbox(event_type,payload_json,stream_target) VALUES ('checkpoint_approved',?,'ui')",
+                (self._serialize(payload),))
+            conn.execute("UPDATE skillflow_runs SET status='running', updated_at=datetime('now') WHERE id=?",
+                         (run_id,))
+        # Subscribers see the already committed event; do not insert it twice.
+        self.notifications.publish_sync("checkpoint_approved", payload,
+            step_id=checkpoint["step_id"], run_id=run_id, persist=False)
+        self.trace(run_id, "step", "checkpoint_approved", payload,
+                   step_id=checkpoint["step_id"],
+                   step_instance_id=expected_checkpoint["step_instance_id"])
+        return checkpoint["next_node"]
 
     # ── Liveness heartbeat ────────────────────────────────────────
 

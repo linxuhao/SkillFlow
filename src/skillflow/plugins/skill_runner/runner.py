@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from skillflow.exceptions import SkillFlowError
 from skillflow.core import SkillFlow, StepResult, ClaimedStep
 from skillflow.exceptions import IsolationUnavailable
 
@@ -27,7 +28,7 @@ from skillflow.exceptions import IsolationUnavailable
 class SkillResponse:
     """Returned by SkillTool to instruct the agent what to do next."""
 
-    status: str  # "in_progress" | "paused" | "completed" | "failed"
+    status: str  # "in_progress" | "paused" | "approved" | "completed" | "failed"
     run_id: str = ""
     step: str = ""
     instruction: str = ""
@@ -37,6 +38,8 @@ class SkillResponse:
     tool_params: dict = field(default_factory=dict)
     checkpoint_label: str = ""
     checkpoint_reject_to: str = ""
+    expected_checkpoint: dict = field(default_factory=dict)
+    decision_id: str = ""
     outputs: dict = field(default_factory=dict)
     error: str = ""
     steps_completed: int = 0
@@ -186,7 +189,8 @@ class SkillTool:
                  result: dict | None = None,
                  feedback: str = "",
                  redirect_to: str = "",
-                 run_id: str = "") -> SkillResponse:
+                 run_id: str = "", expected_checkpoint: dict | None = None,
+                 decision_id: str = "") -> SkillResponse:
         """Execute an action and return the next instruction.
 
         Args:
@@ -200,6 +204,17 @@ class SkillTool:
         Returns:
             SkillResponse with the next instruction or termination status.
         """
+        # Approval replay must never reset a claim owned by the next executor.
+        if action == "approve":
+            rid = run_id or self.run_id or ""
+            try:
+                next_node = self.sf.approve_checkpoint(rid,
+                    expected_checkpoint=expected_checkpoint, decision_id=decision_id)
+            except SkillFlowError as exc:
+                return SkillResponse(status="failed", run_id=rid, error=str(exc))
+            return SkillResponse(status="approved", run_id=rid, step=next_node,
+                                 expected_checkpoint=expected_checkpoint, decision_id=decision_id)
+
         # ── Reconnect to existing run if run_id provided ──────────
         if run_id and self.run_id is None:
             run = self.sf.get_run(run_id)
@@ -252,12 +267,6 @@ class SkillTool:
                 StepResult(outputs=outputs, flags=flags),
             )
             self._current_claim = None
-
-        elif action == "approve" and self.run_id is not None:
-            run = self.sf.get_run(self.run_id)
-            if run and run.get("status") == "paused":
-                self.sf.resume_run(self.run_id)
-                self._current_claim = None
 
         elif action == "reject" and self.run_id is not None:
             run = self.sf.get_run(self.run_id)
@@ -430,36 +439,17 @@ class SkillTool:
         )
 
     def _paused_response(self, run: dict) -> SkillResponse:
-        """Build a checkpoint pause response."""
-        # The checkpoint step is the last completed step, not current_node
-        # (current_node points to the NEXT step, the checkpoint target)
-        label = "Review"
-        checkpoint_step_id = ""
-        checkpoint_reject_to = ""
+        """Render retained completed data, never mutable checkpoint files."""
         try:
-            steps = self.sf.get_steps(self.run_id)
-            completed = [s for s in steps if s.get("status") == "completed"]
-            if completed:
-                last_step_id = completed[-1]["step_id"]
-                resolver = self.sf._get_resolver_for_run(self.run_id)
-                node = resolver.get_node(last_step_id)
-                if node and node.checkpoint:
-                    checkpoint_step_id = last_step_id
-                    if node.checkpoint_label:
-                        label = node.checkpoint_label
-                    if node.checkpoint_reject_to:
-                        checkpoint_reject_to = node.checkpoint_reject_to
-        except Exception:
-            pass
-
+            checkpoint = self.sf.get_checkpoint(self.run_id)
+        except SkillFlowError:
+            # A host's ordinary manual pause is not a checkpoint approval.
+            return SkillResponse(status="paused", run_id=self.run_id or "",
+                                 checkpoint_label="Review")
+        label = checkpoint["label"] or "Review"
         return SkillResponse(
-            status="paused",
-            run_id=self.run_id or "",
-            step=checkpoint_step_id,
-            checkpoint_label=label,
-            checkpoint_reject_to=checkpoint_reject_to,
-            instruction=(
-                f"Pipeline paused at checkpoint: {label}\n"
-                f"Approve to continue, or reject with feedback to request changes."
-            ),
+            status="paused", run_id=self.run_id or "", step=checkpoint["step_id"],
+            checkpoint_label=label, checkpoint_reject_to=checkpoint["reject_to"],
+            expected_checkpoint=checkpoint["expected_checkpoint"], outputs=checkpoint["outputs"],
+            instruction=f"Pipeline paused at checkpoint: {label}\nApprove to continue, or reject with feedback to request changes.",
         )
