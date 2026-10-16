@@ -12,6 +12,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from skillflow import closed_git
+
 
 def target_for(node, slot: str | None = None) -> str:
     target = getattr(node, "output_target", "artifact")
@@ -110,9 +112,8 @@ def code_write_path(root: Path, relative: str) -> Path:
     path = code_path(root, relative)
     relative = path.relative_to(root.resolve()).as_posix()
     try:
-        probe = subprocess.run(["git", "check-ignore", "--verbose", "-z", "--stdin"],
-                               input=relative + "\0", cwd=root, capture_output=True,
-                               text=True, timeout=60)
+        probe = closed_git.run(root, "check-ignore", "--verbose", "-z", "--stdin",
+                               input=relative + "\0", check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         raise RuntimeError(f"Could not check Git ignore status for code output {relative!r}: {exc}") from exc
     if probe.returncode == 1:
@@ -164,15 +165,21 @@ def atomic_write_bytes(path: Path, content: bytes) -> None:
 
 
 def git(root: Path, *args: str) -> str:
-    result = subprocess.run(["git", "--literal-pathspecs", *args], cwd=root, capture_output=True,
-                            text=True, timeout=60)
-    if result.returncode:
-        raise RuntimeError(f"git {args[0]} failed: {(result.stderr or result.stdout).strip()}")
-    return result.stdout
+    """One Git command under the closed profile (see closed_git).
+
+    The profile closes configuration, not commands: delivery itself uses only
+    metadata commands here and raw-file publication in closed_git.
+    """
+    return closed_git.run(root, *args).stdout
 
 
 class CodeOutput:
-    """Metadata for the sole writer of a code step. No code staging or rollback."""
+    """Metadata for the sole writer of a code step. No code staging or rollback.
+
+    Git is reached only through closed_git: working bytes are read and
+    committed raw, so a repository hook, filter, fsmonitor or signing program
+    never runs in the engine while preparing, publishing or checking a step.
+    """
     def __init__(self, root: Path, journal: Path):
         if not root or not root.is_absolute() or not root.is_dir():
             raise ValueError("output.target=code requires a resolver-owned code directory")
@@ -184,36 +191,53 @@ class CodeOutput:
             raise RuntimeError("Code output journal belongs to another worktree")
         return data
 
+    def _repo(self):
+        return closed_git.open_repo(self.root)
+
+    def _head(self, repo, data: dict | None) -> str:
+        head = repo.head()
+        if head is None:
+            raise RuntimeError("git rev-parse failed: code worktree has no HEAD commit")
+        if repo.top != self.root:
+            raise RuntimeError(f"Code directory {self.root} is not its Git worktree top level ({repo.top})")
+        # A commit recorded just before HEAD moved: adopt it, never re-commit.
+        if data and data.get("pending_commit") and head == data["pending_commit"]:
+            data["head_commit"] = head
+            data.pop("pending_commit")
+            atomic_json(self.journal, data)
+        return head
+
     def prepare(self, run_id: str, instance: int, item: str | None, *, inherited: dict | None = None) -> None:
-        head = git(self.root, "rev-parse", "HEAD").strip()
         previous = self.load() if self.journal.exists() else None
-        if previous and previous.get("run_id") == run_id and previous.get("instance") == instance:
-            if head not in (previous["base_commit"], previous.get("head_commit")):
-                raise RuntimeError("Code worktree HEAD changed outside this step")
-            return
-        # Never inherit another task's unfinished changes. Failure retains them.
-        if git(self.root, "status", "--porcelain", "--untracked-files=all").strip():
-            raise RuntimeError("New code step requires a clean worktree; pending changes were retained. "
-                               "Resume their owning step or explicitly recover them first.")
-        if (previous and previous.get("run_id") == run_id
-                and previous.get("item") == item and head == previous["head_commit"]):
-            # An immediate review revision keeps A -> C2, not just C1 -> C2.
-            previous["instance"] = instance
-            atomic_json(self.journal, previous)
-            return
-        # A NEW execution after intervening accepted code steps starts at the
-        # current clean HEAD. Final verification and graph-level replans revisit
-        # the same step id legitimately. Only a resumed SAME instance must stay
-        # pinned to its old HEAD (guarded above); no dirty work is ever adopted.
-        base, paths = head, []
-        if inherited and not previous:
-            recovery = inherited["recovery_commit"]
-            base = inherited["base_commit"]
-            git(self.root, "merge-base", "--is-ancestor", recovery, head)
-            git(self.root, "merge-base", "--is-ancestor", base, recovery)
-            paths = list(inherited.get("paths", []))
-            for path in paths:
-                code_path(self.root, path)
+        with self._repo() as repo:
+            head = self._head(repo, previous)
+            if previous and previous.get("run_id") == run_id and previous.get("instance") == instance:
+                if head not in (previous["base_commit"], previous.get("head_commit")):
+                    raise RuntimeError("Code worktree HEAD changed outside this step")
+                return
+            # Never inherit another task's unfinished changes. Failure retains them.
+            if repo.dirty(head):
+                raise RuntimeError("New code step requires a clean worktree; pending changes were retained. "
+                                   "Resume their owning step or explicitly recover them first.")
+            if (previous and previous.get("run_id") == run_id
+                    and previous.get("item") == item and head == previous["head_commit"]):
+                # An immediate review revision keeps A -> C2, not just C1 -> C2.
+                previous["instance"] = instance
+                atomic_json(self.journal, previous)
+                return
+            # A NEW execution after intervening accepted code steps starts at the
+            # current clean HEAD. Final verification and graph-level replans revisit
+            # the same step id legitimately. Only a resumed SAME instance must stay
+            # pinned to its old HEAD (guarded above); no dirty work is ever adopted.
+            base, paths = head, []
+            if inherited and not previous:
+                recovery = inherited["recovery_commit"]
+                base = inherited["base_commit"]
+                repo.git(self.root, "merge-base", "--is-ancestor", recovery, head)
+                repo.git(self.root, "merge-base", "--is-ancestor", base, recovery)
+                paths = list(inherited.get("paths", []))
+                for path in paths:
+                    code_path(self.root, path)
         atomic_json(self.journal, {"run_id": run_id, "instance": instance,
                     "item": item, "root": str(self.root), "base_commit": base,
                     "head_commit": head, "paths": paths})
@@ -230,11 +254,13 @@ class CodeOutput:
     def assert_published(self, receipt: Path) -> None:
         """A later hook cannot change the candidate after its commit/receipt."""
         data = self.load()
-        if git(self.root, "rev-parse", "HEAD").strip() != data["head_commit"]:
-            raise RuntimeError("Code HEAD changed after delivery; candidate is not accepted")
-        if git(self.root, "status", "--porcelain", "--untracked-files=all").strip():
-            raise RuntimeError("Code changed after delivery; pending changes retained. "
-                               "Run mutating checks before code commit, in validation.")
+        with self._repo() as repo:
+            head = self._head(repo, data)
+            if head != data["head_commit"]:
+                raise RuntimeError("Code HEAD changed after delivery; candidate is not accepted")
+            if repo.dirty(head):
+                raise RuntimeError("Code changed after delivery; pending changes retained. "
+                                   "Run mutating checks before code commit, in validation.")
         if not receipt.is_file():
             raise RuntimeError("Code delivery did not publish its change receipt")
         report = json.loads(receipt.read_text(encoding="utf-8"))
@@ -244,36 +270,38 @@ class CodeOutput:
 
     def commit(self, receipt: Path, message: str) -> dict:
         data = self.load()
-        if git(self.root, "rev-parse", "HEAD").strip() != data["head_commit"]:
-            raise RuntimeError("Code worktree HEAD changed outside this step; refusing commit")
         paths = sorted(set(data["paths"]))
         for path in paths:
             code_path(self.root, path)
-        # NUL-delimited names, not porcelain slicing: spaces/unicode/renames work.
-        dirty = set(filter(None, git(self.root, "diff", "--name-only", "-z", "HEAD").split("\0")))
-        dirty.update(filter(None, git(self.root, "ls-files", "--others", "--exclude-standard", "-z").split("\0")))
-        unexpected = dirty - set(paths)
-        if unexpected:
-            raise RuntimeError("Unreported code changes retained, not committed: " + ", ".join(sorted(unexpected)))
-        for path in paths:
-            if (self.root / path).exists():
-                probe = subprocess.run(["git", "check-ignore", "-q", "--", path], cwd=self.root)
-                if probe.returncode == 0:
-                    raise RuntimeError(f"Code output is git-ignored and would not be delivered: {path}")
-                if probe.returncode not in (0, 1):
-                    raise RuntimeError(f"Could not check ignore status for code output: {path}")
-        changed = sorted(dirty & set(paths))
-        if changed:
-            git(self.root, "add", "-A", "--", *changed)
-            git(self.root, "commit", "--only", "-m", message, "--", *changed)
-            data["head_commit"] = git(self.root, "rev-parse", "HEAD").strip()
+        selected = set(paths)
+
+        def admit(dirty, head):
+            if head != data["head_commit"]:
+                raise RuntimeError("Code worktree HEAD changed outside this step; refusing commit")
+            unexpected = dirty - selected
+            if unexpected:
+                raise RuntimeError("Unreported code changes retained, not committed: " + ", ".join(sorted(unexpected)))
+            for path in sorted(repo.ignored([p for p in paths if (self.root / p).exists()])):
+                raise RuntimeError(f"Code output is git-ignored and would not be delivered: {path}")
+
+        def pending(commit):
+            data["pending_commit"] = commit
             atomic_json(self.journal, data)
-        # A metadata artifact replaces the old duplicate source tree.
-        all_changed = list(filter(None, git(self.root, "diff", "--name-only", "-z",
-                             data["base_commit"], data["head_commit"], "--", *paths).split("\0"))) if paths else []
+
+        with self._repo() as repo:
+            self._head(repo, data)
+            result = repo.publish(selected.__contains__, message, before=admit, on_commit=pending)
+            if result["committed"]:
+                data["head_commit"] = result["commit"]
+                data.pop("pending_commit", None)
+                atomic_json(self.journal, data)
+            # A metadata artifact replaces the old duplicate source tree.
+            all_changed = list(filter(None, repo.git(
+                self.root, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z",
+                data["base_commit"], data["head_commit"], "--", *paths).split("\0"))) if paths else []
         report = {"target": "code", "run_id": data["run_id"], "step_instance_id": data["instance"],
                   "base_commit": data["base_commit"], "commit": data["head_commit"],
                   "files": all_changed, "note": "Source files live in the run worktree."}
         atomic_json(receipt, report)
-        return {"passed": True, "files": all_changed, "committed": bool(changed),
+        return {"passed": True, "files": all_changed, "committed": result["committed"],
                 "commit": data["head_commit"]}

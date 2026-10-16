@@ -1,7 +1,8 @@
 name: repo_apply
 description: >
   Apply files from a source directory to the project repository.
-  Copies files, performs git add + git commit. No commit hash is returned.
+  Copies files, then commits the `git add -A` result through closed Git (raw
+  bytes, no repository hook/filter/signing program). No commit hash is returned.
   Returns {applied: bool, committed: bool, files: [...], error?: "..."}.
   An empty source dir, or files identical to the repo ("nothing to commit"),
   yields applied: true, committed: false — a pass does not prove a commit was made.

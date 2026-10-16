@@ -1,24 +1,28 @@
-"""Pre-pipeline git sync — fetch and pull before DPE starts.
+"""Pre-pipeline git sync policy check.
 
 Skips silently:
   - Not a git repo
+  - Linked (pinned run) worktree
+  - Policy other than "pull" (the default)
   - No remote (local-only)
-  - Already up-to-date
 
-Pulls when fast-forward safe.  Fails with a clear, user-readable message
-when the remote has diverged (merge conflict).
+``policy: "pull"`` against a repository with a remote is reported as
+unavailable. Fetch and fast-forward run repository-configured transport,
+credential, hook and checkout-filter programs, and the engine does not run
+repository-selected programs in its own process (see closed_git). There is
+no raw equivalent here and no fallback to native fetch/pull.
 """
 
-import subprocess
 from pathlib import Path
+
+from skillflow import closed_git
 
 
 def git_sync_pre(project_root: str, policy: str = "skip") -> dict:
-    """Fetch origin and fast-forward pull, when a config asks for it.
+    """Decide whether a config's pre-pipeline sync can run in the engine.
 
     Returns:
-        {"synced": true/false, "action": "skip"|"up-to-date"|"pulled",
-         "pulled": N, "error": "..."}
+        {"synced": true/false, "action": "skip"|"unavailable", "error": "..."}
 
     ``policy`` is explicit and defaults to ``"skip"`` — no network. This tool
     reaches the network and moves a working tree, and until per-run isolation
@@ -28,8 +32,9 @@ def git_sync_pre(project_root: str, policy: str = "skip") -> dict:
     repository" branch below and did nothing. Routing it at the real tree is a
     correctness fix; inheriting a fetch and a pull of somebody's repository as a
     side effect of that fix is not. So the effect is opted into by name
-    (``policy: "pull"``), and a config that wants the old syncing behaviour still
-    gets it, deliberately.
+    (``policy: "pull"``). That opt-in no longer fetches or pulls inside the
+    engine: it reports ``unavailable`` with ``synced: false`` so the config's
+    failure route is taken visibly instead of silently skipping the sync.
 
     A LINKED WORKTREE is refused whatever the policy says. A run worktree is
     pinned to the base SHA the run was created at; fetching and fast-forwarding
@@ -39,8 +44,7 @@ def git_sync_pre(project_root: str, policy: str = "skip") -> dict:
     """
     if not project_root or not Path(project_root).is_absolute():
         # `Path("").resolve()` is the process CWD — for a hosted engine, the
-        # server's own checkout, which `git fetch`/`git pull` below would then
-        # operate on. Refuse instead of guessing.
+        # server's own checkout. Refuse instead of guessing.
         return {"synced": False, "action": "error",
                 "error": f"git_sync_pre: project_root must be an absolute path "
                          f"(got {project_root!r}) — refusing to resolve against "
@@ -68,93 +72,14 @@ def git_sync_pre(project_root: str, policy: str = "skip") -> dict:
                           f"(set policy: \"pull\" to enable)"}
 
     # ── No remote → silent skip ───────────────────────────────────────
-    r = _git(root, "remote")
-    if not r.stdout.strip():
+    r = closed_git.run(root, "remote", check=False)
+    if r.returncode == 0 and not r.stdout.strip():
         return {"synced": True, "action": "skip",
                 "detail": "no remote configured (local-only)"}
 
-    # ── Fetch ─────────────────────────────────────────────────────────
-    r = _git(root, "fetch", "origin")
-    if r.returncode != 0:
-        return {"synced": False, "action": "error",
-                "error": "git fetch origin failed.  Check network and remote URL."}
-
-    # ── Compare HEAD vs origin ────────────────────────────────────────
-    branch = _current_branch(root)
-    if not branch:
-        return {"synced": True, "action": "skip",
-                "detail": "detached HEAD — skipping sync"}
-
-    remote_ref = f"origin/{branch}"
-
-    # Does the remote branch exist?
-    r = _git(root, "rev-parse", "--verify", remote_ref)
-    if r.returncode != 0:
-        return {"synced": True, "action": "skip",
-                "detail": f"no remote tracking branch '{remote_ref}'"}
-
-    local_sha = _git(root, "rev-parse", "HEAD").stdout.strip()
-    remote_sha = _git(root, "rev-parse", remote_ref).stdout.strip()
-
-    if local_sha == remote_sha:
-        return {"synced": True, "action": "up-to-date"}
-
-    # ── Check if fast-forward is safe ─────────────────────────────────
-    r = _git(root, "merge-base", "--is-ancestor", "HEAD", remote_ref)
-    can_ff = (r.returncode == 0)
-
-    if not can_ff:
-        # Remote has diverged — explicit failure with actionable message
-        short_local = _git(root, "log", "--oneline", "-3", "HEAD").stdout.strip()
-        short_remote = _git(root, "log", "--oneline", "-3", remote_ref).stdout.strip()
-
-        return {
-            "synced": False,
-            "action": "conflict",
-            "error": (
-                "Remote has diverged from local — merge conflict would occur.\n"
-                "Resolve manually before retrying the pipeline.\n"
-                f"  Branch: {branch}\n"
-                f"  Local HEAD:\n{_indent(short_local, '    ')}\n"
-                f"  Remote origin/{branch}:\n{_indent(short_remote, '    ')}\n"
-                "To fix:\n"
-                "  git pull --rebase   # or\n"
-                "  git merge origin/<branch>"
-            ),
-        }
-
-    # ── Fast-forward safe → pull ──────────────────────────────────────
-    r = _git(root, "pull", "--ff-only", "origin", branch)
-    if r.returncode != 0:
-        return {"synced": False, "action": "error",
-                "error": f"git pull --ff-only failed:\n{r.stderr.strip()}"}
-
-    # Count pulled commits
-    count_r = _git(root, "rev-list", "--count", f"{local_sha}..HEAD")
-    pulled = 0
-    try:
-        pulled = int(count_r.stdout.strip())
-    except (ValueError, TypeError):
-        pass
-
-    return {"synced": True, "action": "pulled", "pulled": pulled}
-
-
-# ── Helpers ──────────────────────────────────────────────────────────────
-
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args], cwd=repo, capture_output=True, text=True
-    )
-
-
-def _current_branch(repo: Path) -> str | None:
-    r = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
-    branch = r.stdout.strip()
-    if branch == "HEAD":
-        return None  # detached
-    return branch
-
-
-def _indent(text: str, prefix: str) -> str:
-    return "\n".join(prefix + line for line in text.splitlines())
+    return {"synced": False, "action": "unavailable",
+            "error": ("git_sync_pre policy \"pull\" is unavailable in the engine: git fetch/pull "
+                      "would run repository-configured transport, credential, hook and "
+                      "checkout-filter programs in the engine process, which the closed Git "
+                      "policy does not allow. Nothing was fetched or changed. Sync this "
+                      "checkout outside the engine before starting the pipeline.")}

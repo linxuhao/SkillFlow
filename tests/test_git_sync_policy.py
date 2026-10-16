@@ -38,32 +38,35 @@ def test_default_policy_performs_no_network_call(tmp_path, monkeypatch):
                    cwd=repo, check=True)
 
     calls = []
-    import skillflow.tools.git_sync_pre.impl as impl
     real = subprocess.run
 
     def spy(args, **kw):
         calls.append(list(args))
         return real(args, **kw)
 
-    monkeypatch.setattr(impl.subprocess, "run", spy)
+    monkeypatch.setattr(subprocess, "run", spy)
     res = git_sync_pre(project_root=str(repo))
     assert res["action"] == "skip"
     assert not any("fetch" in c for c in calls), f"fetched by default: {calls}"
     assert not any("pull" in c for c in calls), f"pulled by default: {calls}"
 
 
-def test_explicit_policy_still_syncs_a_direct_checkout(tmp_path):
+def test_explicit_policy_is_unavailable_for_a_direct_checkout(tmp_path):
+    """Opting in by name is visible but no longer fetches inside the engine:
+    fetch/pull would run repository-configured programs (closed Git policy)."""
     origin = tmp_path / "origin.git"
     subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
     repo = tmp_path / "repo"
-    _init_repo(repo)
+    base = _init_repo(repo)
     subprocess.run(["git", "remote", "add", "origin", str(origin)],
                    cwd=repo, check=True)
     subprocess.run(["git", "push", "-q", "-u", "origin", "main"],
                    cwd=repo, check=True)
     res = git_sync_pre(project_root=str(repo), policy="pull")
-    assert res["synced"] is True
-    assert res["action"] in ("up-to-date", "pulled")
+    assert res["synced"] is False
+    assert res["action"] == "unavailable"
+    assert subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                          capture_output=True, text=True).stdout.strip() == base
 
 
 def test_a_linked_worktree_is_never_synced_even_when_asked(tmp_path):

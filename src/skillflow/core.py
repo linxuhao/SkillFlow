@@ -3972,19 +3972,13 @@ class SkillFlow:
         same plumbing can version a sibling artifact — e.g. the accumulating
         checkpoint-feedback log at ``{config}/_feedback/{step}.md``.
         """
-        import subprocess
+        from skillflow import closed_git
         try:
             root = self._workspace.get_project_path(pid)
             if not root or not root.is_dir():
                 return
-            env = {**os.environ, "GIT_TERMINAL_PROMPT": "0",
-                   "GIT_AUTHOR_NAME": "skillflow", "GIT_AUTHOR_EMAIL": "skillflow@localhost",
-                   "GIT_COMMITTER_NAME": "skillflow", "GIT_COMMITTER_EMAIL": "skillflow@localhost"}
-            def _git(*args, check=False):
-                return subprocess.run(["git", *args], cwd=str(root), env=env,
-                                      capture_output=True, text=True, check=check)
             if not (root / ".git").is_dir():
-                _git("init", "-q")
+                closed_git.run(root, "init", "-q", check=False)
             # Keep volatile/large files out of history (idempotent).
             gi = root / ".gitignore"
             want = ["*.tmp/", "trace.db", "trace.db-*", "*.db-wal", "*.db-shm",
@@ -3993,15 +3987,16 @@ class SkillFlow:
             missing = [w for w in want if w not in have]
             if missing:
                 gi.write_text("\n".join(have + missing).strip() + "\n", encoding="utf-8")
-                _git("add", ".gitignore")
-            # Stage just this artifact (one commit == one step output / feedback round).
+            # Stage just this artifact (one commit == one step output / feedback
+            # round) plus .gitignore, raw, through the closed Git profile: an
+            # artifact .gitattributes cannot select a filter/hook program here.
             rel = rel or f"{config_name}/{step_id}"
-            _git("add", "--", rel)
-            # Skip an empty commit (nothing staged → step wrote nothing new).
-            if _git("diff", "--cached", "--quiet").returncode == 0:
-                return
             msg = f"{msg_prefix}{rel}" + (f" @ {run_id[:8]}" if run_id else "")
-            _git("commit", "-q", "-m", msg)
+            identity = {"GIT_AUTHOR_NAME": "skillflow", "GIT_AUTHOR_EMAIL": "skillflow@localhost",
+                        "GIT_COMMITTER_NAME": "skillflow", "GIT_COMMITTER_EMAIL": "skillflow@localhost"}
+            with closed_git.open_repo(root, identity=identity) as repo:
+                # Skip an empty commit (nothing changed → step wrote nothing new).
+                repo.publish(lambda p: p == ".gitignore" or p == rel or p.startswith(rel + "/"), msg)
         except Exception:
             pass  # best-effort: artifact history must never break a run
 
@@ -4067,7 +4062,7 @@ class SkillFlow:
         off / no git / no versions. Recover a version with
         ``git show <commit>:<config_name>/<step_id>/<file>`` at the workspace root.
         """
-        import subprocess
+        from skillflow import closed_git
         out: list[dict] = []
         try:
             if not self._workspace:
@@ -4076,9 +4071,8 @@ class SkillFlow:
             if not root or not (root / ".git").is_dir():
                 return out
             rel = f"{config_name}/{step_id}"
-            res = subprocess.run(
-                ["git", "log", "--pretty=%H%x1f%cI%x1f%s", "--", rel],
-                cwd=str(root), capture_output=True, text=True)
+            res = closed_git.run(root, "log", "--pretty=%H%x1f%cI%x1f%s", "--", rel,
+                                 check=False)
             for line in res.stdout.splitlines():
                 parts = line.split("\x1f")
                 if len(parts) == 3:

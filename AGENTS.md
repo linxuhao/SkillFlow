@@ -258,3 +258,21 @@ it. RunnerService, MCP and CLI forward the explicit pair and return `approved`;
 worker. Hosts authenticate actual human decisions separately. This private Source
 candidate does not bump, publish, install or deploy an engine. Official1.5.93
 runner slot/overview composition belongs to the coordinator's separate round.
+
+
+## Closed engine Git consumers (SOURCE candidate; sdk.code-output-git-cannot-run-repository-programs)
+
+`skillflow/closed_git.py` is the only engine path to Git. CodeOutput write
+preflight/prepare/assert_published/commit, repo_apply, draft_commit, artifact
+history and git_sync_pre use its closed profile, which drops inherited GIT_*
+routing, turns system config off, replaces global config with identity/
+safe.directory/excludes data, and overrides hooks/fsmonitor/signing/diff/
+credential/transport. They also use its raw no-follow file hashing and
+private-index publish: owned index.lock, unsigned hook-free commit-tree,
+journal pending_commit, HEAD compare-and-set, then index install. Converting
+attributes (filter/encoding/ident/CRLF), unmerged entries and git_sync_pre
+pull are refused visibly, with no native fallback. Existing clean-tree,
+unrelated-change, receipt and add -A semantics are preserved. Do not add a
+native `git add`/`status`/`commit`/`diff`-against-worktree call to the engine.
+See README "Closed Git" and tests/test_git_consumers_run_no_repository_programs.py.
+This source candidate does not bump, publish, install or deploy an engine.
