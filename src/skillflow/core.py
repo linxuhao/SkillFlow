@@ -5401,16 +5401,7 @@ class SkillFlow:
                         "UPDATE skillflow_runs SET current_node = ?, status = 'paused',"
                         " updated_at = datetime('now') WHERE id = ?",
                         (ckpt_target, run_id))
-                    _lbl = ckpt_node.checkpoint_label or ckpt_node.name or step_id
-                    self.notifications.publish_sync(
-                        "checkpoint_paused",
-                        {"step_id": step_id, "label": _lbl, "next_node": ckpt_target,
-                         "project_id": run_row["project_id"],
-                         "graph_name": run_row["graph_name"]},
-                        step_id=step_id, run_id=run_id)
-                    self.trace(run_id, "step", "checkpoint_paused",
-                               {"step_id": step_id, "label": _lbl,
-                                "next_node": ckpt_target}, step_id=step_id)
+                    self._record_checkpoint_pause_in_tx(conn, run_id, step_id, ckpt_target, resolver)
                     return None
             # No target — check end_conditions against the current node
             ec = resolver.graph.end_conditions
@@ -6025,26 +6016,7 @@ class SkillFlow:
                         "UPDATE skillflow_runs SET status = 'paused', updated_at = datetime('now') WHERE id = ?",
                         (run_id,),
                     )
-                    # Emit checkpoint_paused via notification bus so
-                    # TUI/SSE consumers see it without polling.
-                    _chk_label = last_node.checkpoint_label or last_node.name or last["step_id"]
-                    self.notifications.publish_sync(
-                        "checkpoint_paused",
-                        {
-                            "step_id": last["step_id"],
-                            "label": _chk_label,
-                            "next_node": next_node,
-                            "project_id": run["project_id"],
-                            "graph_name": run["graph_name"],
-                        },
-                        step_id=last["step_id"], run_id=run_id,
-                    )
-                    # SF-3: record checkpoint pause in durable trace.
-                    self.trace(run_id, "step", "checkpoint_paused", {
-                        "step_id": last["step_id"],
-                        "label": _chk_label,
-                        "next_node": next_node,
-                    }, step_id=last["step_id"])
+                    self._record_checkpoint_pause_in_tx(conn, run_id, last["step_id"], next_node, resolver)
                     return None
 
             # Auto-advance through gates AND auto-execute tool nodes
@@ -6311,6 +6283,35 @@ class SkillFlow:
         return json.dumps(value, sort_keys=True, ensure_ascii=False,
                           separators=(",", ":"), allow_nan=False)
 
+    def _checkpoint_expected(self, row) -> dict:
+        return {"step_instance_id": row["id"], "version": row["version"],
+                "completion_seq": row["completion_seq"],
+                "outputs_sha256": hashlib.sha256(self._checkpoint_json(
+                    self._deserialize(row["outputs_json"])).encode("utf-8")).hexdigest()}
+
+    def _record_checkpoint_pause_in_tx(self, conn, run_id: str, step_id: str,
+                                       next_node: str | None, resolver: GraphResolver) -> None:
+        """Persist the existing routing event with its completed execution identity."""
+        run = conn.execute("SELECT * FROM skillflow_runs WHERE id=?", (run_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM skillflow_steps WHERE run_id=? AND step_id=? AND status='completed' "
+            "ORDER BY completion_seq DESC,id DESC LIMIT 1", (run_id, step_id)).fetchone()
+        node = resolver.get_node(step_id)
+        payload = {"run_id": run_id, "step_id": step_id,
+                   "label": node.checkpoint_label or node.name or step_id,
+                   "next_node": next_node, "project_id": run["project_id"],
+                   "graph_name": run["graph_name"], "graph_version": run["graph_version"],
+                   "graph_digest": graph_digest(resolver.graph.to_dict()),
+                   "expected_checkpoint": self._checkpoint_expected(row),
+                   "_run_id": run_id, "_step_id": step_id, "_timestamp": time.time()}
+        conn.execute(
+            "INSERT INTO skillflow_outbox(event_type,payload_json,stream_target) VALUES ('checkpoint_paused',?,'ui')",
+            (self._serialize(payload),))
+        self.notifications.publish_sync("checkpoint_paused", payload,
+            step_id=step_id, run_id=run_id, persist=False)
+        self.trace(run_id, "step", "checkpoint_paused", payload,
+                   step_id=step_id, step_instance_id=row["id"])
+
     def _checkpoint_in_transaction(self, conn, run_id: str) -> dict:
         run = conn.execute("SELECT * FROM skillflow_runs WHERE id = ?", (run_id,)).fetchone()
         if not run or run["status"] != "paused":
@@ -6318,7 +6319,25 @@ class SkillFlow:
         row = conn.execute(
             "SELECT * FROM skillflow_steps WHERE run_id = ? AND status = 'completed' "
             "ORDER BY completion_seq DESC, id DESC LIMIT 1", (run_id,)).fetchone()
-        resolver = self._get_resolver(run["graph_name"], version=run["graph_version"])
+        # Approval cannot inherit execution's best-effort/current-graph fallback
+        # or a cached resolver after the actual pinned history becomes unavailable.
+        history = conn.execute(
+            "SELECT yaml_text,digest FROM skillflow_graph_versions WHERE name=? AND version=?",
+            (run["graph_name"], run["graph_version"])).fetchone()
+        if history is None or not run["graph_digest"]:
+            raise SkillFlowError("Pinned checkpoint graph history is unavailable")
+        try:
+            data = json.loads(history["yaml_text"])
+            if not isinstance(data, dict):
+                raise ValueError("pinned graph is not an object")
+            if graph_digest(data) != history["digest"] or history["digest"] != run["graph_digest"]:
+                raise ValueError("pinned graph digest mismatch")
+            graph = PipelineGraph._from_dict(data)
+            if graph.name != run["graph_name"] or graph_digest(graph.to_dict()) != history["digest"]:
+                raise ValueError("pinned graph definition mismatch")
+            resolver = GraphResolver(graph)
+        except (ValueError, TypeError, KeyError, AttributeError, GraphValidationError) as exc:
+            raise SkillFlowError("Pinned checkpoint graph history is inconsistent") from exc
         node = resolver.get_node(row["step_id"]) if row else None
         if node is None or not node.checkpoint:
             raise SkillFlowError("The latest completed step is not a checkpoint")
@@ -6328,10 +6347,18 @@ class SkillFlow:
         if latest["id"] != row["id"]:
             raise SkillFlowError("Checkpoint has a newer execution")
         outputs = self._deserialize(row["outputs_json"])
-        expected = {"step_instance_id": row["id"], "version": row["version"],
-                    "completion_seq": row["completion_seq"],
-                    "outputs_sha256": hashlib.sha256(
-                        self._checkpoint_json(outputs).encode("utf-8")).hexdigest()}
+        expected = self._checkpoint_expected(row)
+        phase_row = conn.execute(
+            "SELECT payload_json FROM skillflow_outbox WHERE event_type='checkpoint_paused' "
+            "AND json_extract(payload_json,'$.run_id')=? ORDER BY id DESC LIMIT 1", (run_id,)).fetchone()
+        phase = self._deserialize(phase_row["payload_json"]) if phase_row else {}
+        if (self._checkpoint_json(phase.get("expected_checkpoint")) != self._checkpoint_json(expected)
+                or phase.get("step_id") != row["step_id"]
+                or phase.get("graph_name") != run["graph_name"]
+                or phase.get("graph_version") != run["graph_version"]
+                or phase.get("graph_digest") != run["graph_digest"]
+                or phase.get("next_node") != run["current_node"]):
+            raise SkillFlowError("Run has no matching routed checkpoint pause")
         return {"step_id": row["step_id"], "outputs": outputs,
                 "expected_checkpoint": expected, "next_node": run["current_node"] or "",
                 "label": node.checkpoint_label, "reject_to": node.checkpoint_reject_to,

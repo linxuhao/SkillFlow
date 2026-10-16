@@ -184,10 +184,14 @@ A host must authenticate the human separately, retain the exact displayed
 identity with a durable unique `decision_id`, and call
 `sf.approve_checkpoint(run_id, expected_checkpoint=token, decision_id=id)` or
 `RunnerService.approve` with those same arguments. Neither an actor string nor
-an approval flag grants human authority. Approval checks the pinned graph and
-retained row in the same SQLite transaction as the run transition and durable
-approval outbox event. Exact decision replay is inert; payload collisions or
-stale identities refuse. Normal outbox acknowledgement retains this record;
+an approval flag grants human authority. Approval reads and verifies the actual pinned graph history/digest in its
+transaction, without execution's current-graph fallback or cached evidence.
+The existing `checkpoint_paused` event binds the actual routed graph, completed
+execution, canonical outputs and resume target in the same routing transaction.
+A generic manual pause before routing cannot mint a checkpoint token. New
+approval checks that routed phase and retained row in the same SQLite
+transaction as its run transition and durable approval outbox event. Exact committed decision replay is inert even when later graph history is
+unavailable; payload collisions or stale identities refuse. Normal outbox acknowledgement retains this record;
 explicit history deletion also removes its replay history.
 
 Approval returns an `approved` receipt; call `runner_next` separately for the

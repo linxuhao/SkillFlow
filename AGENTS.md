@@ -247,8 +247,11 @@ keep their existing lifecycle. No model-provided path selects a read.
 `get_checkpoint` exposes retained outputs and the completed instance/version/
 completion sequence/canonical outputs SHA256. `approve_checkpoint` requires that
 exact expected identity and a durable unique decision id. One SQLite transaction
-checks the pinned checkpoint, records its approval outbox event and transitions
-the paused run. Exact decision replay is inert; collisions and stale identities
+verifies actual pinned graph history/digest and the identity-bound routed
+`checkpoint_paused` event, records its approval outbox event and transitions
+the paused run. The routing event is recorded atomically at both actual agent
+and inline-tool checkpoint paths. Generic confirm→manual-pause without routing
+cannot authorize a checkpoint. Execution's best-effort resolver stays separate. Exact decision replay is inert; collisions and stale identities
 refuse. Normal outbox ack retains approval identity; deleting run history removes
 it. RunnerService, MCP and CLI forward the explicit pair and return `approved`;
 `next` requests the next instruction separately, so replay cannot reclaim a later
