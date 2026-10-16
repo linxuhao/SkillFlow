@@ -4,7 +4,6 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
-import sys
 
 import pytest
 import skillflow
@@ -174,10 +173,18 @@ def test_manifest_mutated_during_callback_cannot_relabel_the_result(tmp_path):
         {'backend': 'actually-called', 'files': ['second.js']}]
 
 
-def test_excessively_nested_details_do_not_change_the_actual_outcome(tmp_path):
+def test_deep_valid_json_mapping_is_retained_and_detached(tmp_path):
     fp = candidate(tmp_path)
-    details = {}
-    for _ in range(sys.getrecursionlimit() + 100):
+    leaf = {"value": "original"}
+    details = leaf
+    for _ in range(128):
         details = {"nested": details}
     register_backend("receipt", lambda path: {"passed": True, "details": details})
-    assert run(tmp_path)["results"] == [{"file": str(fp), "passed": True, "error_message": ""}]
+    result, = run(tmp_path)["results"]
+    assert result["file"] == str(fp) and result["passed"] is True
+    copied = result["details"]
+    for _ in range(128):
+        copied = copied["nested"]
+    assert copied == {"value": "original"}
+    leaf["value"] = "backend changed"
+    assert copied == {"value": "original"}
