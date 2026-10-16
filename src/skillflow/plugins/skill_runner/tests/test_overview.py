@@ -121,3 +121,70 @@ def test_graphs_dir_skips_its_agents_yaml(tmp_path):
     sf = build_skillflow(str(tmp_path / "sf.db"), str(tmp_path / "ws"), None,
                          [str(gdir)], [str(gdir / "agents.yaml")], [])
     assert set(sf._graphs) == {"ov"}
+
+
+def _edges_graph(transitions, **node):
+    return PipelineGraph._from_dict({
+        "name": "e", "begin": "a",
+        "steps": [{"id": "a", "step_type": "agent", "agent_config": "w",
+                   "transitions": transitions, **node},
+                  {"id": "b", "step_type": "agent", "agent_config": "w"}]})
+
+
+def test_field_value_match_names_the_flag_not_the_keywords():
+    g = _edges_graph([{"to": "b", "match": {"field": "approved", "value": True}}])
+    text = pipeline_overview(g, "a", {})
+    assert "`b` if approved=true" in text
+    assert "field=" not in text
+
+
+def test_from_file_match_points_at_the_output_file():
+    g = _edges_graph([{"to": "b", "match": {"from_file": "verdict.json",
+                                             "field": "passed", "value": True},
+                       "label": "review passed"}])
+    text = pipeline_overview(g, "a", {})
+    assert "`b` if passed=true in your `verdict.json`" in text
+    assert '"review passed"' in text
+    assert "from_file=" not in text
+
+
+def test_checkpoint_reject_target_is_shown():
+    g = _edges_graph([{"to": "b", "match": {"from": "checkpoint", "value": "approved"}}],
+                     checkpoint=True, checkpoint_label="OK?",
+                     checkpoint_reject_to="a")
+    assert 'human checkpoint: "OK?"; a rejection returns to `a`' in \
+        pipeline_overview(g, "a", {})
+
+
+def test_tool_steps_say_who_runs_them():
+    g = PipelineGraph._from_dict({"name": "t", "begin": "lint", "steps": [
+        {"id": "lint", "step_type": "tool", "tool_name": "lint",
+         "transitions": [{"to": None}]}]})
+    assert "tool `lint` (you run it)" in pipeline_overview(g, "lint", {})
+    assert "tool `lint` (automatic)" in pipeline_overview(
+        g, "lint", {}, tools_delegated=False)
+
+
+def test_every_fixture_renders():
+    fixtures = Path(__file__).resolve().parents[5] / "tests" / "fixtures"
+    rendered = 0
+    for f in sorted(fixtures.glob("*.yaml")):
+        g = PipelineGraph.from_yaml(f)
+        text = pipeline_overview(g, g.begin, {})
+        assert text.startswith("## Pipeline overview")
+        rendered += 1
+    assert rendered > 10
+
+
+def test_custom_assembler_can_opt_out(tmp_path):
+    from skillflow.plugins.skill_runner.runner import PromptAssembler, SkillTool
+    svc = _service(tmp_path)
+
+    class Plain(PromptAssembler):
+        include_overview = False
+
+    rid = svc.start("ov", project_id="p")["run_id"]
+    tool = SkillTool(svc.sf, "ov", prompt_assembler=Plain())
+    resp = tool(action="next", run_id=rid)
+    assert resp.step == "write"
+    assert "Pipeline overview" not in resp.instruction

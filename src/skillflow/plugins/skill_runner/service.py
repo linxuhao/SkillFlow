@@ -23,7 +23,7 @@ from dataclasses import asdict
 
 from skillflow.core import SkillFlow
 
-from .runner import SkillTool
+from .runner import SkillTool, SlotRejected
 
 
 def _response_dict(resp) -> dict:
@@ -155,7 +155,7 @@ class RunnerService:
         if result:
             try:
                 tool.write_output_files(step_id, result)
-            except ValueError as e:
+            except SlotRejected as e:
                 # A slot the write tool refused (bad JSON, missing field):
                 # the step stays claimed, so hand it back with the reason
                 # instead of raising through the transport.

@@ -134,7 +134,7 @@ Report the error to the user.
 
 1. Start with `--action start --graph pipeline.yaml` (no `--run-id`) — save `run_id` from the response
 2. Always pass `--run-id` back on every subsequent call to resume the session
-3. On `status="in_progress"`: if `expected_files` is non-empty, write those files to `output_dir` before submitting. Then `--action submit` with `--run-id` and `--result`
+3. On `status="in_progress"`: deliver each expected output as a slot key in `--result` (or, on MCP, via `skillflow_tool` `write_<slot>` and then an empty result), then `--action submit` with `--run-id` and `--result`. A slot key in the result overwrites that output, so do not send a key for an output you already wrote
 4. On `status="paused"`: decide — `--action approve` or `--action reject` with `--run-id` and `--feedback`
 5. On `status="completed"`: done — present outputs
 6. On `status="failed"`: report error

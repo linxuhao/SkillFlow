@@ -49,32 +49,53 @@ class SkillResponse:
     validation_error: str = ""
 
 
+class SlotRejected(ValueError):
+    """A submitted output slot was refused by its write tool."""
+
+
 _OVERVIEW_MAX_STEPS = 30
 
 
+def _fmt(value) -> str:
+    return str(value).lower() if isinstance(value, bool) else str(value)
+
+
 def _describe_edge(t) -> str:
-    """One outgoing transition as short prose: target plus its condition."""
+    """One outgoing transition as short prose: target plus its condition.
+
+    Mirrors graph._flags_match: a from_file match reads the step's own output
+    file; a field/value match and a direct key match read the submitted
+    result's top-level keys.
+    """
     target = f"`{t.to}`" if t.to else "end"
     match = dict(t.match or {})
-    if match.get("from") == "checkpoint":
+    if "from_file" in match and "field" in match and "value" in match:
+        cond = (f"if {match['field']}={_fmt(match['value'])} in your "
+                f"`{match['from_file']}`")
+    elif "field" in match and "value" in match:
+        cond = f"if {match['field']}={_fmt(match['value'])}"
+    elif match.get("from") == "checkpoint":
         cond = f"when {match.get('value', 'approved')}"
     elif match:
-        cond = "if " + ", ".join(f"{k}={str(v).lower() if isinstance(v, bool) else v}"
-                                 for k, v in match.items())
+        cond = "if " + ", ".join(f"{k}={_fmt(v)}" for k, v in match.items())
     else:
         cond = ""
     loop = f" (at most {t.max_loop} times)" if t.max_loop else ""
-    return " ".join(p for p in (target, cond) if p) + loop
+    label = f' "{t.label}"' if t.label else ""
+    return " ".join(p for p in (target, cond) if p) + loop + label
 
 
-def pipeline_overview(graph, current_step: str, done: dict[str, int]) -> str:
+def pipeline_overview(graph, current_step: str, done: dict[str, int], *,
+                      tools_delegated: bool = True) -> str:
     """Whole-pipeline map shown before every step instruction.
 
     A driving agent that only ever sees the current step cannot pace itself
     or anticipate a review loop or checkpoint; showing every step first and
     then the current one measured better (agent-depth research, 2026-10).
     Built from the run's pinned graph; ``done`` counts completed executions
-    per step id. Large graphs are windowed around the current step.
+    per step id. ``tools_delegated`` says whether tool steps come to the
+    agent or run inside the engine. Large graphs are windowed around the
+    current step.
     """
     steps = list(getattr(graph, "steps", []) or [])
     if not steps:
@@ -82,13 +103,21 @@ def pipeline_overview(graph, current_step: str, done: dict[str, int]) -> str:
     lines = []
     for i, node in enumerate(steps, 1):
         kind = node.step_type
-        if kind == "tool" and node.tool_name:
-            kind = f"tool `{node.tool_name}`"
+        if kind == "tool":
+            who = "you run it" if tools_delegated else "automatic"
+            kind = f"tool `{node.tool_name}` ({who})"
         elif kind == "gate":
             kind = "gate (automatic)"
+        elif kind == "loop" and node.loop is not None:
+            src = node.loop.source or {}
+            where = "/".join(str(src[k]) for k in ("step", "file") if src.get(k))
+            kind = (f"loop (automatic) over items{f' of `{where}`' if where else ''}, "
+                    f"at most {node.loop.max_iterations}")
         if node.checkpoint:
             label = f': "{node.checkpoint_label}"' if node.checkpoint_label else ""
-            kind += f", human checkpoint{label}"
+            back = (f"; a rejection returns to `{node.checkpoint_reject_to}`"
+                    if node.checkpoint_reject_to else "")
+            kind += f", human checkpoint{label}{back}"
         edges = "; ".join(_describe_edge(t) for t in node.transitions) or "end"
         mark = "▶ " if node.id == current_step else ""
         count = done.get(node.id, 0)
@@ -123,8 +152,14 @@ def pipeline_overview(graph, current_step: str, done: dict[str, int]) -> str:
 class PromptAssembler:
     """Turns a ClaimedStep into an agent-facing instruction string.
 
+    ``include_overview``: SkillTool prefixes each instruction with the
+    whole-pipeline overview; a subclass that formats its own prompt can set
+    it False.
+
     Override ``assemble()`` to customize prompt formatting.
     """
+
+    include_overview = True
 
     def assemble(self, step: ClaimedStep) -> str:
         """Build the instruction from step context and agent config."""
@@ -385,7 +420,8 @@ class SkillTool:
                 exc_info=True)
 
         instruction = self._assembler.assemble(claimed)
-        overview = self._overview(claimed.step_id)
+        overview = (self._overview(claimed.step_id)
+                    if getattr(self._assembler, "include_overview", True) else "")
         if overview:
             instruction = overview + "\n" + instruction
 
@@ -416,7 +452,9 @@ class SkillTool:
         for s in self.sf.get_steps(self.run_id):
             if s.get("status") == "completed":
                 done[s["step_id"]] = done.get(s["step_id"], 0) + 1
-        return pipeline_overview(graph, step_id, done)
+        return pipeline_overview(
+            graph, step_id, done,
+            tools_delegated=bool(getattr(self.sf, "delegate_tools_to_agent", True)))
 
     def write_output_files(self, step_id: str, result: dict):
         """Write output_fixed files to step tmp_dir before confirm.
@@ -452,7 +490,7 @@ class SkillTool:
                 run_id=self.run_id, step_id=step_id,
                 step_instance_id=claim.token.step_instance_id, claim_epoch=claim.token.claim_epoch)
             if reply.get("error"):
-                raise ValueError(f"Output {slot!r} rejected: {reply['error']}")
+                raise SlotRejected(f"Output {slot!r} rejected: {reply['error']}")
 
     # ── internal ──────────────────────────────────────────────────
 
