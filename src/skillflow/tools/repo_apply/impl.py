@@ -5,6 +5,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from skillflow import closed_git
+
 
 def repo_apply(source_dir: str, *, workspace_root: str = "",
                project_root: str = "",
@@ -70,13 +72,6 @@ def repo_apply(source_dir: str, *, workspace_root: str = "",
         # success so the on_deliver hook doesn't retry/fail a clean no-op.
         return {"applied": True, "files": [], "committed": False}
 
-    # git add + commit
-    r = subprocess.run(["git", "add", "-A"], cwd=dst,
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        return {"applied": False, "files": applied_files,
-                "error": f"git add failed: {r.stderr.strip()}"}
-
     # Build a descriptive, traceable commit message:
     #   "<config>/<step>: <task> [<project>] (N file(s))"
     # Each qualifier is included only when the caller supplied it, so a bare
@@ -90,19 +85,17 @@ def repo_apply(source_dir: str, *, workspace_root: str = "",
     parts.append(f"({len(applied_files)} file(s))")
     msg = " ".join(parts)
 
-    r = subprocess.run(
-        ["git", "commit", "-m", msg],
-        cwd=dst, capture_output=True, text=True
-    )
-    if r.returncode != 0:
-        # "nothing to commit" is not a failure: the files were copied but are
-        # byte-identical to what's already committed (idempotent re-apply, e.g.
-        # a t_impl retry). The desired state is present, so report success
-        # rather than triggering a wasteful on_deliver retry loop.
-        combined = (r.stdout + r.stderr).lower()
-        if "nothing to commit" in combined or "no changes added" in combined:
-            return {"applied": True, "files": applied_files, "committed": False}
+    # The `git add -A` + `git commit` result, published by closed_git: raw
+    # working bytes into a private index, no hook/filter/fsmonitor/signing
+    # program from this repository. A path Git would convert is refused.
+    try:
+        with closed_git.open_repo(dst) as repo:
+            result = repo.publish(lambda path: True, msg)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
         return {"applied": False, "files": applied_files,
-                "error": f"git commit failed: {(r.stderr or r.stdout).strip()}"}
-
-    return {"applied": True, "files": applied_files, "committed": True}
+                "error": f"git commit failed: {exc}"}
+    # Nothing to commit is not a failure: the files were copied but are
+    # byte-identical to what's already committed (idempotent re-apply, e.g.
+    # a t_impl retry). The desired state is present, so report success
+    # rather than triggering a wasteful on_deliver retry loop.
+    return {"applied": True, "files": applied_files, "committed": result["committed"]}

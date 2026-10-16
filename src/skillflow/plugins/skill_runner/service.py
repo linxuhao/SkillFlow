@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from skillflow.core import SkillFlow
+from skillflow.exceptions import OutputValidationError, SkillFlowError
 
 from .runner import SkillTool, SlotRejected
 
@@ -59,6 +60,8 @@ class RunnerService:
         resp = tool(action="next", run_id=run_id)
         if resp.status == "failed" and resp.error.startswith("Run not found"):
             return tool, {"error": f"Run not found: {run_id}"}
+        if resp.status == "failed" and resp.error.startswith("Run claim is busy"):
+            return tool, {"status": "failed", "run_id": run_id, "error": resp.error}
         return tool, None
 
     # ── protocol surface ───────────────────────────────────────────
@@ -156,22 +159,32 @@ class RunnerService:
             try:
                 tool.write_output_files(step_id, result)
             except SlotRejected as e:
-                # A slot the write tool refused (bad JSON, missing field):
-                # the step stays claimed, so hand it back with the reason
-                # instead of raising through the transport.
+                # A slot the write tool refused stays claimed for correction.
                 resp = _response_dict(current)
                 resp["validation_error"] = str(e)
                 return resp
-        return _response_dict(tool(action="submit", step_id=step_id,
-                                   result=result))
+        try:
+            return _response_dict(tool(action="submit", step_id=step_id, result=result))
+        except OutputValidationError as exc:
+            response = _response_dict(current)
+            response["validation_error"] = str(exc)
+            return response
 
-    def approve(self, run_id: str) -> dict:
-        """Approve a paused checkpoint. The checkpoint belongs to the human
-        user — transports must only call this after explicit user approval."""
-        tool, err = self._reconnect(run_id)
-        if err:
-            return err
-        return _response_dict(tool(action="approve", run_id=run_id))
+    def approve(self, run_id: str, *, expected_checkpoint: dict | None = None,
+                decision_id: str = "") -> dict:
+        """Apply a host-authenticated decision against its retained checkpoint.
+
+        The host must authenticate the human separately. Neither a caller flag
+        nor a fresh sample of the checkpoint substitutes for that decision.
+        """
+        try:
+            next_node = self.sf.approve_checkpoint(run_id,
+                expected_checkpoint=expected_checkpoint, decision_id=decision_id)
+        except SkillFlowError as exc:
+            return {"error": str(exc), "run_id": run_id}
+        # Replaying an approval must not reconnect/reset/claim a later executor.
+        return {"status": "approved", "run_id": run_id, "step": next_node,
+                "decision_id": decision_id, "expected_checkpoint": expected_checkpoint}
 
     def reject(self, run_id: str, feedback: str, redirect_to: str = "") -> dict:
         """Reject a paused checkpoint with feedback (optionally redirecting

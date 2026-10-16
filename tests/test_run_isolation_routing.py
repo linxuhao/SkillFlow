@@ -86,24 +86,26 @@ def _stage_and_start(sf, pid, graph_name, filename, content):
 
 
 class _AddBarrier:
-    """Fire `callback` once, inside repo_apply's `git add -A`.
+    """Fire `callback` once, when repo_apply opens `target` to publish.
 
     That is the real window: repo_apply has copied its own files into the
-    destination and has not yet staged them. Patched into the tool module's own
-    `subprocess` reference, so the REAL repo_apply runs on both sides.
+    destination and has not yet staged them (its `git add -A` result is built
+    by closed_git after this point). Wrapped around closed_git.open_repo and
+    keyed by destination, so the REAL repo_apply runs on both sides and the
+    artifact-history repository never trips it.
     """
 
-    def __init__(self, real_run, callback):
-        self._real = real_run
+    def __init__(self, real_open, callback, target):
+        self._real = real_open
         self._cb = callback
+        self._target = Path(target).resolve()
         self.fired = False
 
-    def __call__(self, args, **kwargs):
-        if (not self.fired and isinstance(args, list)
-                and args[:3] == ["git", "add", "-A"]):
+    def __call__(self, cwd, *args, **kwargs):
+        if not self.fired and Path(cwd).resolve() == self._target:
             self.fired = True
             self._cb()
-        return self._real(args, **kwargs)
+        return self._real(cwd, *args, **kwargs)
 
 
 def test_shared_root_first_committer_absorbs_the_other(tmp_path, monkeypatch):
@@ -125,8 +127,8 @@ def test_shared_root_first_committer_absorbs_the_other(tmp_path, monkeypatch):
     def _b_delivers():
         sf.confirm_step(tok_b, StepResult(outputs={}, flags={}))
 
-    barrier = _AddBarrier(subprocess.run, _b_delivers)
-    monkeypatch.setattr(apply_impl.subprocess, "run", barrier)
+    barrier = _AddBarrier(apply_impl.closed_git.open_repo, _b_delivers, src)
+    monkeypatch.setattr(apply_impl.closed_git, "open_repo", barrier)
     sf.confirm_step(tok_a, StepResult(outputs={}, flags={}))
 
     assert barrier.fired, "barrier never fired — the interleaving was not real"
@@ -165,9 +167,9 @@ def test_two_isolated_runs_do_not_cross_stage(tmp_path, monkeypatch):
 
     import skillflow.tools.repo_apply.impl as apply_impl
     barrier = _AddBarrier(
-        subprocess.run,
-        lambda: sf.confirm_step(tok_b, StepResult(outputs={}, flags={})))
-    monkeypatch.setattr(apply_impl.subprocess, "run", barrier)
+        apply_impl.closed_git.open_repo,
+        lambda: sf.confirm_step(tok_b, StepResult(outputs={}, flags={})), wt["A"])
+    monkeypatch.setattr(apply_impl.closed_git, "open_repo", barrier)
     sf.confirm_step(tok_a, StepResult(outputs={}, flags={}))
 
     assert barrier.fired, "barrier never fired — the interleaving was not real"

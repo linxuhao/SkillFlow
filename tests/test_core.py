@@ -1658,7 +1658,7 @@ def test_tool_step_checkpoint_pauses_not_fails(sf: SkillFlow):
     assert run["status"] == "paused"        # regression: was "failed"
     assert run["current_node"] == "done"    # the approve target
 
-    sf.approve_checkpoint(rid)
+    sf.approve_checkpoint(rid, expected_checkpoint=sf.get_checkpoint(rid)["expected_checkpoint"], decision_id="test-approval")
     sf.advance_run(rid)
     assert sf.get_run(rid)["status"] != "failed"
 

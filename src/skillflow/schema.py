@@ -242,6 +242,7 @@ CREATE TABLE IF NOT EXISTS skillflow_trace (
 # ── Indexes ─────────────────────────────────────────────────────────
 
 SKILLFLOW_INDEXES = [
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_skillflow_checkpoint_decision ON skillflow_outbox(json_extract(payload_json, '$.decision_id')) WHERE event_type='checkpoint_approved';",
     "CREATE INDEX IF NOT EXISTS idx_skillflow_runs_status ON skillflow_runs(status);",
     "CREATE INDEX IF NOT EXISTS idx_skillflow_runs_project ON skillflow_runs(project_id);",
     "CREATE INDEX IF NOT EXISTS idx_skillflow_steps_run ON skillflow_steps(run_id);",

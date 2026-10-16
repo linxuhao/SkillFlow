@@ -48,6 +48,8 @@ SkillFlow (orchestrator)  ← SQLite (WAL mode)
   │     path), re-read the edges' from_file targets and put their human-readable
   │     field in error_reason BEFORE the edge detail (hosts truncate for status
   │     chips). null fields skipped. Bounded (3 files / 300 chars), never raises.
+  ├── get_checkpoint() → retained outputs + exact expected checkpoint identity
+  ├── approve_checkpoint(expected_checkpoint, decision_id) → atomic CAS + durable replay-safe approval event
   ├── reject_checkpoint() → fresh non-loop revision identity; loop-body rejection refused
   └── drain_outbox()     → event stream
 
@@ -243,3 +245,43 @@ whole-pipeline overview from the run's pinned graph (current step marked,
 windowed beyond 30 steps); routing is unchanged. The mcp extra excludes mcp 2.x
 (FastMCP removed) and --graphs dirs skip their agents.yaml. See
 docs/releases/1.5.93.md, README "Runner Mode" and the skill_runner tests.
+
+## Retained checkpoint approval identity (SOURCE candidate)
+
+Before checkpoint confirmation, literal fixed slots are captured from their
+framework-resolved artifact/code destinations; JSON remains structured. Missing,
+malformed or escaped slots cannot complete. Carried slots and CodeOutput delivery
+keep their existing lifecycle. No model-provided path selects a read.
+
+`get_checkpoint` exposes retained outputs and the completed instance/version/
+completion sequence/canonical outputs SHA256. `approve_checkpoint` requires that
+exact expected identity and a durable unique decision id. One SQLite transaction
+verifies actual pinned graph history/digest and the identity-bound routed
+`checkpoint_paused` event, records its approval outbox event and transitions
+the paused run. The routing event is recorded atomically at both actual agent
+and inline-tool checkpoint paths. Generic confirm→manual-pause without routing
+cannot authorize a checkpoint. Execution's best-effort resolver stays separate. Exact decision replay is inert; collisions and stale identities
+refuse. Normal outbox ack retains approval identity; deleting run history removes
+it. RunnerService, MCP and CLI forward the explicit pair and return `approved`;
+`next` requests the next instruction separately, so replay cannot reclaim a later
+worker. Hosts authenticate actual human decisions separately. This private Source
+candidate does not bump, publish, install or deploy an engine. This private Source composition includes official1.5.93 runner slot/overview
+behavior and the independently accepted scoped recovery/Git/checkpoint changes.
+
+
+## Closed engine Git consumers (SOURCE candidate; sdk.code-output-git-cannot-run-repository-programs)
+
+`skillflow/closed_git.py` is the only engine path to Git. CodeOutput write
+preflight/prepare/assert_published/commit, repo_apply, draft_commit, artifact
+history and git_sync_pre use its closed profile, which drops inherited GIT_*
+routing, turns system config off, replaces global config with identity/
+safe.directory/excludes data, and overrides hooks/fsmonitor/signing/diff/
+credential/transport. They also use its raw no-follow file hashing and
+private-index publish: owned index.lock, unsigned hook-free commit-tree,
+journal pending_commit, HEAD compare-and-set, then index install. Converting
+attributes (filter/encoding/ident/CRLF), unmerged entries and git_sync_pre
+pull are refused visibly, with no native fallback. Existing clean-tree,
+unrelated-change, receipt and add -A semantics are preserved. Do not add a
+native `git add`/`status`/`commit`/`diff`-against-worktree call to the engine.
+See README "Closed Git" and tests/test_git_consumers_run_no_repository_programs.py.
+This source candidate does not bump, publish, install or deploy an engine.

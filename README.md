@@ -175,6 +175,36 @@ Both transports (and in-process hosts) share one core:
 `RunnerService` in `skillflow.plugins.skill_runner` — embed it directly when
 your host process already owns a `SkillFlow` instance.
 
+### Checkpoint approval identity (SOURCE candidate)
+
+Paused runner responses include the completed checkpoint's retained `outputs`
+and `expected_checkpoint` (`step_instance_id`, `version`, `completion_seq`,
+`outputs_sha256`). Literal fixed checkpoint slots are captured from their
+framework-owned output destinations before confirmation; JSON slots remain
+structured. Globs remain collections under the existing output contract.
+Reading a checkpoint never reopens its mutable output files.
+
+A host must authenticate the human separately, retain the exact displayed
+identity with a durable unique `decision_id`, and call
+`sf.approve_checkpoint(run_id, expected_checkpoint=token, decision_id=id)` or
+`RunnerService.approve` with those same arguments. Neither an actor string nor
+an approval flag grants human authority. Approval reads and verifies the actual pinned graph history/digest in its
+transaction, without execution's current-graph fallback or cached evidence.
+The existing `checkpoint_paused` event binds the actual routed graph, completed
+execution, canonical outputs and resume target in the same routing transaction.
+A generic manual pause before routing cannot mint a checkpoint token. New
+approval checks that routed phase and retained row in the same SQLite
+transaction as its run transition and durable approval outbox event. Exact committed decision replay is inert even when later graph history is
+unavailable; payload collisions or stale identities refuse. Normal outbox acknowledgement retains this record;
+explicit history deletion also removes its replay history.
+
+Approval returns an `approved` receipt; call `runner_next` separately for the
+next instruction. This prevents a lost-response retry from resetting a later
+worker's claim. MCP accepts `expected_checkpoint` and `decision_id`; CLI uses
+`--expected-checkpoint '<exact JSON>' --decision-id '<unique id>'`. Missing
+identity is refused; hosts must update their callers before adopting this
+Source candidate. No release/version/pin/deployment change is included.
+
 ## Node Types
 
 | Type | Description |
@@ -707,6 +737,9 @@ for v in sf.step_output_versions(project_id, "dpe_default", "3"):
 ```
 
 - **Best-effort**: any git failure is swallowed — it never breaks a run.
+- **Closed Git**: the artifact repository is versioned through `closed_git`
+  (raw blobs, private index, no hook/filter/fsmonitor/signing program), so an
+  artifact `.gitattributes` cannot select a program in the engine.
 - **No-op without a workspace** (`:memory:` / workspace-less hosts are unaffected), and a no-change step produces no empty commit.
 - **Volatile files stay out of history**: `*.tmp/` staging dirs and trace DBs (`trace.db*`, `*.db-wal/shm`) are auto-gitignored; one commit == one step's promoted output.
 
@@ -726,9 +759,9 @@ Complements the trace: the trace answers *why*, artifact history hands you the *
 | `syntax_lint` | Syntax check via ruff |
 | `py_compile` | Python bytecode compile |
 | `pytest` | Run pytest on test files |
-| `repo_apply` | Copy files to repo + git commit |
+| `repo_apply` | Copy files to repo + closed-Git commit (raw `add -A` + commit result, no repository programs) |
 | `repo_validate` | Multi-tool repo validation |
-| `draft_commit` | Move draft files to final dir + commit |
+| `draft_commit` | Move draft files to final dir + closed-Git commit |
 | `file_exists` | Check files matching glob patterns |
 | `notify` | Send user-visible notifications |
 
@@ -950,6 +983,54 @@ Run any mutating linter in `validation`, before the code commit; post-delivery
 checks must not modify the candidate. Immediate review revisions retain the
 task's original base, while a new execution after intervening accepted code
 starts from the new clean HEAD. Paths use canonical forward slashes.
+
+### Closed Git: no repository programs in the engine (SOURCE candidate)
+
+Every engine Git consumer — code-output write preflight, clean-tree
+`prepare`, `assert_published`, the code commit and receipt, legacy
+`repo_apply`/`draft_commit`, artifact history and `git_sync_pre` — goes through
+`skillflow.closed_git`. No hook, clean/smudge/process filter, fsmonitor,
+gpg/ssh signing, pager, external diff/textconv, credential helper or transport
+program selected by the repository, an inherited `GIT_*` variable or a
+global/system config runs in the engine process:
+
+- Inherited `GIT_*` routing/config variables are dropped (author/committer
+  identity variables are kept). System config is off; the global config is a
+  generated file holding only identity, `safe.directory` and excludes-file data
+  copied from the host's config. Command-line overrides disable hooks,
+  fsmonitor, signing, external diff, credential helpers and all transports.
+- Only metadata/object/ref commands run (rev-parse, ls-tree, ls-files,
+  check-ignore, check-attr, `hash-object --no-filters --stdin`, `update-index
+  --index-info` on a private index, write-tree, commit-tree, update-ref,
+  tree-to-tree diff, merge-base, log, init, config). Working files are read raw
+  in Python without following symlinks and hashed as Git blobs; Git never reads
+  them, so `git status`/`add`/`commit` are not used.
+- Publication holds the worktree's own `index.lock` (a linked worktree's index
+  included), stages raw blobs into a private copy of the index, writes the tree,
+  creates an unsigned commit without hooks, records it in the step journal as
+  `pending_commit`, compare-and-sets `HEAD` from the captured base, and then
+  installs the private index. Unrelated index entries are kept. A pre-existing
+  `index.lock` is refused and never removed. The settled entries for published
+  paths carry no stat data, so a later native `git status` re-reads them once.
+- Semantics are unchanged: a new task needs a clean tree (tracked, staged and
+  untracked-unignored changes), an unreported or unrelated change (including an
+  unrelated staged entry) refuses the commit and is retained, and `repo_apply`
+  and `draft_commit` keep `git add -A` + `git commit` results.
+- Refused visibly, never by falling back to native Git: a path Git would convert
+  (a `filter`, `working-tree-encoding` or `ident` attribute, or CRLF bytes under
+  `text`/`eol`/`crlf`/`core.autocrlf`). This means tracked files that a filter
+  materializes, such as Git LFS, cannot be compared. Also refused: unmerged
+  entries, submodule paths named as code outputs, a code root that is not its
+  worktree's top level, and `git_sync_pre` `policy: "pull"` with a remote, which
+  returns `synced: false`/`action: unavailable` without fetching.
+- Not modeled: content of a submodule's own worktree (gitlinks are compared as
+  recorded and skipped by `repo_apply`) and split indexes (the private index
+  cannot read a shared index, so the commit fails visibly). Paths Git marks assume-unchanged or skip-worktree are treated
+  as unchanged, as `git status` does. Every check hashes each tracked file, so
+  cost grows with repository bytes.
+
+Explicit program tools (`pytest`, `lint`/`syntax_lint`) execute repository code
+by design and are not Git consumers; hosts isolate them separately.
 
 ### Tools that produce reports inside a code step
 

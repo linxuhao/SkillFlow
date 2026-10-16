@@ -140,7 +140,7 @@ def main():
             "  skillflow-run --action submit --run-id <id> --result '{\"key\":\"val\"}'\n"
             "\n"
             "  # Approve or reject a checkpoint (no --graph needed)\n"
-            "  skillflow-run --action approve --run-id <id>\n"
+            "  skillflow-run --action approve --run-id <id> --expected-checkpoint <json> --decision-id <unique-id>\n"
             "  skillflow-run --action reject --run-id <id> --feedback \"reason\"\n"
             "\n"
             "  # Reconnect if you lose state (no --graph needed)\n"
@@ -182,6 +182,8 @@ def main():
                         help="Workspace base path (default: ~/.skillflow/workspaces)")
     parser.add_argument("--project-id", default="",
                         help="Project ID for workspace-scoped runs")
+    parser.add_argument("--expected-checkpoint", default="{}", help="Exact JSON identity from the paused response")
+    parser.add_argument("--decision-id", default="", help="Durable unique approval decision id")
     args = parser.parse_args()
 
     # ── Validation ──────────────────────────────────────────────────
@@ -200,8 +202,9 @@ def main():
     result = {}
     try:
         result = json.loads(args.result)
+        expected_checkpoint = json.loads(args.expected_checkpoint)
     except json.JSONDecodeError:
-        print(json.dumps({"status": "failed", "error": f"Invalid JSON: {args.result}"}))
+        print(json.dumps({"status": "failed", "error": "Invalid result or expected-checkpoint JSON"}))
         sys.exit(1)
 
     # Ensure DB directory exists
@@ -253,6 +256,8 @@ def main():
                 run_id=args.run_id,
                 step_id=args.step_id,
                 result=result if result else None,
+                expected_checkpoint=expected_checkpoint,
+                decision_id=args.decision_id,
                 feedback=args.feedback,
                 redirect_to=args.redirect_to,
             )
@@ -268,6 +273,8 @@ def main():
         "tool_params": resp.tool_params,
         "checkpoint_label": resp.checkpoint_label,
         "checkpoint_reject_to": resp.checkpoint_reject_to,
+        "expected_checkpoint": resp.expected_checkpoint,
+        "decision_id": resp.decision_id,
         "outputs": resp.outputs,
         "error": resp.error,
         "steps_completed": resp.steps_completed,

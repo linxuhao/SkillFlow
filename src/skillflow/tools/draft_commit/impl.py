@@ -4,6 +4,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from skillflow import closed_git
+
 
 def draft_commit(source_dir: str = "", *, workspace_root: str = "",
                  step_id: str = "", run_id: str = "",
@@ -50,12 +52,6 @@ def draft_commit(source_dir: str = "", *, workspace_root: str = "",
 
     # Git commit in workspace root (grandparent of draft dir)
     repo_root = src.parent.parent
-    r = subprocess.run(["git", "add", "-A"], cwd=repo_root,
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        return {"committed": False, "files": moved_files,
-                "error": f"git add failed: {r.stderr.strip()}"}
-
     # Build descriptive commit message
     parts = [f"step: {step_id}"] if step_id else ["step: commit"]
     if project_id:
@@ -64,10 +60,16 @@ def draft_commit(source_dir: str = "", *, workspace_root: str = "",
         parts.append(f"{task_name}")
     parts.append(f"{len(moved_files)} file(s) — {', '.join(moved_files[:5])}")
     msg = " ".join(parts)
-    r = subprocess.run(["git", "commit", "-m", msg], cwd=repo_root,
-                       capture_output=True, text=True)
-    if r.returncode != 0:
+    # `git add -A` + `git commit`, published raw by closed_git (no repository
+    # hook/filter/fsmonitor/signing program runs).
+    try:
+        with closed_git.open_repo(repo_root) as repo:
+            result = repo.publish(lambda path: True, msg)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
         return {"committed": False, "files": moved_files,
-                "error": f"git commit failed: {r.stderr.strip()}"}
+                "error": f"git commit failed: {exc}"}
+    if not result["committed"]:
+        return {"committed": False, "files": moved_files,
+                "error": "git commit failed: nothing to commit"}
 
     return {"committed": True, "files": moved_files}

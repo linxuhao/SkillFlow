@@ -153,7 +153,8 @@ def test_checkpoint_pause_and_approve(sf):
     assert resp.checkpoint_label == "Review Draft"
 
     # Approve → publish → done → complete (end_condition on done)
-    resp = tool(action="approve")
+    resp = tool(action="approve", expected_checkpoint=resp.expected_checkpoint, decision_id="test-approval")
+    resp = tool(action="next")
     assert resp.status == "in_progress"
     assert resp.step == "publish"
 
@@ -177,7 +178,8 @@ def test_checkpoint_reject_and_redo(sf):
     assert resp.status == "paused"
 
     # Approve → publish → done → complete
-    tool(action="approve")
+    tool(action="approve", expected_checkpoint=resp.expected_checkpoint, decision_id="test-approval")
+    resp = tool(action="next")
     resp = tool(action="submit", result={})  # publish → done → complete
     assert resp.status == "completed"
 

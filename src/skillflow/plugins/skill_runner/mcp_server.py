@@ -122,10 +122,10 @@ def create_server(sf):
         return service.submit(run_id, step_id, result)
 
     @mcp.tool()
-    def runner_approve(run_id: str) -> dict:
+    def runner_approve(run_id: str, expected_checkpoint: dict, decision_id: str) -> dict:
         """Approve a paused checkpoint. ONLY after the human user explicitly
         approved — the checkpoint is theirs, not yours."""
-        return service.approve(run_id)
+        return service.approve(run_id, expected_checkpoint=expected_checkpoint, decision_id=decision_id)
 
     @mcp.tool()
     def runner_reject(run_id: str, feedback: str, redirect_to: str = "") -> dict:

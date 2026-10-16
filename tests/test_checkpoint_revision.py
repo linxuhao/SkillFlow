@@ -41,7 +41,7 @@ def test_attempted_redirect_rolls_back(flow,attempt):
   iid=s._conn.execute("SELECT id FROM skillflow_steps WHERE step_id='b'").fetchone()[0]
   s.trace(r,'agent','prompt_delta',{'index':0,'role':'user','content':'attempt'},step_id='b',step_instance_id=iid)
  else:
-  s.approve_checkpoint(r);s.advance_run(r);c=s.claim_next_step(r)
+  s.approve_checkpoint(r,expected_checkpoint=s.get_checkpoint(r)['expected_checkpoint'],decision_id='test-approval');s.advance_run(r);c=s.claim_next_step(r)
   if attempt=='released':s.release_claim(c.token,'interrupted')
   s._conn.execute("UPDATE skillflow_runs SET status='failed' WHERE id=?",(r,));s._conn.commit()
  before=[tuple(x) for x in s._conn.execute('SELECT * FROM skillflow_steps')]
@@ -66,7 +66,7 @@ def test_latest_feedback_survives_log_lag_and_reopen(flow,monkeypatch):
  with pytest.raises(SkillFlowError):s.reject_checkpoint(r,'a','remove X')
 
 def test_redirect_new_target(flow):
- s,r=flow;c=complete(s,r);s.approve_checkpoint(r);s.advance_run(r)
+ s,r=flow;c=complete(s,r);s.approve_checkpoint(r,expected_checkpoint=s.get_checkpoint(r)['expected_checkpoint'],decision_id='test-approval');s.advance_run(r)
  # A completed earlier maker is a valid redirect from a later checkpoint.
  b=s.claim_next_step(r);s.confirm_step(b.token,StepResult(outputs={}))
  s._conn.execute("UPDATE skillflow_runs SET status='failed' WHERE id=?",(r,));s._conn.commit()

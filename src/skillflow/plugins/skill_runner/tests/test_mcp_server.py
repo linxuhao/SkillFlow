@@ -47,7 +47,15 @@ def server_params(tmp_path):
     (tmp_path / "agents.yaml").write_text(AGENTS_YAML, encoding="utf-8")
     return StdioServerParameters(
         command=sys.executable,
-        args=["-m", "skillflow.plugins.skill_runner.mcp_server",
+        env={"PYTHONPATH": str(Path(__file__).parents[4]),
+             "SKILLFLOW_EXPECTED_SOURCE": str(Path(__file__).parents[4] / "skillflow")},
+        args=["-c", "import json,os,pathlib,runpy; import skillflow.core as c; "
+              "root=pathlib.Path(os.environ['SKILLFLOW_EXPECTED_SOURCE']).resolve(); "
+              "assert pathlib.Path(c.__file__).resolve().is_relative_to(root); "
+              "assert pathlib.Path(c.SkillFlow.approve_checkpoint.__code__.co_filename).resolve().is_relative_to(root); "
+              "e=pathlib.Path('/evidence/mcp-import-identity.json'); "
+              "e.write_text(json.dumps({'file':c.__file__,'approve_code':c.SkillFlow.approve_checkpoint.__code__.co_filename})) if e.parent.is_dir() else None; "
+              "runpy.run_module('skillflow.plugins.skill_runner.mcp_server',run_name='__main__')",
               "--db", str(tmp_path / "sf.db"),
               "--workspace", str(tmp_path / "ws"),
               "--projects", str(tmp_path / "proj"),
@@ -91,7 +99,9 @@ async def test_full_gated_flow_over_mcp(server_params):
             assert "not a skillflow tool" in bounced["error"]
 
             released = _result(await session.call_tool("runner_approve",
-                                                       {"run_id": run_id}))
+                                                       {"run_id": run_id, "expected_checkpoint": paused["expected_checkpoint"], "decision_id": "test-approval"}))
+            assert released["status"] == "approved"
+            released = _result(await session.call_tool("runner_next", {"run_id": run_id}))
             assert released["status"] == "in_progress"
             assert released["step"] == "implement"
             assert "## the plan" in released["instruction"]
