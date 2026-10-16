@@ -28,7 +28,8 @@ def _accepts(fn, param: str) -> bool:
     except (TypeError, ValueError):
         return False
     if param in sig.parameters:
-        return True
+        return sig.parameters[param].kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                                              inspect.Parameter.KEYWORD_ONLY)
     return any(p.kind == inspect.Parameter.VAR_KEYWORD
                for p in sig.parameters.values())
 
@@ -60,7 +61,8 @@ class StepValidator:
     """Runs validation tool specs against step output files."""
 
     def __init__(self, tool_loader: "ToolLoader", workspace_root: Path,
-                 trace_sink=None, config_name: str = "", candidate_files: list[str] | None = None):
+                 trace_sink=None, config_name: str = "", candidate_files: list[str] | None = None,
+                 tool_context: dict[str, str] | None = None):
         self._tool_loader = tool_loader
         self._workspace_root = Path(workspace_root)
         # Which pipeline this validation belongs to. A validation tool that has
@@ -73,6 +75,14 @@ class StepValidator:
         # with run/step ids so validation/check tools land in the run trace too.
         self._trace_sink = trace_sink
         self._candidate_files = candidate_files
+        # Explicit host metadata, copied per validation invocation. Even without
+        # context, a spec cannot manufacture identity for an owned host tool.
+        self._tool_context = {
+            key: (tool_context or {}).get(key, "")
+            for key in ("run_id", "step_id", "project_root")
+        }
+        if not all(isinstance(value, str) for value in self._tool_context.values()):
+            raise TypeError("validation tool context fields must be strings")
 
     def _trace(self, event: str, payload: dict) -> None:
         if self._trace_sink:
@@ -142,6 +152,13 @@ class StepValidator:
             # here.
             if self._config_name and _accepts(fn, "config_name"):
                 base_kwargs.setdefault("config_name", self._config_name)
+
+            # Identity is supplied by the engine, never by the graph spec.
+            # Do not add keywords to older fixed-signature validation tools.
+            for key, value in self._tool_context.items():
+                base_kwargs.pop(key, None)
+                if _accepts(fn, key):
+                    base_kwargs[key] = value
 
             if takes_plural:
                 # Batch tool (e.g. json_schema): pass all file patterns

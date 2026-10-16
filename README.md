@@ -370,6 +370,23 @@ Steps declare validation specs auto-executed by skillflow. See `tests/fixtures/s
 
 Available validators: `json_schema`, `syntax_lint`, `py_compile`, `pytest`, `file_exists`.
 
+The engine supplies validation tools with explicit `run_id`, `step_id`, and
+`project_root` context when their callable accepts those keywords. These values
+come from the current claim and the existing code-path resolver, and replace
+conflicting validation-spec values. `workspace_root` still names the actual
+validation destination (code tree or artifact directory); it is not ownership.
+A repo-less run receives an empty `project_root`. Direct `StepValidator` callers
+may pass a copied `tool_context` dictionary with those three string fields;
+without it, supported identity fields are empty and a spec cannot supply them.
+This metadata does not grant authority: an owned backend must verify the run,
+repository, and target through its host's existing execution boundary.
+
+Native `lint` forwards only the supported identity keywords to registered
+backends. Existing `backend(Path)` callables remain unchanged. A backend can
+instead declare, for example, `backend(Path, *, run_id="", step_id="",
+project_root="")`. No context is inferred from a file path or process-global
+state. Backend results and built-in lint behavior retain their existing shape.
+
 Validation retries share the step's `max_retries` budget. By default, an
 exhausted `validation:` block promotes the staged output with
 `validation_failed: true`, preserving existing graphs that route that flag to a

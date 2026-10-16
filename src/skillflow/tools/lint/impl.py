@@ -21,6 +21,7 @@ consulted before built-ins, so the manifest can name them directly.
 
 from __future__ import annotations
 
+import inspect
 import json
 import subprocess
 import sys
@@ -47,7 +48,8 @@ _BLOCKED_DIRS = frozenset({".git", "__pycache__", ".venv", "node_modules"})
 # ── Public entry point ──────────────────────────────────────────────────
 
 def lint(files: list[str], *, workspace_root: str = "",
-         manifest_path: str | None = None) -> dict:
+         manifest_path: str | None = None, run_id: str = "",
+         step_id: str = "", project_root: str = "") -> dict:
     """Run linters on files matching patterns.
 
     Args:
@@ -72,7 +74,8 @@ def lint(files: list[str], *, workspace_root: str = "",
                 continue
             ext = fp.suffix.lower()
             backend = manifest.get(ext, "skip")
-            results.append(_run_backend(backend, fp))
+            results.append(_run_backend(backend, fp, run_id=run_id,
+                                        step_id=step_id, project_root=project_root))
 
     all_passed = all(r.get("passed", False) for r in results)
     return {"all_passed": all_passed, "results": results}
@@ -103,11 +106,22 @@ def _load_manifest(root: Path, manifest_path: str | None) -> dict[str, str]:
 
 # ── Backend dispatch ────────────────────────────────────────────────────
 
-def _run_backend(backend: str, fp: Path) -> dict:
+def _run_backend(backend: str, fp: Path, *, run_id: str = "",
+                 step_id: str = "", project_root: str = "") -> dict:
     custom = get_backend(backend)
     if custom is not None:
         try:
-            res = custom(fp)
+            try:
+                params = inspect.signature(custom).parameters
+            except (TypeError, ValueError):
+                params = {}  # opaque legacy callables retain their Path-only convention
+            accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD
+                                 for p in params.values())
+            context = {"run_id": run_id, "step_id": step_id, "project_root": project_root}
+            supported = {key: value for key, value in context.items()
+                         if accepts_kwargs or (key in params and params[key].kind in
+                             (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY))}
+            res = custom(fp, **supported)
         except Exception as e:  # a buggy backend fails the file, not the process
             return {"file": str(fp), "passed": False,
                     "error_message": f"Custom linter '{backend}' crashed: {e}"}

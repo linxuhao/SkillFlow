@@ -3543,7 +3543,10 @@ class SkillFlow:
                 root = artifact_root or self._workspace.get_step_tmp_dir(pid, gname, token.step_id)
                 paths = None
             validator = StepValidator(self._tool_loader, root, config_name=gname,
-                       trace_sink=self._validation_trace_sink(token), candidate_files=paths)
+                       trace_sink=self._validation_trace_sink(token), candidate_files=paths,
+                       tool_context={"run_id": token.run_id, "step_id": token.step_id,
+                                     "project_root": str(self._workspace.get_project_code_path(
+                                         pid, run_id=token.run_id) or "")})
             results.append(validator.validate(selected))
         return {"passed": all(x.get("passed") for x in results),
                 "errors": [e for x in results for e in x.get("errors", [])],
@@ -3837,7 +3840,10 @@ class SkillFlow:
                 # contract. Mixed/new code steps route each declared slot.
                 validator = StepValidator(self._tool_loader, check_dir,
                                           config_name=gname,
-                                          trace_sink=self._validation_trace_sink(token))
+                                          trace_sink=self._validation_trace_sink(token),
+                                          tool_context={"run_id": token.run_id, "step_id": token.step_id,
+                                                        "project_root": str(self._workspace.get_project_code_path(
+                                                            pid, run_id=token.run_id) or "")})
                 result = validator.validate(check_specs)
         # Normalize: StepValidator returns "errors" (plural list),
         # but callers expect "error" (singular string).

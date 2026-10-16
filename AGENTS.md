@@ -77,6 +77,9 @@ ContextResolver → assemble prompt context from:
   # see the same tree the read tools serve (NOT workspace/"project")
 
 StepValidator → run validation specs: [{files, tool, inline_schema}]
+  # claim run_id/step_id + resolver project_root are explicit per-instance
+  # tool_context; supported host identity overwrites spec values. Native lint
+  # forwards supported keywords to custom backends; Path-only callers remain.
 WriteTools → generate constrained write_*/create_*/edit_* tools from output.fixed
   # code-target destinations → shared Git ignore preflight before mutation /
   # ownership; native apply_patch guards its entire write batch the same way.
