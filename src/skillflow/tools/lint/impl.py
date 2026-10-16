@@ -21,6 +21,7 @@ consulted before built-ins, so the manifest can name them directly.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import inspect
 import json
 import subprocess
@@ -59,7 +60,7 @@ def lint(files: list[str], *, workspace_root: str = "",
                        to workspace_root. Uses built-in defaults if omitted.
 
     Returns:
-        {all_passed: bool, results: [{file, passed, error_message}]}
+        {all_passed: bool, results: [{file, passed, error_message, details?}]}
     """
     root = Path(workspace_root) if workspace_root else Path.cwd()
     manifest = _load_manifest(root, manifest_path)
@@ -132,9 +133,16 @@ def _run_backend(backend: str, fp: Path, *, run_id: str = "",
         except Exception as e:  # a buggy backend fails the file, not the process
             return {"file": str(fp), "passed": False,
                     "error_message": f"Custom linter '{backend}' crashed: {e}"}
-        return {"file": str(fp),
-                "passed": bool(res.get("passed", False)),
-                "error_message": str(res.get("error_message", ""))}
+        result = {"file": str(fp),
+                  "passed": bool(res.get("passed", False)),
+                  "error_message": str(res.get("error_message", ""))}
+        details = res.get("details")
+        if isinstance(details, Mapping):
+            try:
+                result["details"] = json.loads(json.dumps(dict(details), allow_nan=False))
+            except (TypeError, ValueError, RecursionError):
+                pass  # Optional non-JSON data does not change the lint outcome.
+        return result
     if backend == "ruff":
         return _lint_ruff(fp)
     elif backend == "djlint":

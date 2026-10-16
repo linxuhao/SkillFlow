@@ -222,3 +222,13 @@ tests/test_code_write_ignore_preflight.py describe and exercise this change;
 no graph syntax was added. Prepared as package 1.5.90 (docs/releases/1.5.90.md);
 that preparation does not publish, install or deploy; publication, pin and
 deployment decisions and independent review belong to the coordinator.
+
+
+## Optional custom lint result data (1.5.92)
+
+Native lint preserves a custom backend's optional JSON mapping `details` in the
+same per-file normalized result, using a detached JSON copy. Invalid/nonmapping
+data is omitted without changing the actual lint outcome. Built-in/no-op and
+caught-exception results do not gain details. This is caller data, not authority;
+dispatch, defaults, host context and ownership policy are unchanged. See README
+"Output Validation" and tests/test_lint_result_details.py.
