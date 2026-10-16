@@ -2275,6 +2275,42 @@ class SkillFlow:
 
     # ── Claim / Confirm / Fail ─────────────────────────────────────
 
+    def _owned_claim(self, run_id: str) -> ClaimedStep | None:
+        """Reattach this process to its existing claim without resetting it.
+
+        Claim-time inputs and bound tools remain authoritative; reconnect does
+        not resolve a new context, bump an epoch or announce a second claim.
+        """
+        with self._ro() as conn:
+            run = conn.execute("SELECT * FROM skillflow_runs WHERE id = ?",
+                               (run_id,)).fetchone()
+            if not run or run["status"] != "running" or run["cancel_requested_at"]:
+                return None
+            row = conn.execute(
+                "SELECT * FROM skillflow_steps WHERE run_id = ? AND step_id = ? "
+                "AND status = 'claimed' AND claimed_by = ? ORDER BY id DESC LIMIT 1",
+                (run_id, run["current_node"], worker_identity("worker"))).fetchone()
+            if row is None:
+                return None
+            node = self._get_resolver_for_run(run_id).get_node(row["step_id"])
+            if node is None:
+                return None
+            token = ClaimToken(step_id=row["step_id"], run_id=run_id,
+                step_instance_id=row["id"], version=row["version"],
+                claimed_at=self._ts_to_epoch(row["claimed_at"]) or 0,
+                claim_epoch=row["claim_epoch"])
+            inputs = self._deserialize(row["inputs_json"])
+        def trace(category, event, payload=None):
+            self.trace(run_id, category, event, payload,
+                       step_id=token.step_id, step_instance_id=token.step_instance_id)
+        def emit(event_type, payload):
+            self.notifications.publish_sync(event_type, payload,
+                                            step_id=token.step_id, run_id=run_id)
+        return ClaimedStep(token=token, step_id=token.step_id,
+            step_config=node.config, run_context=self._deserialize(run["context_json"]),
+            inputs=inputs, validation_error=inputs.get("_validation_error"),
+            error_context=inputs.get("_error"), trace=trace, emit=emit)
+
     def claim_next_step(self, run_id: str) -> ClaimedStep | None:
         with self._tx() as conn:
             run = conn.execute(
@@ -5630,7 +5666,7 @@ class SkillFlow:
 
     def advance_run(self, run_id: str) -> str | None:
         # Recover stale claims before any traversal
-        self.recover_stale_claims(self._stale_threshold)
+        self.recover_stale_claims(self._stale_threshold, run_id=run_id)
 
         resolver = self._get_resolver_for_run(run_id)
 
@@ -6473,7 +6509,16 @@ class SkillFlow:
 
     # ── Recovery ──────────────────────────────────────────────────
 
-    def recover_stale_claims(self, stale_threshold_seconds: float = 300) -> list[str]:
+    def recover_stale_claims(self, stale_threshold_seconds: float = 300, *,
+                             run_id: str | None = None) -> list[str]:
+        """Recover dead or lease-expired claims, optionally within one run.
+
+        Omitting run_id preserves explicit global/startup recovery. Per-run
+        callers must supply their selected run, including before traversal.
+        """
+        if run_id is not None and (not isinstance(run_id, str) or not run_id.strip()
+                                   or run_id != run_id.strip() or "\x00" in run_id):
+            raise ValueError("run_id must be a nonempty run identifier or None")
         now_epoch = time.time()
         with self._tx() as conn:
             claimed = conn.execute(
@@ -6481,7 +6526,9 @@ class SkillFlow:
                 SELECT id, run_id, step_id, inputs_json, claimed_at, updated_at,
                        claimed_by
                 FROM skillflow_steps WHERE status = 'claimed'
+                  AND (? IS NULL OR run_id = ?)
                 """,
+                (run_id, run_id),
             ).fetchall()
             # For a TOOL step, a claim is stale only once it is older than the
             # LONGER of the caller's flat threshold and the node's own

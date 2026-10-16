@@ -60,6 +60,8 @@ class RunnerService:
         resp = tool(action="next", run_id=run_id)
         if resp.status == "failed" and resp.error.startswith("Run not found"):
             return tool, {"error": f"Run not found: {run_id}"}
+        if resp.status == "failed" and resp.error.startswith("Run claim is busy"):
+            return tool, {"status": "failed", "run_id": run_id, "error": resp.error}
         return tool, None
 
     # ── protocol surface ───────────────────────────────────────────

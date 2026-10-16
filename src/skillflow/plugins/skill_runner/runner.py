@@ -222,16 +222,14 @@ class SkillTool:
                 return SkillResponse(status="failed", error=f"Run not found: {run_id}")
             self.run_id = run_id
             self.graph_name = run.get("graph_name", self.graph_name)
-            # Reset any step claimed by a previous process and re-claim
-            with self.sf._tx() as conn:
-                conn.execute(
-                    "UPDATE skillflow_steps SET status = 'pending', version = version + 1, "
-                    "claimed_at = NULL, claimed_by = NULL, updated_at = datetime('now') "
-                    "WHERE run_id = ? AND status = 'claimed'",
-                    (run_id,)
-                )
+            # Traversal recovers only this run and respects owner liveness.
             self.sf.advance_run(run_id)
-            self._current_claim = self.sf.claim_next_step(run_id)
+            self._current_claim = (self.sf._owned_claim(run_id)
+                                   or self.sf.claim_next_step(run_id))
+            if (self._current_claim is None and run.get("status") == "running" and any(
+                    step["status"] == "claimed" for step in self.sf.get_steps(run_id))):
+                return SkillResponse(status="failed", run_id=run_id,
+                                     error="Run claim is busy: owner is live or unknown")
 
         # ── Handle action ─────────────────────────────────────────
         if action == "abort":
