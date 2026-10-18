@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from skillflow.core import SkillFlow, StepResult
-from skillflow.exceptions import OutputValidationError, SkillFlowError
+from skillflow.exceptions import SkillFlowError
 from skillflow.graph import PipelineGraph, StepNode, Transition
 
 
@@ -46,18 +46,19 @@ def test_rejected_checkpoint_retry_confirms_new_producer(tmp_path, failure):
     root = Path(revised.inputs["_output_dir"])
     (root / "design.md").write_text("revised")
     if failure == "missing-fixed-slot":
-        with pytest.raises(OutputValidationError, match="inventory") as refused:
-            sf.confirm_step(revised.token, StepResult())
-        error = str(refused.value)
+        sf.confirm_step(revised.token, StepResult())
     else:
         error = "executor failed before confirmation"
-    sf.fail_step(revised.token, error, retryable=True)
+        sf.fail_step(revised.token, error, retryable=True)
     pending = row(sf, rid, revised.token.step_instance_id)
     assert pending["status"] == "pending"
     assert pending["completion_seq"] is None
     with sf._ro() as conn:
         assert conn.execute("SELECT outputs_json FROM skillflow_steps WHERE id=?", (revised.token.step_instance_id,)).fetchone()[0] == "{}"
-    assert pending["retry_count"] == 1 and pending["last_error"] == error
+    if failure == "missing-fixed-slot":
+        assert pending["retry_count"] == 0 and pending["validation_retry_count"] == 1
+    else:
+        assert pending["retry_count"] == 1 and pending["last_error"] == error
     assert sf.advance_run(rid) == "plan"
     assert sf.get_run(rid)["status"] == "running"
     with pytest.raises(SkillFlowError, match="not paused"):
@@ -66,6 +67,10 @@ def test_rejected_checkpoint_retry_confirms_new_producer(tmp_path, failure):
     assert again.token.step_instance_id == revised.token.step_instance_id
     assert again.token.claim_epoch > revised.token.claim_epoch
     assert again.inputs["_feedback"] == revised.inputs["_feedback"]
+    if failure == "missing-fixed-slot":
+        assert "Checkpoint output 'inventory'" in again.validation_error
+    else:
+        assert again.validation_error is None
     produce(sf, again, "revised")
     sf.advance_run(rid)
     current = sf.get_checkpoint(rid)

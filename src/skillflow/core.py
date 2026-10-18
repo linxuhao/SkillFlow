@@ -3022,7 +3022,14 @@ class SkillFlow:
                     retained[slot] = json.loads(text) if path.suffix.lower() == ".json" else text
                     self._checkpoint_json(retained[slot])
                 except (ValueError, OSError, UnicodeError) as exc:
-                    raise OutputValidationError(f"Checkpoint output {slot!r} is unavailable or malformed: {exc}") from exc
+                    # This is an output refusal, not an executor failure. Use
+                    # the existing validation retry channel so the next claim
+                    # can repair it; an incomplete checkpoint never promotes.
+                    self._release_step_tools(token.run_id, token.step_id,
+                                             token.step_instance_id, token.claim_epoch)
+                    self._handle_validation_failure(
+                        token, f"Checkpoint output {slot!r} is unavailable or malformed: {exc}")
+                    return
             result = StepResult(outputs=retained, flags=result.flags)
         # The claim is over — drop the read tools it owned. Identity-guarded on
         # (instance id, claim epoch), so neither a zombie executor of an earlier

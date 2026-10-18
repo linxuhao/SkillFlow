@@ -363,6 +363,13 @@ execution instance. It does not route or pause from the older completed
 checkpoint. Missing required fixed slots still refuse confirmation; a complete
 valid retry must finish before a new checkpoint identity becomes available.
 
+Missing or malformed checkpoint fixed slots use the existing output-validation
+retry channel. The same producer's next claim receives the current refusal as
+`validation_error`, including when its host resumes the prior native trace.
+These retries share the existing finite step budget and never promote an
+incomplete set, even on exhaustion. Generic executor failures and plain claim
+release/restart do not become output-validation errors.
+
 A redirect may adopt a never-started pending target atomically. Targets with
 ownership, retry, result or execution-trace history are refused without changing
 the run. The latest rejection is exposed separately from accumulated feedback,

@@ -308,3 +308,14 @@ checkpoint cannot be routed again while this producer is pending. Fixed-slot
 capture, completion ordering and approval identity checks remain unchanged.
 See README "Checkpoints" and tests/test_rejected_checkpoint_retry_cursor.py.
 This Source candidate does not bump, publish, install or deploy the engine.
+
+## Checkpoint fixed-slot refusal feedback (SOURCE candidate)
+
+Missing/malformed checkpoint slot capture uses `_handle_validation_failure`,
+before delivery admission or lifecycle hooks. It releases only that claim's
+step tools, keeps the current producer and exposes the latest refusal on the
+real next claim. Existing shared retry limits hard-fail incomplete sets; generic
+executor failures and ordinary restart/release keep their existing meaning.
+README "Checkpoints" and tests/test_checkpoint_refusal_feedback.py cover this
+contract; normal AItelier native-resume proof is a separate report fixture.
+No version bump, publication, installed-runtime or host Source change is made.
