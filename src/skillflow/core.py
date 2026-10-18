@@ -4371,9 +4371,13 @@ class SkillFlow:
                 raise StepVersionConflict(
                     f"Step instance {token.step_instance_id} version mismatch in fail_step"
                 )
+            # Retry this execution, rather than reconstructing its position
+            # from the last completion. After checkpoint rejection that older
+            # completion is the rejected checkpoint, which would pause again
+            # while the current producer is still pending.
             conn.execute(
-                "UPDATE skillflow_runs SET current_node = NULL, updated_at = datetime('now') WHERE id = ?",
-                (token.run_id,),
+                "UPDATE skillflow_runs SET current_node = ?, updated_at = datetime('now') WHERE id = ?",
+                (token.step_id, token.run_id),
             )
             self.notifications.publish_sync(
                 "step_failed",
