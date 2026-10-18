@@ -83,6 +83,8 @@ StepValidator → run validation specs: [{files, tool, inline_schema}]
   # tool_context; supported host identity overwrites spec values. Native lint
   # forwards supported keywords to custom backends; Path-only callers remain.
 WriteTools → generate constrained write_*/create_*/edit_* tools from output.fixed
+  # missing/null content is a tool error before file creation/replacement/archive;
+  # explicit empty fixed text is supported, JSON validation remains unchanged.
   # code-target destinations → shared Git ignore preflight before mutation /
   # ownership; native apply_patch guards its entire write batch the same way.
   # Tracked ignored files stay writable; artifact append behavior is unchanged.

@@ -886,6 +886,15 @@ Agent `output.target` defaults to `artifact`; `code` writes directly to the
 resolver-owned Git worktree, independently of `output.mode`. Fixed slots may
 override target; mixed outputs use default artifact with explicit code slots.
 
+Generated artifact writes enforce their required content at execution, not just
+in the model-facing schema. Missing or null content returns a tool error without
+creating, replacing or archiving a file. Supply `content` to `write_<slot>` or
+`initialContent` to `create_<slot>`; fixed text slots still accept an explicitly
+empty string. JSON slots retain their structured-document validation. Declared
+append writes and generic whole-file writes also require their `content`
+argument. A refused call can be corrected within the same claim; validation,
+publication and mutation receipt semantics are unchanged.
+
 ```yaml
 output:
   mode: content

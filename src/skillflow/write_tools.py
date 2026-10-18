@@ -512,8 +512,8 @@ def _resolve_slot_document(slot: str, fixed: dict, params: dict) -> "tuple[str |
     JSON slots accept three input shapes: per-field arguments (tier 1),
     a structured object in content/initialContent (tier 2), or a raw string
     that must survive ``json.loads`` (tier 3 — the legacy path that used to
-    write invalid escapes straight to disk). Non-JSON slots keep the legacy
-    string behaviour verbatim.
+    write invalid escapes straight to disk). Non-JSON slots require explicit
+    content; an explicit empty string remains valid.
     """
     entry = fixed.get(slot)
     normalized = _normalize_fixed_entry(entry) if entry is not None else {"file": ""}
@@ -524,6 +524,12 @@ def _resolve_slot_document(slot: str, fixed: dict, params: dict) -> "tuple[str |
         raw = params.get("initialContent")
 
     if not _is_json_file(pattern):
+        if not any(key in params and params[key] is not None
+                   for key in ("content", "initialContent")):
+            return None, {"error": (
+                f"{slot}: missing required content — provide 'content' for write "
+                "or 'initialContent' for create; use an explicit empty string "
+                "only for an intentionally empty artifact.")}
         return _ensure_str(raw, ""), None
 
     field_props = _parse_format_spec(normalized.get("format"))
@@ -581,6 +587,8 @@ def execute_write(slot: str, fixed: dict, params: dict,
     directory.mkdir(parents=True, exist_ok=True)
 
     if mode == "append":
+        if params.get("content") is None:
+            return {"error": f"{slot}: missing required 'content' argument for append"}
         filename = base_name
         path = directory / filename
         content = _ensure_str(params.get("content", ""))
@@ -787,6 +795,8 @@ def normalize_repo_path(raw: str) -> list[str]:
 
 def execute_generic_write(params: dict, output_dir: str, *, strict_paths: bool = False) -> dict:
     """Execute a generic write(file, content) call. Sanitizes filename."""
+    if params.get("content") is None:
+        return {"error": "write: missing required 'content' argument"}
     raw = params.get("file") or params.get("filename") or params.get("path", "")
     safe_parts = _destination_parts(raw, output_dir, strict_paths)
     if not safe_parts:
