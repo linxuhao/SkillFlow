@@ -51,7 +51,8 @@ def test_missing_content_refuses_without_file_or_archive_changes(
     assert not any(k in result for k in ("written", "archived", "edited")), result
     assert {p.name: p.read_bytes() for p in directory.glob("*") if p.is_file()} == before
     assert sf.get_steps(rid)[0]["status"] == "claimed"
-    assert sf.unsettled_operations() == []
+    assert sf._conn.execute(
+        "SELECT 1 FROM skillflow_active_ops WHERE run_id = ?", (rid,)).fetchall() == []
 
 
 def test_refusal_corrects_then_edits_and_finishes_in_the_same_claim(tmp_path):
@@ -72,7 +73,8 @@ def test_refusal_corrects_then_edits_and_finishes_in_the_same_claim(tmp_path):
     assert sf.get_run(rid)["status"] == "completed"
     published = sf._workspace.get_step_dir("owned", "content", "investigate") / "findings.md"
     assert published.read_text() == "useful FINAL\n"
-    assert sf.unsettled_operations() == []
+    assert sf._conn.execute(
+        "SELECT 1 FROM skillflow_active_ops WHERE run_id = ?", (rid,)).fetchall() == []
 
 
 @pytest.mark.parametrize("name,key", [("create_findings", "initialContent"),
