@@ -357,6 +357,12 @@ new revision receives fresh execution history and the latest rejection feedback.
 Reclaiming an interrupted execution keeps its existing instance and consumed
 budget: rejection is not an automatic retry or a way to reset an exhausted claim.
 
+If a revised producer fails and its host calls `fail_step(..., retryable=True)`,
+the retry keeps that producer as the run's current node and reclaims the same
+execution instance. It does not route or pause from the older completed
+checkpoint. Missing required fixed slots still refuse confirmation; a complete
+valid retry must finish before a new checkpoint identity becomes available.
+
 A redirect may adopt a never-started pending target atomically. Targets with
 ownership, retry, result or execution-trace history are refused without changing
 the run. The latest rejection is exposed separately from accumulated feedback,

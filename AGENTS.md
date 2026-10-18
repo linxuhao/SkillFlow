@@ -37,6 +37,7 @@ PipelineGraph (YAML) → GraphResolver (validation + traversal)
 SkillFlow (orchestrator)  ← SQLite (WAL mode)
   ├── claim_next_step()  → ClaimedStep → StepRunner (host app)
   ├── confirm_step()     → completed/failed
+  ├── fail_step(retryable=True) → pending same producer; retain retry cursor
   ├── advance_run()      → resolve gates, auto-execute tools
   │   ├── recover_stale_claims() (built-in) — ownership decides: a dead owner
   │   │     (identity.py) is reclaimed at once, a LIVE one never is however
@@ -298,3 +299,12 @@ behavior while preserving CLI/MCP slot staging and invalid-slot feedback.
 Legacy test drivers now pass retained approval identities and request next after
 an approved response; their tested graph outcomes are unchanged. See
 `docs/releases/1.5.94.md`. Source preparation is not release or installation.
+
+## Rejected checkpoint retry cursor (SOURCE candidate)
+
+Retryable executor/confirmation failures retain the failed producer's current
+node. Reclaim keeps the revision instance and retry history; an earlier completed
+checkpoint cannot be routed again while this producer is pending. Fixed-slot
+capture, completion ordering and approval identity checks remain unchanged.
+See README "Checkpoints" and tests/test_rejected_checkpoint_retry_cursor.py.
+This Source candidate does not bump, publish, install or deploy the engine.
