@@ -348,6 +348,32 @@ failure tells the agent what to call next.
 
 ## Checkpoints
 
+### Retained legacy pauses (1.5.98 preparation)
+
+The ordinary `get_checkpoint(run_id)` API recognizes the historical prefixed-only
+`checkpoint_paused` payload (`_run_id`, `_step_id`, `_timestamp`, `graph_name`,
+`label`, `next_node`, `project_id`, `step_id`). It requires the matching retained
+paused run, latest checkpoint execution, routed target and validated pinned graph
+history. A partial modern payload is never treated as legacy.
+
+The first valid legacy read appends one durable modern pause binding in a bounded
+SQLite transaction, rechecking all facts before commit. The original event bytes
+remain unchanged; `compatibility_binding` identifies their outbox id and raw
+payload SHA256 and explicitly marks the graph/output binding as newly derived.
+Racing readers reuse that binding. A failed persistence returns no identity.
+Modern checkpoint reads remain read-only, and no checkpoint read reopens output
+files, approves work, changes run status or advances execution.
+
+A supported repin after the legacy pause refuses compatibility binding, including
+repins before the first read and repins back to the same graph version. Repin
+facts now persist atomically with the repin, before async notification delivery.
+Once issued, the binding retains strict graph, execution and output checks;
+changed work, rejection or a new execution cannot approve the stale identity.
+Human authentication and the explicit exact four-field `expected_checkpoint`
+plus unique `decision_id` approval contract remain required. Source preparation
+is separate from publication, installation and host activation.
+
+
 
 ### Revision identity and temporary loop restriction (1.5.67)
 

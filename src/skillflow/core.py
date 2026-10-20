@@ -76,6 +76,10 @@ class _TxRollback(Exception):
     pass
 
 
+class _LegacyCheckpointBindingRequired(SkillFlowError):
+    """A validated legacy pause needs a write transaction before review."""
+
+
 @dataclass(frozen=True)
 class ClaimToken:
     step_id: str
@@ -842,11 +846,14 @@ class SkillFlow:
                 "UPDATE skillflow_runs SET graph_version = ?, graph_digest = ?, "
                 "updated_at = datetime('now') WHERE id = ?",
                 (target["version"], target["digest"], run_id))
-            self.notifications.publish_sync(
-                "run_repinned",
-                {"run_id": run_id, "graph_name": name,
-                 "from_version": row["graph_version"], "to_version": target["version"]},
-                run_id=run_id)
+            payload = {"run_id": run_id, "graph_name": name,
+                       "from_version": row["graph_version"], "to_version": target["version"],
+                       "_run_id": run_id, "_step_id": None, "_timestamp": time.time()}
+            # Compatibility binding must see a repin even before async subscribers run.
+            conn.execute(
+                "INSERT INTO skillflow_outbox(event_type,payload_json,stream_target) "
+                "VALUES ('run_repinned',?,'ui')", (self._serialize(payload),))
+        self.notifications.publish_sync("run_repinned", payload, run_id=run_id, persist=False)
         return {"run_id": run_id, "graph_name": name,
                 "from_version": row["graph_version"],
                 "to_version": target["version"], "digest": target["digest"]}
@@ -6353,7 +6360,7 @@ class SkillFlow:
         self.trace(run_id, "step", "checkpoint_paused", payload,
                    step_id=step_id, step_instance_id=row["id"])
 
-    def _checkpoint_in_transaction(self, conn, run_id: str) -> dict:
+    def _checkpoint_in_transaction(self, conn, run_id: str, *, bind_legacy: bool = False) -> dict:
         run = conn.execute("SELECT * FROM skillflow_runs WHERE id = ?", (run_id,)).fetchone()
         if not run or run["status"] != "paused":
             raise SkillFlowError(f"Run '{run_id}' is not paused")
@@ -6390,10 +6397,61 @@ class SkillFlow:
         outputs = self._deserialize(row["outputs_json"])
         expected = self._checkpoint_expected(row)
         phase_row = conn.execute(
-            "SELECT payload_json FROM skillflow_outbox WHERE event_type='checkpoint_paused' "
-            "AND json_extract(payload_json,'$.run_id')=? ORDER BY id DESC LIMIT 1", (run_id,)).fetchone()
+            "SELECT id,payload_json FROM skillflow_outbox WHERE event_type='checkpoint_paused' "
+            "AND (json_extract(payload_json,'$.run_id')=? "
+            "OR json_extract(payload_json,'$._run_id')=?) ORDER BY id DESC LIMIT 1",
+            (run_id, run_id)).fetchone()
         phase = self._deserialize(phase_row["payload_json"]) if phase_row else {}
-        if (self._checkpoint_json(phase.get("expected_checkpoint")) != self._checkpoint_json(expected)
+        if not isinstance(phase, dict):
+            raise SkillFlowError("Run has no matching routed checkpoint pause")
+        legacy_keys = {"_run_id", "_step_id", "_timestamp", "graph_name", "label",
+                       "next_node", "project_id", "step_id"}
+        if set(phase) == legacy_keys:
+            # This is a NEW binding derived from retained history, not evidence
+            # that an old event contained a graph/output digest. Never rewrite it.
+            if (phase["_run_id"] != run_id or phase["_step_id"] != row["step_id"]
+                    or phase["step_id"] != row["step_id"]
+                    or phase["project_id"] != run["project_id"]
+                    or phase["graph_name"] != run["graph_name"]
+                    or phase["next_node"] != run["current_node"]
+                    or not isinstance(phase["next_node"], str)
+                    or phase["next_node"] not in {t.to for t in node.transitions}
+                    or not isinstance(phase["label"], str)
+                    or type(phase["_timestamp"]) not in (int, float)
+                    or not 0 < phase["_timestamp"] < float("inf")):
+                raise SkillFlowError("Run has no matching routed legacy checkpoint pause")
+            self._refuse_checkpoint_repin(conn, run_id, phase_row["id"])
+            if not bind_legacy:
+                raise _LegacyCheckpointBindingRequired("Legacy checkpoint requires a durable review binding")
+            phase = {**phase, "run_id": run_id, "_timestamp": time.time(),
+                     "graph_version": run["graph_version"], "graph_digest": run["graph_digest"],
+                     "expected_checkpoint": expected,
+                     "compatibility_binding": {
+                         "kind": "legacy_pause_derived_binding_v1",
+                         "source_event_id": phase_row["id"],
+                         "source_payload_sha256": hashlib.sha256(
+                             phase_row["payload_json"].encode("utf-8")).hexdigest()}}
+            conn.execute(
+                "INSERT INTO skillflow_outbox(event_type,payload_json,stream_target) "
+                "VALUES ('checkpoint_paused',?,'ui')", (self._serialize(phase),))
+        binding = phase.get("compatibility_binding")
+        if binding is not None:
+            if (not isinstance(binding, dict)
+                    or set(binding) != {"kind", "source_event_id", "source_payload_sha256"}
+                    or binding["kind"] != "legacy_pause_derived_binding_v1"
+                    or type(binding["source_event_id"]) is not int):
+                raise SkillFlowError("Checkpoint compatibility provenance is inconsistent")
+            original = conn.execute(
+                "SELECT payload_json FROM skillflow_outbox WHERE id=? AND event_type='checkpoint_paused'",
+                (binding["source_event_id"],)).fetchone()
+            if (original is None or hashlib.sha256(original["payload_json"].encode("utf-8")).hexdigest()
+                    != binding["source_payload_sha256"]):
+                raise SkillFlowError("Checkpoint compatibility provenance is unavailable or changed")
+            self._refuse_checkpoint_repin(conn, run_id, binding["source_event_id"])
+        if (phase.get("run_id") != run_id
+                or ("_run_id" in phase and phase["_run_id"] != run_id)
+                or phase.get("project_id") != run["project_id"]
+                or self._checkpoint_json(phase.get("expected_checkpoint")) != self._checkpoint_json(expected)
                 or phase.get("step_id") != row["step_id"]
                 or phase.get("graph_name") != run["graph_name"]
                 or phase.get("graph_version") != run["graph_version"]
@@ -6406,14 +6464,33 @@ class SkillFlow:
                 "project_id": run["project_id"], "graph_version": run["graph_version"],
                 "graph_digest": run["graph_digest"]}
 
+    @staticmethod
+    def _refuse_checkpoint_repin(conn, run_id: str, phase_id: int) -> None:
+        repin = conn.execute(
+            "SELECT 1 FROM skillflow_outbox WHERE event_type='run_repinned' AND id>? "
+            "AND (json_extract(payload_json,'$.run_id')=? "
+            "OR json_extract(payload_json,'$._run_id')=?) LIMIT 1",
+            (phase_id, run_id, run_id)).fetchone()
+        if repin:
+            raise SkillFlowError("Legacy checkpoint cannot bind across a run repin")
+
     def get_checkpoint(self, run_id: str) -> dict:
         """Read the paused checkpoint's retained outputs and approval identity.
 
         Never reads mutable output files. Hosts must authenticate the human
         separately and retain this exact identity with their approval decision.
+        Modern reads are read-only; the first valid legacy read durably appends
+        one compatibility binding before returning an identity.
         """
-        with self._ro() as conn:
-            return self._checkpoint_in_transaction(conn, run_id)
+        try:
+            with self._ro() as conn:
+                return self._checkpoint_in_transaction(conn, run_id)
+        except _LegacyCheckpointBindingRequired:
+            # Recheck every fact under BEGIN IMMEDIATE. Racing first readers
+            # reuse the committed binding, and a failed commit returns no token.
+            with self._tx() as conn:
+                checkpoint = self._checkpoint_in_transaction(conn, run_id, bind_legacy=True)
+            return checkpoint
 
     def approve_checkpoint(self, run_id: str, *, expected_checkpoint: dict | None = None,
                            decision_id: str = "") -> str:

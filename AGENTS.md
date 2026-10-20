@@ -49,7 +49,7 @@ SkillFlow (orchestrator)  ← SQLite (WAL mode)
   │     path), re-read the edges' from_file targets and put their human-readable
   │     field in error_reason BEFORE the edge detail (hosts truncate for status
   │     chips). null fields skipped. Bounded (3 files / 300 chars), never raises.
-  ├── get_checkpoint() → retained outputs + exact expected checkpoint identity
+  ├── get_checkpoint() → retained outputs + exact identity; first legacy read durably binds once
   ├── approve_checkpoint(expected_checkpoint, decision_id) → atomic CAS + durable replay-safe approval event
   ├── reject_checkpoint() → fresh non-loop revision identity; loop-body rejection refused
   └── drain_outbox()     → event stream
@@ -319,3 +319,19 @@ executor failures and ordinary restart/release keep their existing meaning.
 README "Checkpoints" and tests/test_checkpoint_refusal_feedback.py cover this
 contract; normal AItelier native-resume proof is a separate report fixture.
 No version bump, publication, installed-runtime or host Source change is made.
+
+
+## Legacy checkpoint routing (1.5.98 Source preparation)
+
+Ordinary get_checkpoint recognizes only the exact historical prefixed-only
+pause shape after validating retained run/execution, route and pinned history.
+Its first legacy read rechecks and appends a modern binding under BEGIN IMMEDIATE,
+preserving original event bytes and recording explicit newly derived provenance.
+Modern reads stay read-only. Supported repins after the legacy pause refuse,
+including before first binding and same-version repins; repin outbox persistence
+is now atomic before async notification delivery. Approval still requires the
+exact retained identity and unique human decision id. No automatic decision,
+advance, output-file reread or new graph syntax is introduced. See README
+"Retained legacy pauses", tests/test_legacy_checkpoint_binding.py and
+`docs/releases/1.5.98.md`. Tests are unrun by this Source author; independent
+review/execution, publication and activation remain separate.
