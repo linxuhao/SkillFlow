@@ -361,6 +361,11 @@ SQLite transaction, rechecking all facts before commit. The original event bytes
 remain unchanged; `compatibility_binding` identifies their outbox id and raw
 payload SHA256 and explicitly marks the graph/output binding as newly derived.
 Racing readers reuse that binding. A failed persistence returns no identity.
+The transaction boundary rolls back errors from both its body and COMMIT before
+propagating them. A COMMIT-time failure therefore leaves neither an open
+transaction nor an uncommitted binding for a read-only retry to trust. An ordinary
+retry must establish durability itself; after the fault is removed it can bind
+normally. Intentional internal transaction aborts still roll back silently.
 Modern checkpoint reads remain read-only, and no checkpoint read reopens output
 files, approves work, changes run status or advances execution.
 

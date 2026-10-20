@@ -112,3 +112,22 @@ def test_intentional_transaction_rollback_still_swallows_only_its_abort(tmp_path
         conn.execute('INSERT INTO owned_values VALUES(2)')
     with sqlite3.connect(str(tmp_path / 'own.db')) as fresh:
         assert fresh.execute('SELECT value FROM owned_values').fetchall() == [(2,)]
+
+
+def test_interrupted_transaction_rolls_back_and_propagates(tmp_path):
+    sf = SkillFlow(str(tmp_path / 'own.db'), artifact_history=False)
+    with sf._tx() as conn:
+        conn.execute('CREATE TABLE owned_values(value INTEGER)')
+    class Interrupted(BaseException):
+        pass
+    with pytest.raises(Interrupted):
+        with sf._tx() as conn:
+            conn.execute('INSERT INTO owned_values VALUES(1)')
+            raise Interrupted()
+    try:
+        assert not sf._conn.in_transaction
+        assert sf._conn.execute('SELECT count(*) FROM owned_values').fetchone()[0] == 0
+        with sqlite3.connect(str(tmp_path / 'own.db')) as fresh:
+            assert fresh.execute('SELECT count(*) FROM owned_values').fetchone()[0] == 0
+    finally:
+        sf._conn.rollback()

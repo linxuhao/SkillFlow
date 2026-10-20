@@ -335,3 +335,17 @@ advance, output-file reread or new graph syntax is introduced. See README
 "Retained legacy pauses", tests/test_legacy_checkpoint_binding.py and
 `docs/releases/1.5.98.md`. Tests are unrun by this Source author; independent
 review/execution, publication and activation remain separate.
+
+
+## Checkpoint binding transaction finalization (1.5.98 Source repair)
+
+The transaction boundary includes COMMIT in its rollback-protected region and
+rolls back body/finalization exceptions before propagation, including interrupted
+execution. Intentional _TxRollback remains a silent rollback. A real deferred-FK
+COMMIT failure regression, committed before the Source correction, observes
+transaction state and independently persisted rows before any test cleanup;
+ordinary get_checkpoint retries may not read an uncommitted compatibility token.
+After owned fault removal, normal binding and readback must work. The earlier
+INSERT-time fault test did not observe COMMIT-time durability. See
+`tests/test_checkpoint_commit_failure.py` and README "Retained legacy pauses".
+Source author tests remain UNRUN; independent execution is required.

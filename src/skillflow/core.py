@@ -636,20 +636,19 @@ class SkillFlow:
         """Serialised transaction context.
 
         Yields the persistent connection with BEGIN IMMEDIATE already
-        started.  Commits on clean exit, rolls back on any exception
-        (including _TxRollback, which is used for intentional abort).
+        started. Commits on clean exit; errors from either the body or COMMIT
+        roll back before propagating. _TxRollback intentionally aborts silently.
         """
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE;")
             try:
                 yield self._conn
+                self._conn.commit()
             except _TxRollback:
                 self._conn.rollback()
-            except Exception:
+            except BaseException:
                 self._conn.rollback()
                 raise
-            else:
-                self._conn.commit()
 
     @contextmanager
     def _ro(self):
