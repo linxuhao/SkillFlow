@@ -1,5 +1,5 @@
 name: skillflow_lint
-description:
+description: >
   Validate a skillflow pipeline YAML config file or raw YAML content.
   Returns detailed, fixable lint results including error/warning severity,
   location references, and fix suggestions.

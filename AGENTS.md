@@ -349,3 +349,14 @@ After owned fault removal, normal binding and readback must work. The earlier
 INSERT-time fault test did not observe COMMIT-time durability. See
 `tests/test_checkpoint_commit_failure.py` and README "Retained legacy pauses".
 Source author tests remain UNRUN; independent execution is required.
+
+## Native linter schema scalar (1.5.99 Source preparation)
+
+The native `skillflow_lint` description uses an explicit folded YAML scalar, so
+its colon-space result documentation loads through the ordinary SDK registry.
+ToolLoader and native linter execution are unchanged. The focused regression
+uses the default `SkillFlow` native/plugin registration, loads advertised schemas
+and checks the real callable on valid and missing-target graphs. See README
+"Linter", `tests/test_native_linter_schema.py` and `docs/releases/1.5.99.md`.
+Author tests/imports/builds are UNRUN; independent execution and release/host
+activation remain separate. No graph syntax or framework policy is added.

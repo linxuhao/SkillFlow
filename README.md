@@ -880,6 +880,10 @@ skillflow-convert --desc "..." --action start             # start a conversion
 
 Framework utility. Validates pipeline YAML — used as a skillflow tool (`skillflow_lint`) inside the converter's feedback loop, or standalone:
 
+The normal `SkillFlow` registry advertises the native/plugin tool schemas, including
+`skillflow_lint`. Its description is a YAML scalar, so loading that schema keeps
+the documented result fields readable without changing linter execution.
+
 ```bash
 skillflow-lint tests/fixtures/skill_review.yaml
 skillflow-lint configs/*.yaml
