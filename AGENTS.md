@@ -39,6 +39,8 @@ SkillFlow (orchestrator)  ← SQLite (WAL mode)
   ├── confirm_step()     → completed/failed
   ├── fail_step(retryable=True) → pending same producer; retain retry cursor
   ├── advance_run()      → resolve gates, auto-execute tools
+  │   ├── tool checkpoint → retain completed execution; pause before a matching
+  │   │     successor/target end condition, including unconditional edges
   │   ├── recover_stale_claims() (built-in) — ownership decides: a dead owner
   │   │     (identity.py) is reclaimed at once, a LIVE one never is however
   │   │     long it is quiet, and only an unprobeable owner falls to the
@@ -360,3 +362,14 @@ and checks the real callable on valid and missing-target graphs. See README
 "Linter", `tests/test_native_linter_schema.py` and `docs/releases/1.5.99.md`.
 Author tests/imports/builds are UNRUN; independent execution and release/host
 activation remain separate. No graph syntax or framework policy is added.
+
+## Tool checkpoint flags on matching routes (1.5.100 preparation)
+
+A completed tool with `checkpoint: true` pauses before its already matched
+successor, including ordinary unconditional/result edges and successor-based
+end conditions. The existing durable pause identity, explicit approval/rejection
+and exact decision replay APIs remain in use. Guarded checkpoint edges,
+noncheckpoint tools, failed-tool routing and terminal steps keep their existing
+contracts. Real ToolLoader callbacks and an agent-path reference exercise the
+ordering in `tests/test_tool_checkpoint_flag.py`; Source, publication and host
+activation remain separate. See README "Checkpoints" and `docs/releases/1.5.100.md`.

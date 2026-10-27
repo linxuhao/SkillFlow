@@ -413,6 +413,13 @@ Ordinary loop execution and non-checkpoint reviewer loopbacks are unchanged.
 Full loop-checkpoint support remains pending; do not treat refusal as support.
 
 Agent **and tool** steps can pause for human approval (`tests/fixtures/checkpoint_cycle.yaml`).
+For a tool step, `checkpoint: true` also applies when an unconditional edge or
+an ordinary result condition already selects its successor. The tool completes
+once, then the run retains its checkpoint identity and pauses before entering
+that successor or evaluating its target-based end conditions. Approval still
+requires the retained identity and a unique decision id. The special
+`from: checkpoint` transition remains supported; it is not required just to make
+the checkpoint flag pause. Existing terminal-step behavior is unchanged.
 A checkpoint on a tool step enables the *review-before-checkpoint* pattern: a cheap
 staging tool re-materializes the artifacts to approve, and the human is only asked
 once the automated reviewer has passed — not on every autonomous revision loop.

@@ -5412,6 +5412,13 @@ class SkillFlow:
                     """,
                     (run_id, step_id, target),
                 )
+                if node and node.checkpoint:
+                    conn.execute(
+                        "UPDATE skillflow_runs SET current_node = ?, status = 'paused',"
+                        " updated_at = datetime('now') WHERE id = ?",
+                        (target, run_id))
+                    self._record_checkpoint_pause_in_tx(conn, run_id, step_id, target, resolver)
+                    return None
                 ec = resolver.graph.end_conditions
                 if ec and ec.conditions:
                     end_result = self._evaluate_end_conditions(
