@@ -283,8 +283,9 @@ its own current item's folder (`scope: task`, the default); a reader **outside
 the producer's loop** — an aggregator after the loop — always gets all items
 (the `{step}/` parent), and should declare `scope: all` for clarity. With
 `scope: all`, a `file:` selector matches per item (`{step}/*/file`). `scope`
-values are validated at graph registration. Loop-body **tool** steps are not
-per-item — they write flat via `$STEP_DIR` and are overwritten each iteration.
+values are validated at graph registration. Loop-body tool steps with declared
+artifact output stage under `{step}.tmp/` and publish into `{step}/{item}/`.
+Tool steps that write directly to `$STEP_DIR` retain their flat destination.
 Lifecycle hooks of a body step (`on_deliver: repo_apply` etc.) resolve
 `$STEP_DIR` to the per-item folder — the dir the files were just promoted to.
 
@@ -413,6 +414,16 @@ Ordinary loop execution and non-checkpoint reviewer loopbacks are unchanged.
 Full loop-checkpoint support remains pending; do not treat refusal as support.
 
 Agent **and tool** steps can pause for human approval (`tests/fixtures/checkpoint_cycle.yaml`).
+Tool steps with `output.fixed` publish their staged artifact files before routing,
+after their declared validation passes, so a downstream file edge or loop source
+reads the completed step output. Tool steps with fixed output and lifecycle hooks
+are rejected at graph construction because those hooks are not run for tool steps. A tool
+body returning to a loop credits its current item once before the next item is
+selected. An invalid loop manifest fails the run with its source path and reason;
+an empty list remains a valid completed loop. An interrupted artifact promotion
+retains the claimed step for reconciliation.
+`loop.max_iterations` is a positive bound on the live manifest size and the
+number of credited items across manifest changes; exceeding it fails the run.
 For a tool step, `checkpoint: true` also applies when an unconditional edge or
 an ordinary result condition already selects its successor. The tool completes
 once, then the run retains its checkpoint identity and pauses before entering

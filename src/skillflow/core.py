@@ -2002,7 +2002,8 @@ class SkillFlow:
 
     def _admit_op(self, kind: str, run_id: str, *,
                   step_instance_id: int | None = None,
-                  claim_epoch: int = 0, detail: str = "") -> int:
+                  claim_epoch: int = 0, claim_version: int | None = None,
+                  detail: str = "") -> int:
         """Admit one side-effecting operation, or refuse it. Returns an op id.
 
         Refuses — by raising `TerminalRunFenced` — when the run is terminal, when
@@ -2029,7 +2030,18 @@ class SkillFlow:
                         f"Run '{run_id}' is draining a cancellation requested at "
                         f"{run['cancel_requested_at']}; {kind} {detail or '?'} "
                         f"refused. Reason: {(run['error_reason'] or '-')}")
-            if step_instance_id and claim_epoch:
+            if step_instance_id and claim_version is not None:
+                row = conn.execute(
+                    "SELECT version, claim_epoch, status FROM skillflow_steps "
+                    "WHERE id = ? AND run_id = ?", (step_instance_id, run_id),
+                ).fetchone()
+                if (row is None or row["status"] != "claimed"
+                        or row["version"] != claim_version
+                        or row["claim_epoch"] != claim_epoch):
+                    raise StaleClaimFenced(
+                        f"Step instance {step_instance_id} is no longer the claimed "
+                        f"version {claim_version}; {kind} refused.")
+            elif step_instance_id and claim_epoch:
                 row = conn.execute(
                     "SELECT claim_epoch, status FROM skillflow_steps WHERE id = ?",
                     (step_instance_id,)).fetchone()
@@ -4702,49 +4714,32 @@ class SkillFlow:
                    step_id=tool_node.id)
         return result
 
-    def _confirm_tool_in_tx(self, conn, run_id: str, step_id: str,
-                            result: dict) -> None:
+    def _confirm_tool_in_tx(self, conn, token: ClaimToken, result: dict) -> None:
         """Confirm a tool node execution in the database."""
-        # Create step instance if not exists
-        step_row = conn.execute(
-            "SELECT id, version FROM skillflow_steps WHERE run_id = ? AND step_id = ? ORDER BY id DESC LIMIT 1",
-            (run_id, step_id),
-        ).fetchone()
-        if not step_row:
-            conn.execute(
-                """
-                INSERT INTO skillflow_steps (run_id, step_id, step_config_json, status, version,
-                    inputs_json, outputs_json, result_flags_json, completion_seq,
-                    completed_at, created_at, updated_at)
-                VALUES (?, ?, '{}', 'completed', 1, '{}', ?, ?,
-                    (SELECT COALESCE(MAX(completion_seq), 0) + 1
-                     FROM skillflow_steps WHERE run_id = ?),
-                    datetime('now'), datetime('now'), datetime('now'))
-                """,
-                (run_id, step_id, self._serialize(result), self._serialize(result),
-                 run_id),
-            )
-        else:
-            conn.execute(
-                """
-                UPDATE skillflow_steps
-                SET status = 'completed', version = version + 1,
-                    outputs_json = ?, result_flags_json = ?,
-                    completion_seq = (SELECT COALESCE(MAX(completion_seq), 0) + 1
-                                      FROM skillflow_steps WHERE run_id = ?),
-                    completed_at = datetime('now'), updated_at = datetime('now')
-                WHERE id = ? AND version = ?
-                """,
-                (self._serialize(result), self._serialize(result), run_id,
-                 step_row["id"], step_row["version"]),
-            )
+        changed = conn.execute(
+            """
+            UPDATE skillflow_steps
+            SET status = 'completed', version = version + 1,
+                outputs_json = ?, result_flags_json = ?,
+                completion_seq = (SELECT COALESCE(MAX(completion_seq), 0) + 1
+                                  FROM skillflow_steps WHERE run_id = ?),
+                completed_at = datetime('now'), updated_at = datetime('now')
+            WHERE id = ? AND run_id = ? AND step_id = ? AND version = ?
+              AND claim_epoch = ? AND status = 'claimed'
+            """,
+            (self._serialize(result), self._serialize(result), token.run_id,
+             token.step_instance_id, token.run_id, token.step_id,
+             token.version, token.claim_epoch),
+        )
+        if changed.rowcount != 1:
+            raise StaleClaimFenced(f"Tool step '{token.step_id}' claim changed before completion")
         self.notifications.publish_sync(
             "step_completed",
             {
-                "run_id": run_id, "step_id": step_id,
-                "step_instance_id": step_row["id"] if step_row else None,
+                "run_id": token.run_id, "step_id": token.step_id,
+                "step_instance_id": token.step_instance_id,
             },
-            step_id=step_id, run_id=run_id,
+            step_id=token.step_id, run_id=token.run_id,
         )
 
     def _inject_feedback_in_tx(self, conn, run_id: str, target_step_id: str,
@@ -4810,11 +4805,15 @@ class SkillFlow:
         try:
             import json
             data = json.loads(file_path.read_text(encoding="utf-8"))
-            items = data.get(source_field, [])
-            if not isinstance(items, list):
-                items = []
-        except Exception:
-            items = []
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise SkillFlowError(
+                f"Loop '{loop_step_id}' source '{source_file}' is unreadable or invalid JSON: {exc}"
+            ) from exc
+        if not isinstance(data, dict) or not isinstance(data.get(source_field), list):
+            raise SkillFlowError(
+                f"Loop '{loop_step_id}' source '{source_file}' must contain list field '{source_field}'"
+            )
+        items = data[source_field]
         # Flatten at any depth (e.g. execution_order is a list of lists)
         items = _flatten_loop_items(items)
         return items, False
@@ -4966,11 +4965,13 @@ class SkillFlow:
                     "completed items may re-run", exc_info=True)
         if row["current_item"] in completed:
             return  # idempotent — already credited
+        prior_count = len(completed)
         completed.add(row["current_item"])
         conn.execute(
             "UPDATE skillflow_loop_state SET completed_items = ?, "
+            "current_index = MAX(current_index, ?) + 1, "
             "updated_at = datetime('now') WHERE run_id = ? AND loop_step_id = ?",
-            (self._serialize(sorted(completed)), run_id, loop_step_id),
+            (self._serialize(sorted(completed)), prior_count, run_id, loop_step_id),
         )
 
     def _resolve_loop(self, conn, run: dict, resolver, loop_step_id: str) -> str | None:
@@ -5007,11 +5008,16 @@ class SkillFlow:
         items, missing = self._read_loop_items(
             loop_cfg, pid, gname, run, loop_step_id
         )
+        if len(items) > loop_cfg.max_iterations:
+            raise SkillFlowError(
+                f"Loop '{loop_step_id}' has {len(items)} items, exceeding "
+                f"max_iterations={loop_cfg.max_iterations}"
+            )
         if not self._workspace:
             return None
 
         row = conn.execute(
-            "SELECT items_json, completed_items, current_item FROM skillflow_loop_state "
+            "SELECT items_json, completed_items, current_item, current_index FROM skillflow_loop_state "
             "WHERE run_id = ? AND loop_step_id = ?",
             (run["id"], loop_step_id),
         ).fetchone()
@@ -5021,6 +5027,11 @@ class SkillFlow:
             # engine can still hold the nested shape that crashed `set(items)`.
             items = (_flatten_loop_items(self._deserialize(row["items_json"]))
                      if row["items_json"] else [])
+            if len(items) > loop_cfg.max_iterations:
+                raise SkillFlowError(
+                    f"Loop '{loop_step_id}' cached manifest has {len(items)} items, exceeding "
+                    f"max_iterations={loop_cfg.max_iterations}"
+                )
 
         def _route_done():
             conn.execute(
@@ -5054,6 +5065,15 @@ class SkillFlow:
                     logging.getLogger("skillflow").warning(
                         "failed to deserialize loop completed_items; "
                         "completed items may re-run", exc_info=True)
+            if len(completed) > row["current_index"]:
+                # Older set-based runs did not maintain current_index. Preserve
+                # their known credits before the live manifest scopes the set.
+                conn.execute(
+                    "UPDATE skillflow_loop_state SET current_index = ? "
+                    "WHERE run_id = ? AND loop_step_id = ?",
+                    (len(completed), run["id"], loop_step_id),
+                )
+                row = dict(row, current_index=len(completed))
             current_item = row["current_item"] or None
         # Drop superseded names from prior goal-loop rounds so completed_items
         # reflects only the active manifest (prevents the len(completed) overcount
@@ -5096,6 +5116,10 @@ class SkillFlow:
                 break
         if next_item is None:
             return _route_done()
+        if row and row["current_index"] >= loop_cfg.max_iterations:
+            raise SkillFlowError(
+                f"Loop '{loop_step_id}' exceeded max_iterations={loop_cfg.max_iterations}"
+            )
 
         # ── Dispatch (idempotent) ─────────────────────────────────────────
         # Persist the live manifest + scoped completed set + the item to run.
@@ -5340,7 +5364,7 @@ class SkillFlow:
         return (f"{getattr(node, 'tool_name', '?')}: {error}"
                 if getattr(node, "tool_name", "") else str(error))
 
-    def _complete_tool_step(self, run_id: str, step_id: str,
+    def _complete_tool_step(self, token: ClaimToken,
                             tool_result: dict, run_row: dict,
                             resolver) -> str | None:
         """Confirm an inline tool execution and resolve its transition.
@@ -5358,6 +5382,8 @@ class SkillFlow:
         shape — no shipped config puts a refusing plumbing tool on a
         ``step_type: tool`` node; see `_tool_step_errored`.
         """
+        run_id, step_id = token.run_id, token.step_id
+        self._assert_epoch(token, "tool_complete")
         node = resolver.get_node(step_id)
         err = self._tool_step_errored(node, tool_result)
         if err is not None:
@@ -5365,10 +5391,57 @@ class SkillFlow:
                        {"source": "tool_step", "error": err,
                         "tool_error": "fail"},
                        step_id=step_id)
-            self._fail_tool_step_in_tx(run_id, step_id, err)
+            self._fail_tool_step_in_tx(token, err)
             return None
+        if node is not None and self._workspace and node.validation:
+            self._assert_epoch(token, "tool_validation")
+            validation = self._validate_outputs(token, node)
+            if not validation.get("passed", False):
+                errors = validation.get("errors", [])
+                self._fail_tool_step_in_tx(
+                    token, "Validation failed: " + "; ".join(
+                        error.get("error", str(error)) for error in errors))
+                return None
+        if node is not None and self._workspace and node.output_fixed:
+            # Tool callbacks write to the same native staging directory as agent
+            # steps. Publish it before routing so file edges and loops read the
+            # declared output, while an interrupted promotion retains its claim.
+            from skillflow.write_tools import _get_pattern
+            candidate = self.output_directory(run_id, step_id)
+            for slot in node.output_fixed:
+                pattern = _get_pattern(slot, node.output_fixed)
+                if not any(path.is_file() for path in candidate.glob(pattern)):
+                    self._fail_tool_step_in_tx(token, f"Declared tool output {slot!r} is missing")
+                    return None
+            # Admission and the step completion stay together. Recovery must
+            # not release this claim after its files move but before the CAS.
+            delivery = self._admit_op(
+                "delivery", run_id, step_instance_id=token.step_instance_id,
+                claim_epoch=token.claim_epoch, claim_version=token.version,
+                detail=step_id)
+            retire_delivery = False
+            try:
+                promoted = self._step_commit(token)
+                if not promoted.get("passed"):
+                    self._fail_tool_step_in_tx(
+                        token, promoted.get("error", "Tool output promotion failed"))
+                    retire_delivery = True
+                    return None
+                result = self._route_completed_tool_step(token, tool_result, run_row, resolver)
+                retire_delivery = True
+                return result
+            finally:
+                if retire_delivery:
+                    self._retire_op(delivery)
+        return self._route_completed_tool_step(token, tool_result, run_row, resolver)
+
+    def _route_completed_tool_step(self, token: ClaimToken,
+                                   tool_result: dict, run_row: dict,
+                                   resolver) -> str | None:
+        run_id, step_id = token.run_id, token.step_id
+        node = resolver.get_node(step_id)
         with self._tx() as conn:
-            self._confirm_tool_in_tx(conn, run_id, step_id, tool_result)
+            self._confirm_tool_in_tx(conn, token, tool_result)
             step_flags = tool_result
             if node is not None and getattr(node, "tool_error", "fail") == "route":
                 # The node said an error is a legitimate outcome here, so make it
@@ -5396,6 +5469,9 @@ class SkillFlow:
                 self._inject_feedback_in_tx(
                     conn, run_id, _t.to, _describe_tool_failure(tool_result))
             if target:
+                if resolver.is_loop(target) and step_id in self._loop_body_nodes(
+                        resolver, target):
+                    self._credit_loop_current_item(conn, run_id, target)
                 # Count this traversal so max_loop is enforced on a TOOL step's
                 # OUTGOING edge, exactly as advance_run's main path does for
                 # agent-originated edges. Without it a tool step that loops back
@@ -5514,10 +5590,10 @@ class SkillFlow:
             return None
 
     def _claim_tool_step_in_tx(self, run_id: str, step_id: str, node,
-                               resolver=None) -> int | None:
+                               resolver=None) -> ClaimToken | None:
         """Atomically claim a tool step (pending→claimed) for inline execution.
 
-        Returns the claimed step-instance id, or None if the step is not
+        Returns the original fenced claim token, or None if the step is not
         claimable — i.e. a concurrent advance_run() already claimed it. Mirrors
         claim_next_step's CAS so the in-flight guard + runaway valve (which key
         on the 'claimed' status/trace) see inline tool steps too, making
@@ -5569,14 +5645,15 @@ class SkillFlow:
             if cur.rowcount == 0:
                 return None  # lost the race
             inst = conn.execute(
-                "SELECT id FROM skillflow_steps "
+                "SELECT id, version, claim_epoch FROM skillflow_steps "
                 "WHERE run_id = ? AND step_id = ? AND status = 'claimed' "
                 "ORDER BY id DESC LIMIT 1",
                 (run_id, step_id),
             ).fetchone()
-            return inst["id"] if inst else None
+            return (ClaimToken(step_id, run_id, inst["id"], inst["version"],
+                               time.time(), inst["claim_epoch"]) if inst else None)
 
-    def _reopen_tool_step_in_tx(self, run_id: str, step_id: str) -> None:
+    def _reopen_tool_step_in_tx(self, token: ClaimToken) -> None:
         """Release a claimed tool step back to pending after a CRASHED execution,
         so it retries promptly instead of stalling until its claim times out.
 
@@ -5588,15 +5665,16 @@ class SkillFlow:
         step-count valve caught it). The SF-20 stale-recovery cap does NOT cover
         this path (a crash reopens directly, never via recover_stale_claims).
         """
+        run_id, step_id = token.run_id, token.step_id
         with self._tx() as conn:
             row = conn.execute(
                 "SELECT id, inputs_json FROM skillflow_steps "
-                "WHERE run_id = ? AND step_id = ? AND status = 'claimed' "
-                "ORDER BY id DESC LIMIT 1",
-                (run_id, step_id),
+                "WHERE id = ? AND run_id = ? AND step_id = ? AND version = ? "
+                "AND claim_epoch = ? AND status = 'claimed'",
+                (token.step_instance_id, run_id, step_id, token.version, token.claim_epoch),
             ).fetchone()
             if not row:
-                return
+                raise StaleClaimFenced(f"Tool step '{step_id}' claim changed before reopen")
             inputs = self._deserialize(row["inputs_json"])
             reopen_count = inputs.get("_tool_reopen_count", 0) + 1
             if reopen_count >= 3:
@@ -5629,8 +5707,7 @@ class SkillFlow:
                 (self._serialize(inputs), row["id"]),
             )
 
-    def _fail_tool_step_in_tx(self, run_id: str, step_id: str,
-                              error: str) -> None:
+    def _fail_tool_step_in_tx(self, token: ClaimToken, error: str) -> None:
         """Fail a claimed tool step AND its run, with no retry.
 
         The sibling of `_reopen_tool_step_in_tx`, for a failure that a retry
@@ -5659,20 +5736,22 @@ class SkillFlow:
         fresh instance of the same tool node (the reasoning `_reopen_tool_step_in_tx`
         records for its own 3-crash cap).
         """
+        run_id, step_id = token.run_id, token.step_id
         with self._tx() as conn:
             row = conn.execute(
-                "SELECT id FROM skillflow_steps WHERE run_id = ? AND "
-                "step_id = ? AND status = 'claimed' ORDER BY id DESC LIMIT 1",
-                (run_id, step_id),
+                "SELECT id FROM skillflow_steps WHERE id = ? AND run_id = ? "
+                "AND step_id = ? AND version = ? AND claim_epoch = ? AND status = 'claimed'",
+                (token.step_instance_id, run_id, step_id, token.version, token.claim_epoch),
             ).fetchone()
-            if row:
-                conn.execute(
-                    "UPDATE skillflow_steps SET status = 'failed', "
-                    "version = version + 1, last_error = ?, claimed_at = NULL, "
-                    "claimed_by = NULL, updated_at = datetime('now') "
-                    "WHERE id = ?",
-                    (error, row["id"]),
-                )
+            if row is None:
+                raise StaleClaimFenced(f"Tool step '{step_id}' claim changed before failure")
+            conn.execute(
+                "UPDATE skillflow_steps SET status = 'failed', "
+                "version = version + 1, last_error = ?, claimed_at = NULL, "
+                "claimed_by = NULL, updated_at = datetime('now') "
+                "WHERE id = ?",
+                (error, row["id"]),
+            )
             # A stop already owns the run's terminal reason. Leave it draining
             # until the admitted tool's existing finally retires its operation.
             run = conn.execute(
@@ -5739,13 +5818,13 @@ class SkillFlow:
                     except TerminalRunFenced:
                         return None
                     try:
-                        inst_id = self._claim_tool_step_in_tx(
+                        token = self._claim_tool_step_in_tx(
                             run_id, current, tool_node, resolver)
-                        if inst_id is None:
+                        if token is None:
                             return None  # another driver owns this tool step
                         self.trace(run_id, "step", "claimed",
                                    {"tool": tool_node.tool_name, "inline": True},
-                                   step_id=current, step_instance_id=inst_id)
+                                   step_id=current, step_instance_id=token.step_instance_id)
                         try:
                             # Execute tool WITHOUT holding any lock/transaction
                             tool_result = self._execute_tool_inline(
@@ -5755,14 +5834,13 @@ class SkillFlow:
                             # Missing arguments and explicit definitive refusals
                             # cannot be corrected by automatically calling again.
                             # Preserve the reason and never confirm or route them.
-                            self._fail_tool_step_in_tx(run_id, current, str(exc))
+                            self._fail_tool_step_in_tx(token, str(exc))
                             return None
                         except Exception:
                             # Don't leave a crashed tool wedged in 'claimed'.
-                            self._reopen_tool_step_in_tx(run_id, current)
+                            self._reopen_tool_step_in_tx(token)
                             raise
-                        return self._complete_tool_step(
-                            run_id, current, tool_result, run_row, resolver)
+                        return self._complete_tool_step(token, tool_result, run_row, resolver)
                     finally:
                         # After `_complete_tool_step`, not before: the state
                         # mutation that publishes the tool's result is part of
@@ -5814,7 +5892,11 @@ class SkillFlow:
                 # If current_node is a loop step, resolve its iteration
                 current = run["current_node"]
                 if resolver.is_loop(current):
-                    current = self._resolve_loop(conn, run, resolver, current)
+                    try:
+                        current = self._resolve_loop(conn, run, resolver, current)
+                    except SkillFlowError as exc:
+                        self._fail_run_in_tx(conn, run_id, str(exc))
+                        return None
                     if current is None:
                         return None
                     conn.execute(
@@ -6146,7 +6228,11 @@ class SkillFlow:
                     defer_tool = True
                     break
                 elif resolver.is_loop(next_node):
-                    resolved = self._resolve_loop(conn, run, resolver, next_node)
+                    try:
+                        resolved = self._resolve_loop(conn, run, resolver, next_node)
+                    except SkillFlowError as exc:
+                        self._fail_run_in_tx(conn, run_id, str(exc))
+                        return None
                     if resolved is None:
                         self._fail_run_in_tx(conn, run_id, f"Loop '{next_node}': failed to resolve")
                         return None
@@ -6642,6 +6728,13 @@ class SkillFlow:
             # its window is its timeout_seconds (0 = never stale), unchanged.
             stale = []
             for row in claimed:
+                # Once file delivery is admitted, a dead owner leaves an
+                # unknown outcome for reconciliation, not a retryable claim.
+                if conn.execute(
+                    "SELECT 1 FROM skillflow_active_ops WHERE step_instance_id = ? "
+                    "AND kind = 'delivery' LIMIT 1", (row["id"],),
+                ).fetchone():
+                    continue
                 # Ownership decides. The lease only answers where ownership
                 # cannot — these are different questions and only the first has
                 # a definite answer:

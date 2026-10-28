@@ -177,6 +177,16 @@ class StepNode:
             raise ValueError(
                 f"StepNode '{self.id}': step_type='loop' requires a 'loop' config"
             )
+        if self.loop and (
+            isinstance(self.loop.max_iterations, bool)
+            or not isinstance(self.loop.max_iterations, int)
+            or self.loop.max_iterations < 1
+        ):
+            raise ValueError(f"StepNode '{self.id}': loop.max_iterations must be a positive integer")
+        if self.step_type == "tool" and self.output_fixed and self.lifecycle:
+            raise ValueError(
+                f"StepNode '{self.id}': declared tool artifact output cannot use lifecycle hooks"
+            )
         if self.validation_on_exhaustion not in ("promote", "fail"):
             raise ValueError(
                 f"StepNode '{self.id}': validation_on_exhaustion must be "
