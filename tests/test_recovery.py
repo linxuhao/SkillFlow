@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from skillflow.core import SkillFlow
+from skillflow.core import ClaimToken, SkillFlow
 from skillflow.graph import PipelineGraph, StepNode, Transition
 from skillflow.tool_loader import ToolLoader
 from skillflow.workspace import WorkspaceManager
@@ -152,9 +152,16 @@ def test_tool_reopen_caps_at_three_crashes(sf: SkillFlow):
             "SELECT status FROM skillflow_steps WHERE run_id=? AND step_id='a' "
             "ORDER BY id DESC LIMIT 1", (run_id,)).fetchone()["status"]
 
+    def _token():
+        row = sf._conn.execute(
+            "SELECT id, version, claim_epoch FROM skillflow_steps "
+            "WHERE run_id=? AND step_id='a' ORDER BY id DESC LIMIT 1", (run_id,)
+        ).fetchone()
+        return ClaimToken("a", run_id, row["id"], row["version"], time.time(), row["claim_epoch"])
+
     # Crashes 1 and 2 reopen to pending; re-claim to simulate the next attempt.
     for _ in range(2):
-        sf._reopen_tool_step_in_tx(run_id, "a")
+        sf._reopen_tool_step_in_tx(_token())
         assert _status() == "pending"
         with sf._lock:
             sf._conn.execute(
@@ -163,7 +170,7 @@ def test_tool_reopen_caps_at_three_crashes(sf: SkillFlow):
             sf._conn.commit()
 
     # Third crash → failed, not reopened → no more relaunches.
-    sf._reopen_tool_step_in_tx(run_id, "a")
+    sf._reopen_tool_step_in_tx(_token())
     assert _status() == "failed"
 
 

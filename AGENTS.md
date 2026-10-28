@@ -39,6 +39,10 @@ SkillFlow (orchestrator)  ← SQLite (WAL mode)
   ├── confirm_step()     → completed/failed
   ├── fail_step(retryable=True) → pending same producer; retain retry cursor
   ├── advance_run()      → resolve gates, auto-execute tools
+  │   ├── declared tool artifact output → fenced validation/promotion before routing;
+  │   │   loop-body tool return credits its current item
+  │   │   invalid loop manifest fails the run; empty list completes the loop
+  │   │   max_iterations bounds live manifest size and credited item count
   │   ├── tool checkpoint → retain completed execution; pause before a matching
   │   │     successor/target end condition, including unconditional edges
   │   ├── recover_stale_claims() (built-in) — ownership decides: a dead owner
